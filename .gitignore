@@ -4,6 +4,7 @@ credentials.json
 # Captured data
 screenshot/
 data/
+server_data/
 logs/
 *.db
 
