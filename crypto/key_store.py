@@ -32,14 +32,8 @@ class KeyStore:
         path = self._path(name)
         encoded = base64.b64encode(data).decode("utf-8")
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(encoded)
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(encoded)
 
     def _path(self, name: str) -> Path:
         filename = f"{name}.key"

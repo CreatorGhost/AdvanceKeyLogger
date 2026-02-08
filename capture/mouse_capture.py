@@ -47,44 +47,47 @@ class MouseCapture(BaseCapture):
         self._move_throttle_interval = float(config.get("move_throttle_interval", 0.02))
         self._last_move_ts: float = 0.0
         self._click_callback = None
-        self._native_backend: CGEventTapMouseBackend | None = None if _USE_NATIVE_MACOS else None  # noqa: F821
+        self._lifecycle_lock = threading.Lock()
+        self._native_backend: CGEventTapMouseBackend | None = None  # noqa: F821
         self._use_native = _USE_NATIVE_MACOS
 
     def start(self) -> None:
-        if self._running:
-            return
-
-        if self._use_native:
-            self._native_backend = CGEventTapMouseBackend(
-                on_click_callback=self._on_native_click,
-                on_move_callback=self._on_native_move if self._track_movement else None,
-                move_throttle_interval=self._move_throttle_interval,
-            )
-            self._native_backend.start()
-            self._running = True
-            self.logger.info("Mouse capture started (native macOS backend)")
-        else:
-            if self._listener is not None:
+        with self._lifecycle_lock:
+            if self._running:
                 return
-            self._listener = Listener(
-                on_move=self._on_move if self._track_movement else None,
-                on_click=self._on_click,
-            )
-            self._listener.daemon = True
-            self._listener.start()
-            self._running = True
-            self.logger.info("Mouse capture started (pynput backend)")
+
+            if self._use_native:
+                self._native_backend = CGEventTapMouseBackend(
+                    on_click_callback=self._on_native_click,
+                    on_move_callback=self._on_native_move if self._track_movement else None,
+                    move_throttle_interval=self._move_throttle_interval,
+                )
+                self._native_backend.start()
+                self._running = True
+                self.logger.info("Mouse capture started (native macOS backend)")
+            else:
+                if self._listener is not None:
+                    return
+                self._listener = Listener(
+                    on_move=self._on_move if self._track_movement else None,
+                    on_click=self._on_click,
+                )
+                self._listener.daemon = True
+                self._listener.start()
+                self._running = True
+                self.logger.info("Mouse capture started (pynput backend)")
 
     def stop(self) -> None:
-        if self._native_backend is not None:
-            self._native_backend.stop()
-            self._native_backend = None
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener.join(timeout=2.0)
-            self._listener = None
-        self._running = False
-        self.logger.info("Mouse capture stopped")
+        with self._lifecycle_lock:
+            if self._native_backend is not None:
+                self._native_backend.stop()
+                self._native_backend = None
+            if self._listener is not None:
+                self._listener.stop()
+                self._listener.join(timeout=2.0)
+                self._listener = None
+            self._running = False
+            self.logger.info("Mouse capture stopped")
 
     def collect(self) -> list[dict[str, Any]]:
         with self._lock:

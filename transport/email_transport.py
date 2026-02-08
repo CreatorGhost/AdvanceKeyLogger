@@ -55,7 +55,7 @@ class EmailTransport(BaseTransport):
             subject = meta.get("subject", "Report")
             body = meta.get("body", "Report attached.")
             filename = meta.get("filename", "report.bin")
-            mime_type = meta.get("mime_type")
+            mime_type = meta.get("content_type") or meta.get("mime_type")
 
             msg = EmailMessage()
             msg["Subject"] = subject
@@ -69,7 +69,7 @@ class EmailTransport(BaseTransport):
             for attachment in meta.get("attachments", []):
                 att_data = attachment.get("data", b"")
                 att_name = attachment.get("filename", "attachment.bin")
-                att_mime = attachment.get("mime_type")
+                att_mime = attachment.get("content_type") or attachment.get("mime_type")
                 maintype, subtype = _split_mime(att_mime, att_name)
                 msg.add_attachment(
                     att_data,

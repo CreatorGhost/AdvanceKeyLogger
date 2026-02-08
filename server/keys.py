@@ -45,7 +45,7 @@ def load_server_private_key(config: dict[str, Any]) -> x25519.X25519PrivateKey:
         raw = base64.b64decode(key_b64.encode("utf-8"))
         return x25519.X25519PrivateKey.from_private_bytes(raw)
 
-    key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/") )
+    key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/"))
     store = KeyStore(key_store_path)
     raw = store.load_bytes("server_x25519_private")
     if not raw:

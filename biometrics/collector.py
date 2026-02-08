@@ -20,10 +20,10 @@ class BiometricsCollector:
 
     def on_key_down(self, key: str, timestamp: float | None = None) -> None:
         ts = timestamp if timestamp is not None else time.time()
-        flight_ms = None
-        if self._last_release is not None:
-            flight_ms = (ts - self._last_release) * 1000.0
         with self._lock:
+            flight_ms = None
+            if self._last_release is not None:
+                flight_ms = (ts - self._last_release) * 1000.0
             self._pending[key] = (ts, flight_ms)
 
     def on_key_up(self, key: str, timestamp: float | None = None) -> None:

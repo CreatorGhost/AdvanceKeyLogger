@@ -55,43 +55,46 @@ class KeyboardCapture(BaseCapture):
             else None
         )
         self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
         self._listener: Listener | None = None
-        self._native_backend: CGEventTapBackend | None = None if _USE_NATIVE_MACOS else None  # noqa: F821
+        self._native_backend: CGEventTapBackend | None = None  # noqa: F821
         self._use_native = _USE_NATIVE_MACOS
 
     def start(self) -> None:
-        if self._running:
-            return
-        if self._use_native:
-            self._native_backend = CGEventTapBackend(
-                on_press_callback=self._on_native_press,
-                on_release_callback=self._on_native_release,
-            )
-            self._native_backend.start()
-            self._running = True
-            self.logger.info("Keyboard capture started (native macOS backend)")
-        else:
-            if self._listener is not None:
+        with self._lifecycle_lock:
+            if self._running:
                 return
-            self._listener = Listener(
-                on_press=self._on_press,
-                on_release=self._on_release,
-            )
-            self._listener.daemon = True
-            self._listener.start()
-            self._running = True
-            self.logger.info("Keyboard capture started (pynput backend)")
+            if self._use_native:
+                self._native_backend = CGEventTapBackend(
+                    on_press_callback=self._on_native_press,
+                    on_release_callback=self._on_native_release,
+                )
+                self._native_backend.start()
+                self._running = True
+                self.logger.info("Keyboard capture started (native macOS backend)")
+            else:
+                if self._listener is not None:
+                    return
+                self._listener = Listener(
+                    on_press=self._on_press,
+                    on_release=self._on_release,
+                )
+                self._listener.daemon = True
+                self._listener.start()
+                self._running = True
+                self.logger.info("Keyboard capture started (pynput backend)")
 
     def stop(self) -> None:
-        if self._native_backend is not None:
-            self._native_backend.stop()
-            self._native_backend = None
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener.join(timeout=2.0)
-            self._listener = None
-        self._running = False
-        self.logger.info("Keyboard capture stopped")
+        with self._lifecycle_lock:
+            if self._native_backend is not None:
+                self._native_backend.stop()
+                self._native_backend = None
+            if self._listener is not None:
+                self._listener.stop()
+                self._listener.join(timeout=2.0)
+                self._listener = None
+            self._running = False
+            self.logger.info("Keyboard capture stopped")
 
     def collect(self) -> list[dict[str, Any]]:
         with self._lock:
