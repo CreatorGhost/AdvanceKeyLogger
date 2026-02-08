@@ -1,10 +1,15 @@
 """
-Mouse capture module using pynput.
+Mouse capture module.
 
 Captures mouse click (and optional move) events into an in-memory buffer.
+
+Backend selection:
+  - macOS with pyobjc-framework-Quartz → native CGEventTap backend
+  - All other platforms / missing pyobjc  → pynput backend (default)
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -13,6 +18,20 @@ from pynput.mouse import Listener
 
 from capture import register_capture
 from capture.base import BaseCapture
+from utils.system_info import get_platform
+
+_logger = logging.getLogger(__name__)
+
+_USE_NATIVE_MACOS = False
+if get_platform() == "darwin":
+    try:
+        from capture.macos_mouse_backend import CGEventTapMouseBackend, QUARTZ_AVAILABLE
+
+        if QUARTZ_AVAILABLE:
+            _USE_NATIVE_MACOS = True
+            _logger.debug("Native macOS CGEventTap mouse backend available")
+    except ImportError:
+        pass
 
 
 @register_capture("mouse")
@@ -28,21 +47,38 @@ class MouseCapture(BaseCapture):
         self._move_throttle_interval = float(config.get("move_throttle_interval", 0.02))
         self._last_move_ts: float = 0.0
         self._click_callback = None
+        self._native_backend: CGEventTapMouseBackend | None = None if _USE_NATIVE_MACOS else None  # noqa: F821
+        self._use_native = _USE_NATIVE_MACOS
 
     def start(self) -> None:
-        if self._listener is not None:
+        if self._running:
             return
 
-        self._listener = Listener(
-            on_move=self._on_move if self._track_movement else None,
-            on_click=self._on_click,
-        )
-        self._listener.daemon = True
-        self._listener.start()
-        self._running = True
-        self.logger.info("Mouse capture started")
+        if self._use_native:
+            self._native_backend = CGEventTapMouseBackend(
+                on_click_callback=self._on_native_click,
+                on_move_callback=self._on_native_move if self._track_movement else None,
+                move_throttle_interval=self._move_throttle_interval,
+            )
+            self._native_backend.start()
+            self._running = True
+            self.logger.info("Mouse capture started (native macOS backend)")
+        else:
+            if self._listener is not None:
+                return
+            self._listener = Listener(
+                on_move=self._on_move if self._track_movement else None,
+                on_click=self._on_click,
+            )
+            self._listener.daemon = True
+            self._listener.start()
+            self._running = True
+            self.logger.info("Mouse capture started (pynput backend)")
 
     def stop(self) -> None:
+        if self._native_backend is not None:
+            self._native_backend.stop()
+            self._native_backend = None
         if self._listener is not None:
             self._listener.stop()
             self._listener.join(timeout=2.0)
@@ -97,3 +133,27 @@ class MouseCapture(BaseCapture):
                 self._click_callback()
             except Exception:
                 self.logger.exception("Mouse click callback failed")
+
+    # -- native macOS callbacks (receive pre-formatted values) --
+
+    def _on_native_click(self, x: int, y: int, button: str, pressed: bool) -> None:
+        self._record(
+            {
+                "type": "mouse_click",
+                "data": {
+                    "x": x,
+                    "y": y,
+                    "button": button,
+                    "pressed": pressed,
+                },
+                "timestamp": time.time(),
+            }
+        )
+        if pressed and self._click_callback:
+            try:
+                self._click_callback()
+            except Exception:
+                self.logger.exception("Mouse click callback failed")
+
+    def _on_native_move(self, x: int, y: int) -> None:
+        self._on_move(x, y)

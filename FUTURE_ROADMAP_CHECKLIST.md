@@ -8,7 +8,7 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 - [x] 2. Keystroke Biometrics & Typing Dynamics Engine
 - [ ] 3. Cross-Platform Service / Daemon Mode
 - [x] 4. Application Usage Profiler & Productivity Scoring
-- [ ] 5. End-to-End Encrypted Transport with Asymmetric Key Exchange
+- [x] 5. End-to-End Encrypted Transport with Asymmetric Key Exchange
 - [ ] 6. Distributed Fleet Management (Agent-Controller Architecture)
 - [ ] 7. Adaptive Capture Intelligence
 - [ ] 8. Offline-First Sync Engine with Conflict Resolution

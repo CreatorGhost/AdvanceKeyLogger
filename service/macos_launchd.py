@@ -26,6 +26,22 @@ class LaunchdManager:
             plist_path.unlink()
         return f"Uninstalled launchd agent {spec.name}"
 
+    def start(self, spec) -> str:
+        label = _label(spec.name)
+        _run(["launchctl", "start", label], check=False)
+        return f"Started launchd agent {spec.name}"
+
+    def stop(self, spec) -> str:
+        label = _label(spec.name)
+        _run(["launchctl", "stop", label], check=False)
+        return f"Stopped launchd agent {spec.name}"
+
+    def restart(self, spec) -> str:
+        label = _label(spec.name)
+        _run(["launchctl", "stop", label], check=False)
+        _run(["launchctl", "start", label], check=False)
+        return f"Restarted launchd agent {spec.name}"
+
     def status(self, spec) -> str:
         result = _run(["launchctl", "list", spec.name], check=False)
         if result.returncode == 0:

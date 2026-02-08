@@ -46,6 +46,37 @@ class WindowsServiceManager:
         serviceutil.RemoveService(spec.name)
         return f"Uninstalled Windows service {spec.name}"
 
+    def start(self, spec) -> str:
+        if self._win32 is None:
+            return "pywin32 not installed; cannot start Windows service."
+        serviceutil = self._win32["serviceutil"]
+        try:
+            serviceutil.StartService(spec.name)
+        except Exception as exc:
+            return f"Failed to start Windows service {spec.name}: {exc}"
+        return f"Started Windows service {spec.name}"
+
+    def stop(self, spec) -> str:
+        if self._win32 is None:
+            return "pywin32 not installed; cannot stop Windows service."
+        serviceutil = self._win32["serviceutil"]
+        try:
+            serviceutil.StopService(spec.name)
+        except Exception as exc:
+            return f"Failed to stop Windows service {spec.name}: {exc}"
+        return f"Stopped Windows service {spec.name}"
+
+    def restart(self, spec) -> str:
+        if self._win32 is None:
+            return "pywin32 not installed; cannot restart Windows service."
+        serviceutil = self._win32["serviceutil"]
+        try:
+            serviceutil.StopService(spec.name)
+            serviceutil.StartService(spec.name)
+        except Exception as exc:
+            return f"Failed to restart Windows service {spec.name}: {exc}"
+        return f"Restarted Windows service {spec.name}"
+
     def status(self, spec) -> str:
         if self._win32 is None:
             return "pywin32 not installed; Windows service status unavailable."
