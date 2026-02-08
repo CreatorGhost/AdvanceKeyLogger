@@ -89,7 +89,7 @@ async def login(request: Request) -> Response:
 
     if username == _ADMIN_USERNAME and verify_password(password, _ADMIN_PASSWORD_HASH):
         token = create_session(username)
-        response = RedirectResponse(url="/", status_code=302)
+        response = RedirectResponse(url="/dashboard", status_code=302)
         response.set_cookie(
             key="session_token",
             value=token,
@@ -115,6 +115,6 @@ async def logout(request: Request) -> RedirectResponse:
     token = request.cookies.get("session_token")
     if token:
         _sessions.pop(token, None)
-    response = RedirectResponse(url="/login", status_code=302)
+    response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("session_token")
     return response

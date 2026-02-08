@@ -1,9 +1,8 @@
 /* ============================================================
-   Analytics Page JS
+   Analytics Page JS — Vercel Design
    ============================================================ */
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const HOURS = Array.from({length: 24}, (_, i) => i);
 
 document.addEventListener('DOMContentLoaded', () => {
     loadAnalyticsData();
@@ -30,7 +29,6 @@ function renderAnalyticsStats(activity, summary) {
     document.getElementById('analyticsTotalEvents').textContent =
         formatNumber(activity.total_events);
 
-    // Find peak hour
     const hourlyTotals = new Array(24).fill(0);
     for (const row of activity.heatmap) {
         for (let h = 0; h < 24; h++) {
@@ -42,7 +40,6 @@ function renderAnalyticsStats(activity, summary) {
     document.getElementById('analyticsPeakHour').textContent =
         ph + ':00 ' + (peakHour < 12 ? 'AM' : 'PM');
 
-    // Find peak day
     const dailyTotals = activity.heatmap.map(row => row.reduce((a, b) => a + b, 0));
     const peakDay = dailyTotals.indexOf(Math.max(...dailyTotals));
     document.getElementById('analyticsPeakDay').textContent = DAYS[peakDay];
@@ -51,7 +48,6 @@ function renderAnalyticsStats(activity, summary) {
 function renderHeatmap(heatmap) {
     const container = document.getElementById('heatmapContainer');
 
-    // Find max value for color scaling
     let maxVal = 1;
     for (const row of heatmap) {
         for (const val of row) {
@@ -78,22 +74,21 @@ function renderHeatmap(heatmap) {
     }
     html += '</tbody></table>';
 
-    // Legend
-    html += '<div style="display:flex;align-items:center;gap:8px;margin-top:16px;justify-content:flex-end;">';
-    html += '<span style="font-size:0.75rem;color:var(--text-dim)">Less</span>';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-top:16px;justify-content:flex-end;padding:0 16px 16px">';
+    html += '<span style="font-size:11px;color:var(--text-tertiary)">Less</span>';
     for (let i = 0; i <= 4; i++) {
         const color = getHeatColor(i / 4);
         html += `<div style="width:16px;height:16px;border-radius:3px;background:${color}"></div>`;
     }
-    html += '<span style="font-size:0.75rem;color:var(--text-dim)">More</span></div>';
+    html += '<span style="font-size:11px;color:var(--text-tertiary)">More</span></div>';
 
     container.innerHTML = html;
 }
 
 function getHeatColor(intensity) {
-    if (intensity === 0) return 'rgba(99, 102, 241, 0.04)';
+    if (intensity === 0) return 'rgba(0, 112, 243, 0.04)';
     const alpha = 0.15 + intensity * 0.75;
-    return `rgba(99, 102, 241, ${alpha.toFixed(2)})`;
+    return `rgba(0, 112, 243, ${alpha.toFixed(2)})`;
 }
 
 let hourlyChart = null;
@@ -122,11 +117,11 @@ function renderHourlyChart(heatmap) {
             backgroundColor: hourlyTotals.map((_, i) => {
                 const maxVal = Math.max(...hourlyTotals, 1);
                 const intensity = hourlyTotals[i] / maxVal;
-                return `rgba(99, 102, 241, ${0.3 + intensity * 0.6})`;
+                return `rgba(0, 112, 243, ${(0.3 + intensity * 0.6).toFixed(2)})`;
             }),
-            borderColor: '#6366f1',
+            borderColor: '#0070F3',
             borderWidth: 1,
-            borderRadius: 6,
+            borderRadius: 4,
         }],
     };
 
@@ -146,17 +141,19 @@ function renderHourlyChart(heatmap) {
                 x: { grid: { display: false } },
                 y: {
                     beginAtZero: true,
-                    grid: { color: 'rgba(30, 41, 59, 0.5)' },
+                    grid: { color: 'rgba(255,255,255,0.04)' },
                 },
             },
             plugins: {
                 legend: { display: false },
                 tooltip: {
-                    backgroundColor: '#1a1f2e',
-                    borderColor: '#2a3441',
+                    backgroundColor: '#0A0A0A',
+                    borderColor: 'rgba(255,255,255,0.08)',
                     borderWidth: 1,
+                    titleColor: '#EDEDED',
+                    bodyColor: '#888888',
                     padding: 12,
-                    cornerRadius: 8,
+                    cornerRadius: 6,
                 },
             },
         },
@@ -170,7 +167,7 @@ function renderDailyChart(heatmap) {
     if (!canvas) return;
 
     const dailyTotals = heatmap.map(row => row.reduce((a, b) => a + b, 0));
-    const colors = ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#6366f1', '#818cf8', '#a5b4fc'];
+    const colors = ['#0070F3', '#1A8CFF', '#4DA6FF', '#80BFFF', '#0070F3', '#1A8CFF', '#4DA6FF'];
 
     const chartData = {
         labels: DAYS,
@@ -197,15 +194,15 @@ function renderDailyChart(heatmap) {
             maintainAspectRatio: false,
             cutout: '55%',
             plugins: {
-                legend: {
-                    position: 'right',
-                },
+                legend: { position: 'right' },
                 tooltip: {
-                    backgroundColor: '#1a1f2e',
-                    borderColor: '#2a3441',
+                    backgroundColor: '#0A0A0A',
+                    borderColor: 'rgba(255,255,255,0.08)',
                     borderWidth: 1,
+                    titleColor: '#EDEDED',
+                    bodyColor: '#888888',
                     padding: 12,
-                    cornerRadius: 8,
+                    cornerRadius: 6,
                 },
             },
         },

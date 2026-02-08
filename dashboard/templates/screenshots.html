@@ -6,24 +6,22 @@
 {% block content %}
 <!-- Controls -->
 <div class="card">
-    <div class="card-body">
-        <div class="filter-bar">
-            <div class="filter-group">
-                <label class="filter-label">Show</label>
-                <select id="screenshotLimit" class="form-select">
-                    <option value="12">12</option>
-                    <option value="20" selected>20</option>
-                    <option value="50">50</option>
-                </select>
-            </div>
-            <button class="btn btn-primary" id="refreshScreenshots">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-                Refresh
-            </button>
+    <div class="filter-bar" style="padding:0">
+        <div class="filter-group">
+            <label class="filter-label">Show</label>
+            <select id="screenshotLimit" class="form-select">
+                <option value="12">12</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+            </select>
         </div>
+        <button class="btn btn-primary" id="refreshScreenshots">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Refresh
+        </button>
     </div>
 </div>
 
@@ -33,10 +31,8 @@
         <h2 class="card-title">Screenshot Gallery</h2>
         <span class="badge" id="screenshotCountBadge">--</span>
     </div>
-    <div class="card-body">
-        <div class="screenshot-grid" id="screenshotGrid">
-            <div class="empty-state">Loading screenshots...</div>
-        </div>
+    <div class="screenshot-grid" id="screenshotGrid">
+        <div class="empty-state" style="grid-column:1/-1">Loading screenshots...</div>
     </div>
 </div>
 

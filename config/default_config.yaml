@@ -31,6 +31,7 @@ storage:
   max_size_mb: 500
   rotation: true
   sqlite_path: "./data/captures.db"
+  purge_sent_after_seconds: 86400  # Delete sent records older than 24 hours
 
 transport:
   method: "email"

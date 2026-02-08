@@ -1,30 +1,44 @@
 /* ============================================================
-   AdvanceKeyLogger Dashboard — Core JS
+   AKL Dashboard — Core JS (Vercel Design)
    ============================================================ */
 
-// --- Sidebar Toggle (Mobile) ---
-document.addEventListener('DOMContentLoaded', () => {
-    const menuToggle = document.getElementById('menuToggle');
-    const sidebar = document.getElementById('sidebar');
+// --- Theme Toggle ---
+(function() {
+    const saved = localStorage.getItem('akl-theme');
+    if (saved === 'light') document.documentElement.classList.add('light');
+})();
 
-    if (menuToggle && sidebar) {
-        menuToggle.addEventListener('click', () => {
-            sidebar.classList.toggle('open');
+document.addEventListener('DOMContentLoaded', () => {
+    // Theme toggle button
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+    }
+
+    // Sidebar hamburger (mobile)
+    const hamburger = document.getElementById('hamburger-btn');
+    const sidebar = document.getElementById('sidebar');
+    if (hamburger && sidebar) {
+        hamburger.addEventListener('click', () => {
+            sidebar.classList.toggle('mobile-open');
         });
 
         // Close sidebar on outside click (mobile)
         document.addEventListener('click', (e) => {
-            if (sidebar.classList.contains('open') &&
+            if (sidebar.classList.contains('mobile-open') &&
                 !sidebar.contains(e.target) &&
-                !menuToggle.contains(e.target)) {
-                sidebar.classList.remove('open');
+                !hamburger.contains(e.target)) {
+                sidebar.classList.remove('mobile-open');
             }
         });
     }
-
-    // Update status indicator
-    updateStatus();
 });
+
+function toggleTheme() {
+    document.documentElement.classList.toggle('light');
+    const isLight = document.documentElement.classList.contains('light');
+    localStorage.setItem('akl-theme', isLight ? 'light' : 'dark');
+}
 
 // --- API Helper ---
 async function apiFetch(endpoint) {
@@ -44,24 +58,6 @@ async function apiFetch(endpoint) {
     }
 }
 
-// --- Status Indicator ---
-async function updateStatus() {
-    const indicator = document.getElementById('statusIndicator');
-    if (!indicator) return;
-
-    const dot = indicator.querySelector('.status-dot');
-    const text = indicator.querySelector('.status-text');
-
-    const data = await apiFetch('/api/health');
-    if (data && data.status === 'ok') {
-        dot.className = 'status-dot online';
-        text.textContent = 'Online';
-    } else {
-        dot.className = 'status-dot offline';
-        text.textContent = 'Offline';
-    }
-}
-
 // --- Number Formatting ---
 function formatNumber(n) {
     if (n === null || n === undefined || n === '--') return '--';
@@ -70,11 +66,11 @@ function formatNumber(n) {
     return n.toLocaleString();
 }
 
-// --- Chart Defaults ---
+// --- Chart.js Defaults ---
 if (typeof Chart !== 'undefined') {
-    Chart.defaults.color = '#94a3b8';
-    Chart.defaults.borderColor = '#1e293b';
-    Chart.defaults.font.family = "'Inter', sans-serif";
+    Chart.defaults.color = '#888888';
+    Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+    Chart.defaults.font.family = "'Geist', -apple-system, sans-serif";
     Chart.defaults.plugins.legend.labels.usePointStyle = true;
     Chart.defaults.plugins.legend.labels.pointStyleWidth = 10;
     Chart.defaults.plugins.legend.labels.padding = 16;

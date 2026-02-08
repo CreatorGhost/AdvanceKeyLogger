@@ -1,130 +1,125 @@
 {% extends "base.html" %}
 
 {% block title %}Dashboard{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
+{% block page_title %}Overview{% endblock %}
 
 {% block content %}
-<!-- Stats Cards -->
-<div class="stats-grid" id="statsGrid">
-    <div class="stat-card">
-        <div class="stat-icon stat-icon-blue">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/>
-                <line x1="12" y1="4" x2="12" y2="20"/>
-            </svg>
-        </div>
-        <div class="stat-info">
-            <span class="stat-value" id="totalCaptures">--</span>
-            <span class="stat-label">Total Captures</span>
-        </div>
+<!-- Metric Tabs -->
+<div class="metric-tabs" id="metric-tabs">
+    <div class="metric-tab active" data-metric="captures">
+        <div class="metric-tab-label">Total Captures</div>
+        <div class="metric-tab-value" id="totalCaptures">--</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon stat-icon-amber">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-            </svg>
-        </div>
-        <div class="stat-info">
-            <span class="stat-value" id="pendingCount">--</span>
-            <span class="stat-label">Pending</span>
-        </div>
+    <div class="metric-tab" data-metric="pending">
+        <div class="metric-tab-label">Pending</div>
+        <div class="metric-tab-value" id="pendingCount">--</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon stat-icon-green">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"/>
-            </svg>
-        </div>
-        <div class="stat-info">
-            <span class="stat-value" id="sentCount">--</span>
-            <span class="stat-label">Sent</span>
-        </div>
+    <div class="metric-tab" data-metric="screenshots">
+        <div class="metric-tab-label">Screenshots</div>
+        <div class="metric-tab-value" id="screenshotsCount">--</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon stat-icon-purple">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-            </svg>
-        </div>
-        <div class="stat-info">
-            <span class="stat-value" id="screenshotsCount">--</span>
-            <span class="stat-label">Screenshots</span>
-        </div>
+    <div class="metric-tab" data-metric="uptime">
+        <div class="metric-tab-label">Uptime</div>
+        <div class="metric-tab-value" id="uptimeValue">--</div>
     </div>
 </div>
 
-<!-- System Info + Modules -->
-<div class="grid-2col">
-    <!-- System Info -->
-    <div class="card">
-        <div class="card-header">
-            <h2 class="card-title">System Information</h2>
-            <span class="badge badge-green" id="uptimeBadge">--</span>
+<div class="content">
+    <!-- Recent Activity -->
+    <div class="section">
+        <div class="card">
+            <div class="section-header">
+                <div class="section-title">Recent activity</div>
+                <a href="/captures" class="section-link">View all &#8594;</a>
+            </div>
+            <div class="tbl-wrap-mobile">
+                <table class="tbl" id="activityTable">
+                    <thead>
+                        <tr>
+                            <th>Event</th>
+                            <th>Details</th>
+                            <th style="text-align:right">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityBody">
+                        <tr><td colspan="3" class="empty-state-sm">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-list-mobile" id="activityMobile"></div>
         </div>
-        <div class="card-body">
-            <div class="info-list" id="systemInfo">
-                <div class="info-row">
-                    <span class="info-key">Hostname</span>
-                    <span class="info-value" id="sysHostname">--</span>
+    </div>
+
+    <!-- Two Columns: Modules + Resources/Transport -->
+    <div class="two-col">
+        <!-- Modules -->
+        <div class="section">
+            <div class="card">
+                <div class="section-header">
+                    <div class="section-title">Modules</div>
                 </div>
-                <div class="info-row">
-                    <span class="info-key">OS</span>
-                    <span class="info-value" id="sysOS">--</span>
+                <div id="modulesList">
+                    <div class="empty-state-sm">Loading...</div>
                 </div>
-                <div class="info-row">
-                    <span class="info-key">Python</span>
-                    <span class="info-value" id="sysPython">--</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-key">CPU Usage</span>
-                    <span class="info-value" id="sysCPU">--</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-key">Memory</span>
-                    <span class="info-value" id="sysMemory">--</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-key">Storage</span>
-                    <div class="progress-bar-wrapper">
-                        <div class="progress-bar" id="storageBar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Right Column: Resources + Transport -->
+        <div>
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Resources</div>
                     </div>
-                    <span class="info-value" id="sysStorage">--</span>
+                    <div id="resourcesPanel">
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">CPU</span>
+                                <span class="res-value" id="resCpu">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resCpuBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Memory</span>
+                                <span class="res-value" id="resMemory">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resMemoryBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Storage</span>
+                                <span class="res-value" id="resStorage">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resStorageBar" style="width:0%"></div></div>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- Modules -->
-    <div class="card">
-        <div class="card-header">
-            <h2 class="card-title">Registered Modules</h2>
-        </div>
-        <div class="card-body">
-            <div class="modules-section">
-                <h3 class="section-subtitle">Capture Modules</h3>
-                <div class="module-list" id="captureModules">
-                    <div class="empty-state-sm">Loading...</div>
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Transport</div>
+                    </div>
+                    <div id="transportPanel">
+                        <div class="queue-row">
+                            <span class="queue-label">Queue</span>
+                            <span class="queue-val" id="transportQueue">--</span>
+                        </div>
+                        <div class="queue-row">
+                            <span class="queue-label">Status</span>
+                            <span class="queue-val" id="transportStatus">
+                                <span class="queue-dot"></span> Active
+                            </span>
+                        </div>
+                        <div class="queue-row">
+                            <span class="queue-label">Sent</span>
+                            <span class="queue-val" id="transportSent">--</span>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div class="modules-section">
-                <h3 class="section-subtitle">Transport Modules</h3>
-                <div class="module-list" id="transportModules">
-                    <div class="empty-state-sm">Loading...</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Activity Chart -->
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Capture Activity</h2>
-    </div>
-    <div class="card-body">
-        <div class="chart-container">
-            <canvas id="activityChart"></canvas>
         </div>
     </div>
 </div>

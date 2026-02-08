@@ -443,6 +443,9 @@ def main() -> int:
                 breaker.record_success()
                 if sqlite_store is not None:
                     sqlite_store.mark_sent(batch_ids)
+                    # Purge old sent records to prevent unbounded database growth
+                    purge_age = config.get("storage", {}).get("purge_sent_after_seconds", 86400)
+                    sqlite_store.purge_sent(older_than_seconds=purge_age)
                 _cleanup_files(file_paths)
                 storage_manager.rotate()
             else:

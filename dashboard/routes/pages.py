@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from dashboard.auth import get_current_user, require_auth
 
@@ -13,13 +13,19 @@ pages_router = APIRouter(tags=["pages"])
 async def login_page(request: Request) -> HTMLResponse:
     """Render login page."""
     if get_current_user(request):
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url="/", status_code=302)
+        return RedirectResponse(url="/dashboard", status_code=302)
     templates = request.app.state.templates
     return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @pages_router.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request) -> HTMLResponse:
+    """Render public landing page (no auth required)."""
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "landing.html", {})
+
+
+@pages_router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request) -> HTMLResponse:
     """Render main dashboard."""
     redirect = require_auth(request)

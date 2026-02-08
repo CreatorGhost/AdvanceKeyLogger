@@ -1,5 +1,5 @@
 /* ============================================================
-   Captures Page JS
+   Captures Page JS — Vercel Design
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -46,10 +46,10 @@ function renderCapturesTable(data) {
 
         return `
             <tr>
-                <td style="font-family:var(--font-mono);color:var(--text-dim)">#${item.id}</td>
+                <td style="font-family:var(--font-mono);color:var(--text-tertiary)">#${item.id}</td>
                 <td><span class="badge ${typeClass}">${item.capture_type || 'unknown'}</span></td>
                 <td title="${escapeHtml(item.data)}">${escapeHtml(truncate(item.data, 80))}</td>
-                <td style="font-family:var(--font-mono);font-size:0.8rem">${timestamp}</td>
+                <td style="font-family:var(--font-mono);font-size:12px">${timestamp}</td>
                 <td><span class="badge ${statusClass}">${item.status || 'pending'}</span></td>
             </tr>
         `;
