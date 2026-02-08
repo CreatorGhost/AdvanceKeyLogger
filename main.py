@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     service_parser = subparsers.add_parser("service", help="Manage service/daemon mode")
     service_parser.add_argument(
         "action",
-        choices=["install", "uninstall", "status"],
+        choices=["install", "uninstall", "start", "stop", "restart", "status"],
         help="Service action to perform",
     )
     parser.add_argument(
@@ -318,6 +318,12 @@ def main() -> int:
             print(manager.install())
         elif action == "uninstall":
             print(manager.uninstall())
+        elif action == "start":
+            print(manager.start())
+        elif action == "stop":
+            print(manager.stop())
+        elif action == "restart":
+            print(manager.restart())
         elif action == "status":
             print(manager.status())
         else:

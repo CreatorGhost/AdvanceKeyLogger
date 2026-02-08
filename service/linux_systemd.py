@@ -31,6 +31,18 @@ class SystemdManager:
         _run(["systemctl", "--user", "daemon-reload"], check=False)
         return f"Uninstalled systemd service {spec.name}"
 
+    def start(self, spec) -> str:
+        _run(["systemctl", "--user", "start", f"{spec.name}.service"], check=False)
+        return f"Started systemd service {spec.name}"
+
+    def stop(self, spec) -> str:
+        _run(["systemctl", "--user", "stop", f"{spec.name}.service"], check=False)
+        return f"Stopped systemd service {spec.name}"
+
+    def restart(self, spec) -> str:
+        _run(["systemctl", "--user", "restart", f"{spec.name}.service"], check=False)
+        return f"Restarted systemd service {spec.name}"
+
     def status(self, spec) -> str:
         result = _run(["systemctl", "--user", "is-active", f"{spec.name}.service"], check=False)
         status = result.stdout.strip() if result.stdout else "unknown"

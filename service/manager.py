@@ -42,6 +42,18 @@ class ServiceManager:
         manager = self._get_manager()
         return manager.uninstall(self._spec)
 
+    def start(self) -> str:
+        manager = self._get_manager()
+        return manager.start(self._spec)
+
+    def stop(self) -> str:
+        manager = self._get_manager()
+        return manager.stop(self._spec)
+
+    def restart(self) -> str:
+        manager = self._get_manager()
+        return manager.restart(self._spec)
+
     def status(self) -> str:
         manager = self._get_manager()
         return manager.status(self._spec)
