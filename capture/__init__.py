@@ -22,6 +22,8 @@ from typing import Any
 
 from capture.base import BaseCapture
 
+logger = logging.getLogger(__name__)
+
 _CAPTURE_REGISTRY: dict[str, type[BaseCapture]] = {}
 
 
@@ -77,15 +79,19 @@ def create_enabled_captures(config: dict[str, Any]) -> list[BaseCapture]:
                 try:
                     captures.append(cls(settings, global_config=config))
                 except TypeError:
+                    # Fallback for captures that don't accept global_config
                     captures.append(cls(settings))
             except ValueError:
+                # Unknown capture name - skip silently (not registered)
                 pass
+            except Exception as exc:
+                # Log and skip any other instantiation errors
+                logger.warning("Failed to instantiate capture '%s': %s", name, exc)
 
     return captures
 
 
 # Import built-in capture modules so they self-register.
-logger = logging.getLogger(__name__)
 
 for _module in (
     "keyboard_capture",
