@@ -443,7 +443,9 @@ def main() -> int:
                 http_url = str(transport_cfg.get("http", {}).get("url", "")).strip()
                 if not http_url:
                     logger.error(
-                        "E2E encryption with HTTP transport enabled but transport.http.url is empty. "
+                        "E2E encryption with HTTP transport "
+                        "enabled but transport.http.url "
+                        "is empty. "
                         "Set it to the server /ingest endpoint, e.g. http://localhost:8000/ingest"
                     )
                     return 1

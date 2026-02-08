@@ -1,10 +1,8 @@
 """Tests for E2E server helpers."""
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from fastapi.testclient import TestClient
 
@@ -13,14 +11,6 @@ from crypto.protocol import E2EProtocol
 from server.app import create_app
 from server.keys import generate_server_keypair, load_server_private_key
 from server.storage import detect_extension, store_payload
-
-
-def _b64_public(key) -> str:
-    raw = key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    return base64.b64encode(raw).decode("utf-8")
 
 
 def test_generate_and_load_server_keys(tmp_path: Path):

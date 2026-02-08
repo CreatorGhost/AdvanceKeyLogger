@@ -17,7 +17,7 @@ class ProfileMatcher:
         keys = ["avg_dwell_ms", "avg_flight_ms", "error_rate", "pressure_variance"]
         vec_a = [float(v) if (v := profile_a.get(k)) is not None else 0.0 for k in keys]
         vec_b = [float(v) if (v := profile_b.get(k)) is not None else 0.0 for k in keys]
-        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(vec_a, vec_b)))
+        dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(vec_a, vec_b, strict=True)))
 
         # Add digraph distance for overlap
         dist += self._ngraph_distance(
