@@ -190,3 +190,22 @@ class TestSQLiteStorage:
         assert latest is not None
         assert latest.get("profile_id") == "usr_test"
         db.close()
+
+    def test_insert_app_profile(self, tmp_path: Path):
+        """Can insert and retrieve an app usage profile."""
+        db = SQLiteStorage(str(tmp_path / "app.db"))
+        profile = {
+            "date": "2026-02-08",
+            "generated_at": "2026-02-08T00:00:00Z",
+            "total_active_seconds": 3600,
+            "productive_ratio": 0.8,
+            "deep_work_score": 120.0,
+            "productivity_score": 75.0,
+            "app_totals": {"Visual Studio Code": 3600},
+        }
+        row_id = db.insert_app_profile(profile)
+        assert row_id >= 1
+        latest = db.get_latest_app_profile()
+        assert latest is not None
+        assert latest.get("date") == "2026-02-08"
+        db.close()
