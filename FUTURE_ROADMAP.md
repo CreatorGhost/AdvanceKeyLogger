@@ -1,11 +1,28 @@
 # Future Roadmap: Next-Gen Advanced Features
 
-Generated: 2026-02-08
-Scope: 10 deeply technical features beyond the existing 18-feature checklist.
+Generated: 2026-02-08 | Updated: 2026-02-08
+Scope: 20 deeply technical features beyond the existing 18-feature checklist.
 Focus: Software engineering patterns, systems design, and research-grade capabilities.
 
 > These features are independent of `ADVANCED_FEATURES_CHECKLIST.md` and represent the
 > next evolution of the project after the core 18 are complete.
+
+---
+
+## Feature Assessment (Existing 10)
+
+| # | Feature | Verdict | Star Impact | Notes |
+|---|---------|---------|-------------|-------|
+| 1 | Rule Engine + DSL | KEEP — flagship feature | HIGH | Demonstrates compiler fundamentals. Very few monitoring tools have this. Makes great README demo. |
+| 2 | Keystroke Biometrics | KEEP — unique differentiator | VERY HIGH | Almost no open-source project does this well. Research papers cite this area. Will attract security researchers. |
+| 3 | Middleware Pipeline | KEEP — architectural backbone | MEDIUM | Essential for extensibility but less visible to users. Implement early as other features depend on it. |
+| 4 | Service Mode | KEEP — practical necessity | MEDIUM | Essential for real usage but won't drive stars on its own. Low-glamour, high-utility. |
+| 5 | App Profiler | KEEP — viral potential | VERY HIGH | Productivity tracking is mainstream (RescueTime has 2M+ users). This alone could drive stars from non-security users. |
+| 6 | E2E Encryption | KEEP but simplify | LOW | Impressive technically but most GitHub visitors won't understand the value. Simplify to just envelope encryption + key rotation. Skip the full TLS-like handshake. |
+| 7 | Fleet Management | DEFER — too complex early | MEDIUM | This is a separate product, not a feature. Only build after everything else is solid. Risk of scope creep. |
+| 8 | Adaptive Capture | KEEP — impressive demo | MEDIUM | Cool concept but hard to demonstrate in a README. Needs the TUI or dashboard to visualize the adaptive behavior live. |
+| 9 | Offline Sync | KEEP but reduce scope | MEDIUM | Watermark sync is valuable. Drop the CRDT/conflict resolution complexity — use simple last-write-wins only. |
+| 10 | Time-Series Store | DEFER — over-engineered | LOW | Custom binary format is impressive but risky (bugs, corruption). Use SQLite with proper indexing + partitioned tables instead. Same performance, 1/10th the code. |
 
 ---
 
@@ -1001,33 +1018,667 @@ tsdb/
 
 ---
 
-## Implementation Priority Matrix
+---
 
-| # | Feature | Complexity | Impact | Depends On |
-|---|---------|-----------|--------|------------|
-| 1 | Event-Driven Rule Engine | HIGH | HIGH | Core pipeline |
-| 2 | Keystroke Biometrics | MEDIUM | HIGH | Keyboard capture timing |
-| 3 | Middleware Pipeline | MEDIUM | HIGH | None (enhances existing) |
-| 4 | Cross-Platform Service Mode | MEDIUM | MEDIUM | None |
-| 5 | App Usage Profiler | MEDIUM | HIGH | Window capture |
-| 6 | E2E Encrypted Transport | HIGH | MEDIUM | Existing crypto module |
-| 7 | Fleet Management | VERY HIGH | VERY HIGH | Feature 6, Dashboard |
-| 8 | Adaptive Capture | HIGH | MEDIUM | Feature 5 signals |
-| 9 | Offline-First Sync | HIGH | MEDIUM | Feature 7 (controller) |
-| 10 | Time-Series Store | VERY HIGH | HIGH | None (replaces SQLite) |
+## Feature 11: Session Recording & Visual Replay
 
-### Recommended Implementation Order
+**Concept:** Record full user sessions as a structured timeline combining keystrokes, window switches, screenshots, and mouse events into a playable "video-like" replay. Think FullStory or LogRocket — but local, open-source, and privacy-respecting.
+
+**Why it matters:** Session replay is a $2B+ market (FullStory, Hotjar, LogRocket). An open-source, self-hosted alternative would attract massive attention. This is the single most demo-able feature — GIFs of session replays in the README will drive stars.
+
+### Replay Data Structure
+```json
+{
+  "session_id": "sess_20260208_143000",
+  "duration_seconds": 3600,
+  "events": [
+    {"t": 0,     "type": "window",     "data": {"title": "VS Code — main.py"}},
+    {"t": 0.2,   "type": "keystroke",  "data": {"key": "d", "action": "down"}},
+    {"t": 0.28,  "type": "keystroke",  "data": {"key": "d", "action": "up"}},
+    {"t": 0.35,  "type": "keystroke",  "data": {"key": "e", "action": "down"}},
+    {"t": 12.5,  "type": "screenshot", "data": {"file": "scr_00001.png"}},
+    {"t": 45.0,  "type": "window",     "data": {"title": "Chrome — GitHub"}},
+    {"t": 45.1,  "type": "mouse",      "data": {"x": 512, "y": 300, "button": "left"}},
+    {"t": 120.0, "type": "clipboard",  "data": {"content": "npm install fastapi"}}
+  ]
+}
 ```
-Phase A (Foundation):     3 (Pipeline) → 2 (Biometrics) → 5 (Profiler)
-Phase B (Intelligence):   1 (Rule Engine) → 8 (Adaptive Capture)
-Phase C (Infrastructure): 4 (Service Mode) → 6 (E2E Crypto)
-Phase D (Scale):          7 (Fleet Mgmt) → 9 (Sync Engine)
-Phase E (Storage):        10 (Time-Series Store)
+
+### Playback Modes
+| Mode | Description |
+|------|-------------|
+| Terminal (Rich) | Text-based replay: keystrokes animate, window titles as headers, timestamps on left |
+| Dashboard (Web) | Browser-based player: timeline scrubber, speed controls (0.5x-10x), screenshot overlay, keystroke ticker |
+| Export (MP4/GIF) | Render replay to video using Pillow/ffmpeg — ideal for README demos |
+
+### Dashboard Player Features
+- Timeline scrubber bar with event density visualization
+- Play/pause, speed control (0.5x, 1x, 2x, 5x, 10x)
+- Jump to next window switch / screenshot / idle gap
+- Picture-in-picture: screenshot + keystroke stream side by side
+- Search within replay: find when a specific word was typed
+- Bookmark interesting moments
+
+### Files to Create
+```
+replay/
+  __init__.py
+  recorder.py       — SessionRecorder: collects events with high-res timestamps
+  player.py         — TerminalPlayer: Rich-based terminal replay
+  exporter.py       — SessionExporter: to JSON, HTML player, GIF
+  models.py         — SessionEvent, Session, PlaybackState dataclasses
+
+dashboard/routes/replay.py   — /replay/{session_id} page + API
+dashboard/templates/replay.html
+dashboard/static/js/replay.js — browser-based player with timeline
+```
+
+### CS Concepts
+- Event sourcing (rebuild state from ordered event log)
+- Timeline indexing and binary search for seek
+- Real-time rendering and animation scheduling
+
+---
+
+## Feature 12: Natural Language Search
+
+**Concept:** Search captured data using plain English queries instead of filters. "What was I typing when I was in VS Code yesterday afternoon?" gets parsed into structured filters and executed against the database.
+
+**Why it matters:** Natural language interfaces are trending (every AI product has one now). Implementing NLQ demonstrates query planning, intent parsing, and semantic search — without needing an LLM. A regex/rule-based approach is impressive and educational.
+
+### Example Queries
+| Natural Language | Parsed Filters |
+|-----------------|----------------|
+| "keystrokes in Chrome today" | type=keyboard, window=*Chrome*, date=today |
+| "screenshots from last week" | type=screenshot, date=last_7_days |
+| "clipboard copies containing github" | type=clipboard, content=*github* |
+| "activity between 2pm and 5pm" | time_range=14:00-17:00 |
+| "most used apps yesterday" | type=window, date=yesterday, aggregate=count, group=title |
+| "idle periods longer than 10 minutes" | type=idle, duration>600s |
+
+### Architecture
+```
+User Query (text)
+     │
+     ▼
+┌──────────────┐
+│ Tokenizer    │  Split into tokens, normalize
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ Intent       │  Classify: search / aggregate / compare / timeline
+│ Classifier   │
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ Entity       │  Extract: dates, time ranges, app names, capture types
+│ Extractor    │
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ Query        │  Build structured query from intent + entities
+│ Planner      │
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ Executor     │  Run against SQLite/TSDB, format results
+└──────────────┘
+```
+
+### Implementation (No LLM Required)
+- **Tokenizer**: Split on whitespace, normalize case, expand abbreviations
+- **Intent classifier**: Keyword matching ("show", "find", "count", "compare", "when")
+- **Entity extraction**: Regex patterns for dates ("today", "yesterday", "last week", "Feb 8"), times ("2pm", "14:00-17:00"), capture types ("keystrokes", "screenshots"), app names (quoted strings or known apps)
+- **Query planner**: Map to SQLite WHERE clauses + aggregations
+- **Fallback**: If parsing fails, do full-text search across all captured data
+
+### Dashboard Integration
+- Search bar in the top navigation (already have the Cmd+K palette — extend it)
+- Results displayed as mixed-type cards (keystroke snippets, screenshot thumbnails, window timelines)
+- "Did you mean...?" suggestions on ambiguous queries
+
+### Files to Create
+```
+search/
+  __init__.py
+  tokenizer.py        — Tokenizer: split, normalize, expand abbreviations
+  intent.py           — IntentClassifier: keyword-based intent detection
+  entities.py         — EntityExtractor: dates, times, types, app names
+  planner.py          — QueryPlanner: intent + entities → structured query
+  executor.py         — QueryExecutor: run against storage, format results
+```
+
+### CS Concepts
+- Natural Language Query (NLQ) processing
+- Intent classification (rule-based, not ML)
+- Named entity recognition (regex-based)
+- Query planning and optimization
+
+---
+
+## Feature 13: Configuration Profiles & Hot-Switching
+
+**Concept:** Named configuration profiles (e.g., "work", "home", "minimal", "debug") that can be switched at runtime without restarting. Each profile defines which modules are active, capture intervals, transport targets, and privacy filters.
+
+**Why it matters:** Real monitoring tools need different behaviors for different contexts. Demonstrates state machine pattern, runtime reconfiguration, and the Strategy pattern at application level.
+
+### Profile Examples
+```yaml
+profiles:
+  work:
+    description: "Full capture during work hours"
+    capture:
+      keyboard: { enabled: true, include_key_up: true }
+      mouse: { enabled: true, track_movement: false }
+      screenshot: { enabled: true, interval: 60 }
+      clipboard: { enabled: true }
+      window: { enabled: true }
+    transport: email
+    privacy:
+      blocked_apps: ["1Password", "KeePass"]
+      active_hours: { start: "09:00", end: "18:00" }
+
+  home:
+    description: "Minimal capture for personal use"
+    capture:
+      keyboard: { enabled: true, include_key_up: false }
+      mouse: { enabled: false }
+      screenshot: { enabled: false }
+      clipboard: { enabled: false }
+      window: { enabled: true }
+    transport: none
+
+  debug:
+    description: "Everything on, verbose logging"
+    capture:
+      keyboard: { enabled: true, include_key_up: true }
+      mouse: { enabled: true, track_movement: true }
+      screenshot: { enabled: true, interval: 10 }
+      clipboard: { enabled: true }
+      window: { enabled: true }
+    general:
+      log_level: DEBUG
+    transport: http
+
+  stealth:
+    description: "Minimal footprint"
+    capture:
+      keyboard: { enabled: true }
+      mouse: { enabled: false }
+      screenshot: { enabled: false }
+      clipboard: { enabled: false }
+      window: { enabled: false }
+    general:
+      log_level: ERROR
+```
+
+### Runtime Switching
+- CLI: `python -m main --profile work` or `python -m main profile switch home`
+- API: `POST /api/profile/switch {"profile": "home"}`
+- TUI: Dropdown selector in status bar
+- Scheduled: Auto-switch based on time of day or Wi-Fi network
+- Signal: `SIGUSR1` triggers cycle to next profile
+
+### Files to Create
+```
+config/
+  profiles.py          — ProfileManager: load, validate, switch, auto-schedule
+  profile_schema.py    — ProfileSchema: Pydantic validation for profile definitions
 ```
 
 ---
 
-## Summary Table
+## Feature 14: Audit Log & Compliance Trail
+
+**Concept:** An immutable, append-only audit log that records every significant action: service start/stop, config changes, data access, export operations, login attempts, profile switches. Stored separately from capture data with tamper detection via hash chaining.
+
+**Why it matters:** Compliance is mandatory for legitimate monitoring deployments (GDPR, HIPAA, SOC 2). An audit trail transforms this from a hobbyist tool into something enterprise-ready. Hash chaining demonstrates blockchain-like integrity verification.
+
+### Events Logged
+| Event | Data Captured |
+|-------|--------------|
+| `service.start` | timestamp, config_hash, version, user |
+| `service.stop` | timestamp, reason (signal, error, manual) |
+| `config.change` | timestamp, old_value, new_value, field_path |
+| `profile.switch` | timestamp, from_profile, to_profile, trigger (manual/auto) |
+| `capture.module.start` | timestamp, module_name |
+| `capture.module.stop` | timestamp, module_name, reason |
+| `transport.send` | timestamp, transport_type, bytes_sent, success/fail |
+| `data.export` | timestamp, format, record_count, user |
+| `data.purge` | timestamp, record_count, reason |
+| `auth.login` | timestamp, username, ip, success/fail |
+| `auth.logout` | timestamp, username |
+| `dashboard.access` | timestamp, username, page, ip |
+
+### Hash Chain Integrity
+```
+Entry N:
+  {
+    "seq": 1042,
+    "timestamp": "2026-02-08T14:30:00.123Z",
+    "event": "config.change",
+    "data": { ... },
+    "prev_hash": "a3f2...b8c1",
+    "hash": SHA256(seq + timestamp + event + data + prev_hash)
+  }
+
+Verification: Walk the chain, recompute each hash, verify chain is unbroken.
+If any entry is tampered, all subsequent hashes break.
+```
+
+### Files to Create
+```
+audit/
+  __init__.py
+  logger.py           — AuditLogger: append-only event recording
+  chain.py            — HashChain: compute and verify hash chain integrity
+  viewer.py           — AuditViewer: query, filter, export audit events
+  models.py           — AuditEvent, AuditChainEntry dataclasses
+```
+
+### Dashboard Integration
+- `/audit` page: searchable, filterable audit trail with hash verification status
+- Badge showing chain integrity (verified / broken / unchecked)
+
+---
+
+## Feature 15: Data Anonymization Pipeline
+
+**Concept:** A configurable pipeline that strips or anonymizes PII from captured data before storage, export, or sharing. Enables sharing datasets for research or debugging without exposing sensitive information.
+
+**Why it matters:** Privacy-by-design is a competitive advantage. Researchers want keystroke dynamics datasets but can't use raw captures due to privacy. An anonymization pipeline makes the project useful for academic research and compliant with data protection laws.
+
+### Anonymization Methods
+| Method | Description | Use Case |
+|--------|-------------|----------|
+| **Redaction** | Replace with `[REDACTED]` | Passwords, API keys |
+| **Pseudonymization** | Replace with consistent fake data (same input → same output) | Usernames, hostnames |
+| **Generalization** | Reduce precision ("14:32:15" → "14:30") | Timestamps, locations |
+| **Tokenization** | Replace with reversible token (key stored separately) | When re-identification might be needed |
+| **Statistical noise** | Add ±random offset to timing data | Keystroke biometrics research |
+| **k-Anonymity** | Ensure each record is indistinguishable from k-1 others | Demographic data |
+| **Differential privacy** | Add calibrated Laplace noise to aggregate queries | Analytics exports |
+
+### Configuration
+```yaml
+anonymization:
+  enabled: false
+  mode: "on_export"          # "on_capture" (before storage) or "on_export" (on demand)
+  methods:
+    keystrokes:
+      content: "redact"       # replace actual keys with "[KEY]"
+      timing: "noise"         # add ±5ms random noise to timing data
+      preserve_structure: true # keep word boundaries and lengths
+    window_titles:
+      method: "pseudonymize"  # consistent fake titles
+    clipboard:
+      method: "redact"
+    screenshots:
+      method: "blur"          # Gaussian blur sensitive regions (detected via OCR or config)
+      blur_radius: 20
+    metadata:
+      hostname: "pseudonymize"
+      username: "pseudonymize"
+      ip: "generalize"        # 192.168.1.42 → 192.168.1.0/24
+```
+
+### Export with Anonymization
+```bash
+# Export anonymized dataset for research
+python -m main export --format json --anonymize --output research_dataset.json
+
+# Export with only timing data (no content) for biometrics research
+python -m main export --format csv --anonymize --timing-only --output biometrics.csv
+```
+
+### Files to Create
+```
+anonymization/
+  __init__.py
+  engine.py           — AnonymizationEngine: orchestrate pipeline
+  methods/
+    __init__.py
+    redactor.py        — content redaction
+    pseudonymizer.py   — consistent fake data generation (deterministic hash-based)
+    generalizer.py     — precision reduction
+    noise.py           — statistical noise injection
+  config.py           — AnonymizationConfig: validation and defaults
+```
+
+### CS Concepts
+- Privacy-preserving data processing
+- Differential privacy fundamentals
+- k-Anonymity and l-diversity
+- Deterministic pseudonymization (HMAC-based)
+
+---
+
+## Feature 16: Automated Scheduled Reports
+
+**Concept:** Automatically generate and deliver daily/weekly/monthly summary reports. Reports are rendered as HTML emails or PDF files containing analytics, charts, key metrics, and configurable sections. Scheduled via internal cron-like scheduler — no external crontab needed.
+
+**Why it matters:** Automated reporting is a killer enterprise feature. It turns passive data collection into active intelligence delivery. The internal scheduler demonstrates job scheduling, template rendering, and chart-to-image generation.
+
+### Report Sections (Configurable)
+- Executive summary (total keystrokes, active time, screenshots, top apps)
+- Activity heatmap (rendered as inline image)
+- Top 10 applications by usage time
+- Productivity score trend
+- Keystroke velocity chart
+- Screenshot highlights (top 5 by time-of-day diversity)
+- Privacy filter activity (redaction counts)
+- System health (storage usage, transport success rate, errors)
+
+### Schedule Configuration
+```yaml
+reports:
+  enabled: false
+  schedules:
+    - name: "daily_summary"
+      cron: "0 18 * * *"          # every day at 6 PM
+      format: "html_email"
+      recipient: "admin@example.com"
+      sections: ["summary", "heatmap", "top_apps", "productivity"]
+    - name: "weekly_digest"
+      cron: "0 9 * * MON"         # every Monday at 9 AM
+      format: "pdf"
+      output_dir: "reports/"
+      sections: ["summary", "heatmap", "top_apps", "productivity", "health"]
+```
+
+### Internal Scheduler
+- Pure Python scheduler (no crontab dependency) using `threading.Timer` or `sched` module
+- Cron expression parser (supports: minute, hour, day-of-month, month, day-of-week)
+- Missed schedule detection (if system was asleep, run on wake)
+- Idempotent execution (same schedule + same date = same report, no duplicates)
+
+### Files to Create
+```
+reports/
+  __init__.py
+  scheduler.py        — ReportScheduler: cron parser, timer management
+  generator.py        — ReportGenerator: compile data, render template
+  renderer.py         — ReportRenderer: HTML and PDF output
+  mailer.py           — ReportMailer: send HTML email with inline images
+  templates/
+    daily.html         — Jinja2 template for daily report
+    weekly.html        — Jinja2 template for weekly digest
+```
+
+---
+
+## Feature 17: REST API SDK (Python Client Library)
+
+**Concept:** A clean, typed Python client library for the dashboard API. Published as a separate package (`advancekeylogger-sdk`), it lets users build custom integrations, automation scripts, and monitoring dashboards programmatically.
+
+**Why it matters:** SDKs drive ecosystem adoption. When people can `pip install advancekeylogger-sdk` and write 5 lines of Python to query their data, they build integrations and talk about it. This is how tools like Stripe, Twilio, and Datadog grew.
+
+### Usage Example
+```python
+from advancekeylogger import AKLClient
+
+client = AKLClient("http://localhost:8080", username="admin", password="admin")
+
+# Get system status
+status = client.status()
+print(f"Uptime: {status.uptime}, CPU: {status.system.cpu_percent}%")
+
+# Query captures
+captures = client.captures.list(type="keyboard", limit=100)
+for c in captures:
+    print(f"[{c.timestamp}] {c.data}")
+
+# Get analytics
+heatmap = client.analytics.activity()
+summary = client.analytics.summary()
+
+# Screenshots
+screenshots = client.screenshots.list(limit=10)
+client.screenshots.download("scr_00001.png", save_to="./downloads/")
+
+# Export
+client.export(format="csv", output="captures.csv", date_range="last_7d")
+
+# Async support
+async with AKLAsyncClient("http://localhost:8080") as client:
+    status = await client.status()
+```
+
+### Files to Create
+```
+sdk/
+  __init__.py
+  client.py           — AKLClient: sync client using httpx
+  async_client.py     — AKLAsyncClient: async variant
+  models.py           — Pydantic response models (Status, Capture, Screenshot, etc.)
+  endpoints/
+    __init__.py
+    status.py
+    captures.py
+    screenshots.py
+    analytics.py
+    config.py
+    export.py
+  exceptions.py       — AKLError, AuthError, NotFoundError, RateLimitError
+  auth.py             — session management, auto-reauth on 401
+```
+
+---
+
+## Feature 18: Backup, Restore & Migration
+
+**Concept:** Full system backup and restore capability — export everything (database, config, screenshots, encryption keys, audit log) into a single encrypted archive. Restore on a new machine to resume exactly where you left off. Migration tools for upgrading between versions.
+
+**Why it matters:** Data portability is essential for any tool that stores user data. Demonstrates archive management, schema migrations, and forward/backward compatibility.
+
+### CLI Commands
+```bash
+# Full backup
+python -m main backup --output backup_20260208.akl.enc --encrypt
+
+# Restore to a new installation
+python -m main restore --input backup_20260208.akl.enc --decrypt
+
+# Verify backup integrity without restoring
+python -m main backup verify --input backup_20260208.akl.enc
+
+# List backup contents
+python -m main backup list --input backup_20260208.akl.enc
+
+# Schema migration (on version upgrade)
+python -m main migrate --from 1.0 --to 2.0
+```
+
+### Backup Archive Format (.akl)
+```
+backup_20260208.akl.enc
+  ├── manifest.json        — version, timestamp, contents list, checksums
+  ├── config/              — all YAML config files
+  ├── data/captures.db     — SQLite database dump
+  ├── data/screenshots/    — all screenshot files
+  ├── keys/                — encryption keypairs (encrypted with backup password)
+  ├── audit/               — audit log with hash chain
+  └── checksum.sha256      — SHA-256 of all files for integrity verification
+```
+
+### Schema Migrations
+```python
+# migrations/001_add_session_id.py
+def up(db):
+    db.execute("ALTER TABLE captures ADD COLUMN session_id TEXT DEFAULT NULL")
+    db.execute("CREATE INDEX idx_session_id ON captures(session_id)")
+
+def down(db):
+    # SQLite doesn't support DROP COLUMN, so recreate table
+    ...
+```
+
+### Files to Create
+```
+backup/
+  __init__.py
+  archiver.py          — BackupArchiver: create/extract .akl archives
+  restorer.py          — BackupRestorer: validate and restore from archive
+  migrator.py          — SchemaMigrator: run forward/backward migrations
+  migrations/          — numbered migration files
+    __init__.py
+    001_initial.py
+```
+
+---
+
+## Feature 19: Multi-Monitor & Display Awareness
+
+**Concept:** Detect multiple monitors, capture screenshots from specific or all monitors, track which monitor the active window is on, and record monitor configuration changes (dock/undock events).
+
+**Why it matters:** Most power users have multi-monitor setups. Single-monitor screenshot capture misses context. Display awareness is a feature gap in nearly every open-source monitoring tool.
+
+### Capabilities
+- Detect all connected monitors (resolution, position, primary/secondary)
+- Per-monitor screenshot capture (configurable: all monitors, primary only, active monitor only)
+- Stitch multi-monitor screenshots into a single panoramic image
+- Detect monitor connect/disconnect events (dock/undock)
+- Track which monitor has the active window
+- Record display configuration in system info
+
+### Configuration
+```yaml
+capture:
+  screenshot:
+    multi_monitor: "active"    # "all", "primary", "active", "stitch"
+    stitch_direction: "horizontal"
+    monitor_labels: true       # overlay monitor number on stitched screenshots
+  display:
+    enabled: true
+    track_changes: true        # log monitor connect/disconnect events
+```
+
+### Files to Create
+```
+capture/
+  display_capture.py    — DisplayCapture: monitor detection, change tracking
+  multi_screenshot.py   — MultiScreenshot: per-monitor and stitched capture
+```
+
+---
+
+## Feature 20: Interactive CLI with Rich Tables & Progress
+
+**Concept:** A polished CLI experience using Rich for all terminal output — colored tables, progress bars, tree views, live dashboards, and spinners. Every CLI command produces beautiful, readable output.
+
+**Why it matters:** CLI UX is a major differentiator. Compare `git log` (ugly) vs `lazygit` (beautiful). Projects with great CLI output get shared in screenshots and tweets. Rich/Textual is the Python standard for this.
+
+### CLI Commands Enhanced
+```bash
+# Beautiful status display
+$ python -m main status
+┌─────────────────── AdvanceKeyLogger ───────────────────┐
+│ Status: RUNNING         Uptime: 2h 45m 12s            │
+│ PID:    12345           Profile: work                  │
+├──────────── Capture Modules ──────────────────────────┤
+│  Keyboard    ACTIVE    12,847 events  │  ██████████  │
+│  Mouse       ACTIVE     3,291 events  │  ████        │
+│  Screenshot  ACTIVE       156 files   │  ██          │
+│  Clipboard   ACTIVE        42 copies  │  █           │
+│  Window      ACTIVE       389 changes │  ███         │
+├──────────── Transport ────────────────────────────────┤
+│  Email       CONNECTED   Circuit: CLOSED              │
+│  Queue:      3 pending   Last send: 2m ago   OK     │
+├──────────── Storage ──────────────────────────────────┤
+│  SQLite:     12.4 MB / 500 MB  [████░░░░░░]  2.5%   │
+│  Files:      8.2 MB            156 screenshots       │
+└───────────────────────────────────────────────────────┘
+
+# Module list as a tree
+$ python -m main modules
+Capture
+├── keyboard (KeyboardCapture) — capture.keyboard_capture
+├── mouse (MouseCapture) — capture.mouse_capture
+├── screenshot (ScreenshotCapture) — capture.screenshot_capture
+├── clipboard (ClipboardCapture) — capture.clipboard_capture
+└── window (WindowCapture) — capture.window_capture
+Transport
+├── email (EmailTransport) — transport.email_transport
+├── http (HttpTransport) — transport.http_transport
+├── ftp (FTPTransport) — transport.ftp_transport
+└── telegram (TelegramTransport) — transport.telegram_transport
+
+# Export with progress bar
+$ python -m main export --format csv --output data.csv
+Exporting captures ━━━━━━━━━━━━━━━━━━━━━ 100% 12,847/12,847 records
+Writing CSV        ━━━━━━━━━━━━━━━━━━━━━ 100% data.csv (2.1 MB)
+Done in 3.2s
+```
+
+### Files to Create
+```
+cli/
+  __init__.py
+  console.py          — Shared Rich Console instance
+  commands/
+    __init__.py
+    status.py         — Status display with panels and tables
+    modules.py        — Module tree view
+    export.py         — Export with progress bars
+    profile.py        — Profile management commands
+    backup.py         — Backup/restore commands
+    search.py         — Natural language search CLI
+```
+
+---
+
+## Updated Implementation Priority Matrix
+
+| # | Feature | Complexity | Star Impact | Depends On |
+|---|---------|-----------|-------------|------------|
+| 3 | Middleware Pipeline | MEDIUM | MEDIUM | None |
+| 5 | App Usage Profiler | MEDIUM | VERY HIGH | Window capture |
+| 2 | Keystroke Biometrics | MEDIUM | VERY HIGH | Keyboard capture |
+| 20 | Interactive CLI (Rich) | LOW | HIGH | None |
+| 13 | Config Profiles | LOW | MEDIUM | None |
+| 11 | Session Recording & Replay | HIGH | VERY HIGH | All capture modules |
+| 12 | Natural Language Search | MEDIUM | HIGH | Storage layer |
+| 1 | Rule Engine + DSL | HIGH | HIGH | Feature 3 (Pipeline) |
+| 16 | Automated Reports | MEDIUM | HIGH | Analytics (Feature 5) |
+| 14 | Audit Log | MEDIUM | MEDIUM | None |
+| 8 | Adaptive Capture | HIGH | MEDIUM | Feature 5 |
+| 4 | Service Mode | MEDIUM | MEDIUM | None |
+| 15 | Data Anonymization | MEDIUM | HIGH | None |
+| 17 | Python SDK | MEDIUM | HIGH | Dashboard API |
+| 18 | Backup & Restore | MEDIUM | MEDIUM | None |
+| 19 | Multi-Monitor | LOW | MEDIUM | Screenshot capture |
+| 6 | E2E Encryption | HIGH | LOW | Crypto module |
+| 9 | Offline Sync | HIGH | MEDIUM | Feature 7 |
+| 7 | Fleet Management | VERY HIGH | MEDIUM | Features 6, Dashboard |
+| 10 | Time-Series Store | VERY HIGH | LOW | None |
+
+### Recommended Implementation Order (Updated)
+```
+Phase A (Quick Wins — do first, immediate impact):
+  20 (Rich CLI) → 13 (Config Profiles) → 19 (Multi-Monitor)
+
+Phase B (Star Drivers — the features that get shared and discussed):
+  5 (App Profiler) → 2 (Biometrics) → 11 (Session Replay)
+
+Phase C (Intelligence Layer):
+  3 (Middleware Pipeline) → 1 (Rule Engine) → 12 (NL Search) → 8 (Adaptive)
+
+Phase D (Enterprise & Compliance):
+  14 (Audit Log) → 15 (Anonymization) → 16 (Scheduled Reports)
+
+Phase E (Ecosystem):
+  17 (Python SDK) → 18 (Backup/Restore) → 4 (Service Mode)
+
+Phase F (Scale — only if needed):
+  6 (E2E Crypto) → 9 (Offline Sync) → 7 (Fleet Management)
+
+Phase G (Research — optional):
+  10 (Time-Series Store)
+```
+
+---
+
+## Summary Table (All 20 Features)
 
 | # | Feature | One-Line Description | Key CS Concept |
 |---|---------|---------------------|----------------|
@@ -1041,3 +1692,13 @@ Phase E (Storage):        10 (Time-Series Store)
 | 8 | Adaptive Capture | Dynamic capture frequency based on context signals | Control theory, Feedback loops |
 | 9 | Offline Sync | Offline-first with watermark-based incremental sync | Distributed consistency, Exactly-once delivery |
 | 10 | Time-Series Store | Embedded time-series database with query DSL | Storage engine design, WAL, Query optimization |
+| 11 | Session Replay | Full session recording with visual timeline playback | Event sourcing, Timeline indexing |
+| 12 | NL Search | Search captures using plain English queries | NLQ processing, Intent classification |
+| 13 | Config Profiles | Named profiles with runtime hot-switching | State machine, Strategy pattern |
+| 14 | Audit Log | Immutable hash-chained compliance trail | Hash chains, Tamper detection |
+| 15 | Data Anonymization | PII stripping for research dataset export | Differential privacy, k-Anonymity |
+| 16 | Scheduled Reports | Automated daily/weekly HTML/PDF report generation | Job scheduling, Template rendering |
+| 17 | Python SDK | Typed client library for dashboard API | SDK design, API abstraction |
+| 18 | Backup & Restore | Full system backup with schema migrations | Archive management, Schema versioning |
+| 19 | Multi-Monitor | Display-aware screenshot and window tracking | Display enumeration, Image stitching |
+| 20 | Interactive CLI | Rich terminal output with tables and progress bars | CLI UX, Terminal rendering |
