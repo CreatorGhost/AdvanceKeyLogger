@@ -3,9 +3,12 @@ Simple pub/sub event bus for capture events.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from collections import defaultdict
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 Event = dict[str, Any]
 Handler = Callable[[Event], None]
@@ -30,4 +33,7 @@ class EventBus:
             handlers.extend(self._subscribers.get(topic, []))
             handlers.extend(self._subscribers.get("*", []))
         for handler in handlers:
-            handler(event)
+            try:
+                handler(event)
+            except Exception as exc:
+                logger.error("EventBus handler failed for topic '%s': %s", topic, exc)
