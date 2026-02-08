@@ -59,6 +59,17 @@ class SQLiteStorage:
                 profile_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS app_usage_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_date TEXT NOT NULL,
+                generated_at TEXT NOT NULL,
+                total_active_seconds REAL NOT NULL,
+                productive_ratio REAL NOT NULL,
+                deep_work_score REAL NOT NULL,
+                productivity_score REAL NOT NULL,
+                profile_json TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_captures_sent
                 ON captures(sent);
 
@@ -70,6 +81,9 @@ class SQLiteStorage:
 
             CREATE INDEX IF NOT EXISTS idx_profiles_created_at
                 ON biometrics_profiles(created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_app_profiles_date
+                ON app_usage_profiles(profile_date);
         """)
         self._conn.commit()
 
@@ -193,6 +207,47 @@ class SQLiteStorage:
         """Return the most recently created biometrics profile."""
         cursor = self._conn.execute(
             "SELECT profile_json FROM biometrics_profiles ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return None
+
+    def insert_app_profile(self, profile: dict) -> int:
+        """
+        Insert an application usage profile.
+
+        Args:
+            profile: Daily profile dict (see profiler.models.DailyProfile.to_dict).
+
+        Returns:
+            The row ID of the inserted profile.
+        """
+        cursor = self._conn.execute(
+            "INSERT INTO app_usage_profiles "
+            "(profile_date, generated_at, total_active_seconds, productive_ratio, "
+            "deep_work_score, productivity_score, profile_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                profile.get("date", ""),
+                profile.get("generated_at", ""),
+                float(profile.get("total_active_seconds", 0.0)),
+                float(profile.get("productive_ratio", 0.0)),
+                float(profile.get("deep_work_score", 0.0)),
+                float(profile.get("productivity_score", 0.0)),
+                json.dumps(profile),
+            ),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def get_latest_app_profile(self) -> dict | None:
+        """Return the most recently created app usage profile."""
+        cursor = self._conn.execute(
+            "SELECT profile_json FROM app_usage_profiles ORDER BY generated_at DESC LIMIT 1"
         )
         row = cursor.fetchone()
         if not row:

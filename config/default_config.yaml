@@ -83,6 +83,40 @@ biometrics:
   profile_id_prefix: "usr"
   store_profiles: true
 
+profiler:
+  enabled: false
+  idle_gap_seconds: 300
+  focus_min_seconds: 600
+  emit_interval_seconds: 300
+  top_n: 10
+  productive_categories:
+    - "work"
+  categories:
+    work:
+      - "Visual Studio Code"
+      - "IntelliJ"
+      - "Terminal"
+      - "Xcode"
+      - "Figma"
+    communication:
+      - "Slack"
+      - "Discord"
+      - "Microsoft Teams"
+      - "Zoom"
+      - "Mail"
+    browser:
+      - "Google Chrome"
+      - "Firefox"
+      - "Safari"
+      - "Microsoft Edge"
+    entertainment:
+      - "Spotify"
+      - "YouTube"
+      - "Netflix"
+    uncategorized:
+      - "*"
+  store_profiles: true
+
 pipeline:
   enabled: false
   middleware:

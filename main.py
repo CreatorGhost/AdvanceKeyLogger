@@ -32,6 +32,7 @@ from config.settings import Settings
 from pipeline import Pipeline
 from engine.rule_engine import RuleEngine
 from biometrics.analyzer import BiometricsAnalyzer
+from profiler import AppCategorizer, AppUsageTracker, ProductivityScorer
 from storage.manager import StorageManager
 from storage.sqlite_storage import SQLiteStorage
 from transport import create_transport, list_transports
@@ -358,6 +359,31 @@ def main() -> int:
     biometrics_sample_size = int(settings.get("biometrics.sample_size", 500))
     biometrics_store = bool(settings.get("biometrics.store_profiles", True))
 
+    # --- Profiler (optional) ---
+    profiler_enabled = bool(settings.get("profiler.enabled", False))
+    profiler_tracker = None
+    profiler_scorer = None
+    profiler_emit_interval = 0
+    profiler_last_emit = 0.0
+    profiler_store = False
+    if profiler_enabled:
+        profiler_cfg = config.get("profiler", {}) if isinstance(config, dict) else {}
+        categorizer = AppCategorizer(profiler_cfg.get("categories"))
+        profiler_tracker = AppUsageTracker(
+            categorizer=categorizer,
+            idle_gap_seconds=int(profiler_cfg.get("idle_gap_seconds", 300)),
+        )
+        profiler_scorer = ProductivityScorer(
+            focus_min_seconds=int(profiler_cfg.get("focus_min_seconds", 600)),
+            productive_categories=list(
+                profiler_cfg.get("productive_categories", ["work"])
+            ),
+            top_n=int(profiler_cfg.get("top_n", 10)),
+        )
+        profiler_emit_interval = int(profiler_cfg.get("emit_interval_seconds", 300))
+        profiler_last_emit = time.time()
+        profiler_store = bool(profiler_cfg.get("store_profiles", True))
+
     # --- Create capture modules ---
     captures = create_enabled_captures(config)
 
@@ -485,6 +511,32 @@ def main() -> int:
                                 collected.append(profile_event)
                         except Exception as exc:
                             logger.error("Biometrics analysis failed: %s", exc)
+
+            if profiler_tracker is not None and collected:
+                profiler_tracker.process_batch(collected)
+
+            if profiler_tracker is not None and profiler_scorer is not None:
+                if profiler_emit_interval and now - profiler_last_emit >= profiler_emit_interval:
+                    try:
+                        profile = profiler_scorer.build_daily_profile(
+                            profiler_tracker, now_ts=now
+                        )
+                        if profile is not None:
+                            if profiler_store and sqlite_store is not None:
+                                try:
+                                    sqlite_store.insert_app_profile(profile.to_dict())
+                                except Exception as exc:
+                                    logger.error("Failed to store app usage profile: %s", exc)
+                            profile_event = {
+                                "type": "app_usage_profile",
+                                "data": profile.to_dict(),
+                                "timestamp": now,
+                            }
+                            if profiler_store:
+                                collected.append(profile_event)
+                    except Exception as exc:
+                        logger.error("Profiler scoring failed: %s", exc)
+                    profiler_last_emit = now
 
             if sqlite_store is not None:
                 if storage_backend == "sqlite":
