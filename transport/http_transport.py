@@ -26,6 +26,9 @@ class HttpTransport(BaseTransport):
         self._headers = dict(config.get("headers", {}))
         self._timeout = float(config.get("timeout", 30))
         self._verify = config.get("verify", True)
+        self._ca_cert = config.get("ca_cert")
+        if self._ca_cert:
+            self._verify = self._ca_cert
         self._health_url = config.get("healthcheck_url")
         self._health_ttl = float(config.get("healthcheck_interval", 60))
         self._last_health_ts = 0.0

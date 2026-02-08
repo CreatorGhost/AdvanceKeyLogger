@@ -13,6 +13,9 @@ e2e_server:
     - "change-me"
   registration_tokens:
     - "register-me"
+  # Set to true to allow any sender when allowed_client_keys is empty.
+  # Default false = deny all unknown senders.
+  allow_open_registration: false
   allowed_client_keys: []
   clients_file: "./server_data/clients.json"
   audit_log_path: "./server_data/audit.log"

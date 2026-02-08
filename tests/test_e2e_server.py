@@ -76,6 +76,12 @@ def test_ingest_endpoint_e2e(tmp_path: Path):
         "pin_server_key": True,
     }
     protocol = E2EProtocol(client_config)
+    # Register client signing key (allowlist)
+    register_response = client.post(
+        "/register",
+        json={"sender_public_key": protocol.export_sender_public_key()},
+    )
+    assert register_response.status_code == 200
     encrypted = protocol.encrypt(b'{"events": [1, 2, 3]}')
 
     # POST to /ingest

@@ -32,7 +32,11 @@ def create_app(config: dict[str, Any]) -> FastAPI:
     allowed_client_keys = list(config.get("allowed_client_keys", []))
     clients_file = config.get("clients_file")
 
-    registry = ClientRegistry(allowed_client_keys, clients_file)
+    registry = ClientRegistry(
+        allowed_client_keys,
+        clients_file,
+        allow_open=bool(config.get("allow_open_registration", False)),
+    )
     rate_limiter = RateLimiter(int(config.get("rate_limit_per_minute", 60)))
     replay_cache = ReplayCache(
         ttl_seconds=int(config.get("replay_ttl_seconds", 3600)),

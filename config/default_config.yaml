@@ -65,6 +65,9 @@ transport:
     headers: {}
     timeout: 30
     verify: true
+    # Path to custom CA certificate bundle (for self-signed server certs).
+    # Leave empty to use system CA store (works with Let's Encrypt).
+    ca_cert: ""
     healthcheck_url: ""
     healthcheck_interval: 60
 
