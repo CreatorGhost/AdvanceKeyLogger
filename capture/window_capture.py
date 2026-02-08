@@ -65,6 +65,15 @@ class WindowCapture(BaseCapture):
 
 
 def _get_active_window_title() -> str:
+    """
+    Get the title of the currently active/focused window.
+
+    Returns "Unknown" if:
+    - The platform is not supported
+    - The subprocess command fails (non-zero exit code)
+    - The subprocess command returns empty output
+    - Any exception occurs (command not found, timeout, etc.)
+    """
     system = get_platform()
     try:
         if system == "linux":
@@ -75,13 +84,20 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
-            return result.stdout.strip()
+            # Check for command failure or empty output
+            if result.returncode != 0:
+                return "Unknown"
+            title = result.stdout.strip()
+            return title if title else "Unknown"
+
         if system == "windows":
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
             buffer = ctypes.create_unicode_buffer(length + 1)
             ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-            return buffer.value.strip()
+            title = buffer.value.strip()
+            return title if title else "Unknown"
+
         if system == "darwin":
             script = (
                 'tell application "System Events" to '
@@ -94,7 +110,12 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
-            return result.stdout.strip()
+            # Check for command failure or empty output
+            if result.returncode != 0:
+                return "Unknown"
+            title = result.stdout.strip()
+            return title if title else "Unknown"
+
     except Exception:
         return "Unknown"
     return "Unknown"

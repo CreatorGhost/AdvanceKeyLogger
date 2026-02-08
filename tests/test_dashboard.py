@@ -26,11 +26,11 @@ class TestDashboardAuth:
     def test_login_page_renders(self):
         response = self.client.get("/login")
         assert response.status_code == 200
-        assert "AdvanceKeyLogger" in response.text
+        assert "AKL" in response.text
         assert "Sign in" in response.text
 
     def test_unauthenticated_redirect(self):
-        response = self.client.get("/", follow_redirects=False)
+        response = self.client.get("/dashboard", follow_redirects=False)
         assert response.status_code == 302
         assert "/login" in response.headers["location"]
 
@@ -159,7 +159,7 @@ class TestDashboardPages:
         )
 
     def test_dashboard_page(self):
-        response = self.client.get("/")
+        response = self.client.get("/dashboard")
         assert response.status_code == 200
         assert "Dashboard" in response.text
 
@@ -186,4 +186,4 @@ class TestDashboardPages:
     def test_login_redirect_if_authenticated(self):
         response = self.client.get("/login", follow_redirects=False)
         assert response.status_code == 302
-        assert response.headers["location"] == "/"
+        assert response.headers["location"] == "/dashboard"
