@@ -46,7 +46,6 @@ class HttpTransport(BaseTransport):
         now = time.time()
         if now - self._last_health_ts < self._health_ttl:
             return self._healthy
-        self._last_health_ts = now
         try:
             if not self._session:
                 self.connect()
@@ -58,6 +57,8 @@ class HttpTransport(BaseTransport):
             self._healthy = 200 <= response.status_code < 300
         except requests.RequestException:
             self._healthy = False
+        if self._healthy:
+            self._last_health_ts = now
         return self._healthy
 
     @retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)

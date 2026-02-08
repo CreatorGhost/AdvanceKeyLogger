@@ -33,14 +33,17 @@ class KeyStore:
         path = self._path(name)
         encoded = base64.b64encode(data).decode("utf-8")
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        fd_owned = True
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd_owned = False
                 handle.write(encoded)
         finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            if fd_owned:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
     def load_json(self, name: str) -> dict | None:
         path = self._json_path(name)
@@ -54,14 +57,17 @@ class KeyStore:
     def save_json(self, name: str, data: dict) -> None:
         path = self._json_path(name)
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        fd_owned = True
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd_owned = False
                 json.dump(data, handle, ensure_ascii=True, indent=2)
         finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            if fd_owned:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
     def _path(self, name: str) -> Path:
         filename = f"{name}.key"

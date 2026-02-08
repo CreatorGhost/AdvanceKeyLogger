@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import stat as stat_module
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -52,14 +53,22 @@ def cleanup_storage(base_dir: Path, config: dict[str, Any]) -> None:
 
     if max_storage_mb:
         max_bytes = float(max_storage_mb) * 1024 * 1024
-        files = [p for p in base_dir.glob("payload_*") if p.is_file()]
-        files_sorted = sorted(files, key=lambda p: p.stat().st_mtime)
-        total = sum(p.stat().st_size for p in files_sorted)
-        while total > max_bytes and files_sorted:
-            oldest = files_sorted.pop(0)
+        entries: list[tuple[Path, float, int]] = []
+        for p in base_dir.glob("payload_*"):
             try:
-                size = oldest.stat().st_size
-                oldest.unlink()
-                total -= size
+                st = p.stat()
+                if not stat_module.S_ISREG(st.st_mode):
+                    continue
+                entries.append((p, st.st_mtime, st.st_size))
             except OSError:
+                continue
+        entries.sort(key=lambda e: e[1])
+        total = sum(size for _, _, size in entries)
+        for path, _, cached_size in entries:
+            if total <= max_bytes:
                 break
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            total -= cached_size

@@ -39,7 +39,10 @@ class KeyPairManager:
                 exchange_private = None
                 signing_private = None
 
+        regenerated = False
+
         if exchange_private is None:
+            regenerated = True
             exchange_private = x25519.X25519PrivateKey.generate()
             self._store.save_bytes(
                 self._name("x25519_private"),
@@ -51,6 +54,7 @@ class KeyPairManager:
             )
 
         if signing_private is None:
+            regenerated = True
             signing_private = ed25519.Ed25519PrivateKey.generate()
             self._store.save_bytes(
                 self._name("ed25519_private"),
@@ -76,10 +80,11 @@ class KeyPairManager:
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
             ),
         )
-        self._store.save_json(
-            self._name("meta"),
-            {"created_at": time.time()},
-        )
+        if regenerated:
+            self._store.save_json(
+                self._name("meta"),
+                {"created_at": time.time()},
+            )
 
         return AgentKeyPair(
             exchange_private=exchange_private,

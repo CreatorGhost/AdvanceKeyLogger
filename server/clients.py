@@ -31,7 +31,7 @@ class ClientRegistry:
             return
         try:
             data = json.loads(self._clients_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, OSError):
             return
         keys = data.get("allowed_keys", []) if isinstance(data, dict) else data
         for key in keys or []:

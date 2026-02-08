@@ -25,7 +25,7 @@ class E2EProtocol:
         key_store_path = config.get("key_store_path", "~/.advancekeylogger/keys/")
         self._store = KeyStore(str(Path(key_store_path).expanduser()))
         rotation_hours = config.get("key_rotation_hours")
-        rotation_val = int(rotation_hours) if rotation_hours else None
+        rotation_val = int(rotation_hours) if rotation_hours is not None else None
         self._keys = KeyPairManager(self._store).load_or_create(rotation_val)
         self._server_public_key = self._load_server_public_key()
         self._envelope = HybridEnvelope(self._server_public_key)

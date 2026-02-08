@@ -46,7 +46,10 @@ def create_app(config: dict[str, Any]) -> FastAPI:
     async def register_client(request: Request) -> dict[str, Any]:
         if registration_tokens and not is_authorized(request, registration_tokens):
             raise HTTPException(status_code=401, detail="unauthorized")
-        data = await request.json()
+        try:
+            data = await request.json()
+        except (ValueError, KeyError):
+            raise HTTPException(status_code=400, detail="invalid or missing JSON body")
         key_b64 = str(data.get("sender_public_key", "")).strip()
         if not key_b64:
             raise HTTPException(status_code=400, detail="missing sender_public_key")
@@ -83,8 +86,13 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             raise HTTPException(status_code=400, detail=f"invalid envelope: {exc}")
 
         sender_key_b64 = base64.b64encode(envelope.sender_public_key).decode("utf-8")
+        truncated_sender = _truncate(sender_key_b64)
         if not registry.is_allowed(sender_key_b64):
-            audit_logger.warning("unauthorized_sender ip=%s key=%s", client_ip, _truncate(sender_key_b64))
+            audit_logger.warning(
+                "unauthorized_sender ip=%s key=%s",
+                client_ip,
+                truncated_sender,
+            )
             raise HTTPException(status_code=403, detail="sender not allowed")
 
         envelope_id = envelope.envelope_id or compute_envelope_id(envelope)
