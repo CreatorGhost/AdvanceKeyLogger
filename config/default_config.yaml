@@ -113,3 +113,10 @@ pipeline:
       enabled: true
       config:
         log_interval_seconds: 60
+
+rules:
+  enabled: false
+  path: "./config/rules.yaml"
+  mode: "all"                 # "all" or "first"
+  reload_interval_seconds: 2
+  keystroke_buffer_max: 1024

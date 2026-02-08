@@ -1,0 +1,41 @@
+rules:
+  - name: "screenshot-on-keyword"
+    trigger:
+      event: keystroke
+      condition: "buffer_contains('confidential')"
+    action:
+      type: take_screenshot
+      delay_ms: 500
+    cooldown_ms: 5000
+    priority: 10
+
+  - name: "boost-on-browser"
+    trigger:
+      event: window
+      condition: "window_title matches '.*Chrome.*|.*Firefox.*'"
+    action:
+      type: set_capture_interval
+      value: 5
+    cooldown_ms: 10000
+    priority: 20
+
+  - name: "pause-on-lock"
+    trigger:
+      event: window
+      condition: "window_title matches '.*Lock Screen.*'"
+    action:
+      type: pause_capture
+      modules: ["keyboard", "mouse"]
+    cooldown_ms: 10000
+    priority: 30
+
+  - name: "alert-on-idle"
+    trigger:
+      event: idle_detected
+      condition: "idle_seconds > 300"
+    action:
+      type: notify
+      channel: telegram
+      message: "User idle for {idle_seconds}s"
+    cooldown_ms: 60000
+    priority: 40
