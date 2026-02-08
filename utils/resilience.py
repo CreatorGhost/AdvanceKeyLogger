@@ -119,9 +119,41 @@ class TransportQueue:
         """Add an item to the transport queue."""
         self._queue.append(item)
 
-    def enqueue_many(self, items: list[dict[str, Any]]) -> None:
-        """Add multiple items to the transport queue."""
+    def enqueue_many(self, items: list[dict[str, Any]]) -> int:
+        """
+        Add multiple items to the transport queue.
+
+        Returns the number of items that were dropped due to queue capacity.
+        Logs a warning if any items are dropped.
+        """
+        if not items:
+            return 0
+
+        max_size = self._queue.maxlen
+        if max_size is None:
+            # Unbounded queue, no drops possible
+            self._queue.extend(items)
+            return 0
+
+        current_size = len(self._queue)
+        available_space = max_size - current_size
+        incoming_count = len(items)
+
+        if incoming_count <= available_space:
+            # All items fit, no drops
+            self._queue.extend(items)
+            return 0
+
+        # Would exceed capacity — calculate how many will be dropped
+        dropped_count = incoming_count - available_space
+        logger.warning(
+            "TransportQueue overflow: dropping %d oldest items to make room for %d new items (capacity: %d)",
+            dropped_count,
+            incoming_count,
+            max_size,
+        )
         self._queue.extend(items)
+        return dropped_count
 
     def drain(self, batch_size: int = 50) -> list[dict[str, Any]]:
         """

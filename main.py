@@ -153,7 +153,9 @@ def _build_report_bundle(
     compression_cfg = config.get("compression", {})
     compress_enabled = bool(compression_cfg.get("enabled", True))
     fmt = str(compression_cfg.get("format", "zip")).lower()
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    # Include microseconds to avoid filename collisions when multiple batches
+    # are generated within the same second (e.g., small report_interval)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
 
     if compress_enabled:
         if fmt == "gzip":
