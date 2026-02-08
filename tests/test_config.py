@@ -84,11 +84,18 @@ class TestSettings:
 
     def test_env_override(self, monkeypatch):
         """Environment variables override config values."""
-        monkeypatch.setenv("KEYLOGGER_GENERAL_LOG_LEVEL", "ERROR")
+        # Double underscore separates config path levels, single underscore is preserved
+        # KEYLOGGER_GENERAL__LOG_LEVEL -> general.log_level
+        monkeypatch.setenv("KEYLOGGER_GENERAL__LOG_LEVEL", "ERROR")
         settings = Settings()
-        # Env var KEYLOGGER_GENERAL_LOG_LEVEL maps to config path general.log.level
-        # because env override splits on all underscores after the prefix
-        assert settings.get("general.log.level") == "ERROR"
+        assert settings.get("general.log_level") == "ERROR"
+
+    def test_env_override_nested(self, monkeypatch):
+        """Environment variables work for deeply nested keys with underscores."""
+        # KEYLOGGER_CAPTURE__SCREENSHOT__MAX_COUNT -> capture.screenshot.max_count
+        monkeypatch.setenv("KEYLOGGER_CAPTURE__SCREENSHOT__MAX_COUNT", "50")
+        settings = Settings()
+        assert settings.get("capture.screenshot.max_count") == 50
 
     def test_cast_values(self):
         """_cast_value converts strings to proper types."""
