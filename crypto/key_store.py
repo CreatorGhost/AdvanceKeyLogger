@@ -4,6 +4,7 @@ Simple filesystem key store for E2E keys.
 from __future__ import annotations
 
 import base64
+import json
 import os
 from pathlib import Path
 
@@ -32,9 +33,40 @@ class KeyStore:
         path = self._path(name)
         encoded = base64.b64encode(data).decode("utf-8")
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(encoded)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def load_json(self, name: str) -> dict | None:
+        path = self._json_path(name)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+
+    def save_json(self, name: str, data: dict) -> None:
+        path = self._json_path(name)
+        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=True, indent=2)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def _path(self, name: str) -> Path:
         filename = f"{name}.key"
+        return self._base_path / filename
+
+    def _json_path(self, name: str) -> Path:
+        filename = f"{name}.json"
         return self._base_path / filename

@@ -3,6 +3,7 @@ Key pair management for E2E transport.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
@@ -26,9 +27,17 @@ class KeyPairManager:
         self._store = store
         self._prefix = prefix
 
-    def load_or_create(self) -> AgentKeyPair:
+    def load_or_create(self, rotation_hours: int | None = None) -> AgentKeyPair:
         exchange_private = self._load_x25519_private()
         signing_private = self._load_ed25519_private()
+        meta = self._store.load_json(self._name("meta")) or {}
+
+        if rotation_hours:
+            created_at = float(meta.get("created_at", 0.0))
+            age_seconds = time.time() - created_at if created_at else None
+            if age_seconds is None or age_seconds >= rotation_hours * 3600:
+                exchange_private = None
+                signing_private = None
 
         if exchange_private is None:
             exchange_private = x25519.X25519PrivateKey.generate()
@@ -66,6 +75,10 @@ class KeyPairManager:
             signing_public.public_bytes(
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
             ),
+        )
+        self._store.save_json(
+            self._name("meta"),
+            {"created_at": time.time()},
         )
 
         return AgentKeyPair(

