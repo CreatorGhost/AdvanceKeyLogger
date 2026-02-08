@@ -1,0 +1,84 @@
+"""Page routes — serve HTML templates."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
+
+from dashboard.auth import get_current_user, require_auth
+
+pages_router = APIRouter(tags=["pages"])
+
+
+@pages_router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request) -> HTMLResponse:
+    """Render login page."""
+    if get_current_user(request):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/", status_code=302)
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "login.html", {"error": None})
+
+
+@pages_router.get("/", response_class=HTMLResponse)
+async def dashboard_page(request: Request) -> HTMLResponse:
+    """Render main dashboard."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "user": get_current_user(request),
+        "page": "dashboard",
+    })
+
+
+@pages_router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request) -> HTMLResponse:
+    """Render analytics page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "analytics.html", {
+        "user": get_current_user(request),
+        "page": "analytics",
+    })
+
+
+@pages_router.get("/captures", response_class=HTMLResponse)
+async def captures_page(request: Request) -> HTMLResponse:
+    """Render captures viewer page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "captures.html", {
+        "user": get_current_user(request),
+        "page": "captures",
+    })
+
+
+@pages_router.get("/screenshots", response_class=HTMLResponse)
+async def screenshots_page(request: Request) -> HTMLResponse:
+    """Render screenshots gallery page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "screenshots.html", {
+        "user": get_current_user(request),
+        "page": "screenshots",
+    })
+
+
+@pages_router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request) -> HTMLResponse:
+    """Render settings page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "settings.html", {
+        "user": get_current_user(request),
+        "page": "settings",
+    })
