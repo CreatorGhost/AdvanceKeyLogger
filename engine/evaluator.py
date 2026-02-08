@@ -44,7 +44,7 @@ class SafeEvaluator:
 
         if isinstance(node, ast.Compare):
             left = self._eval(node.left, context)
-            for op, comparator in zip(node.ops, node.comparators):
+            for op, comparator in zip(node.ops, node.comparators, strict=True):
                 right = self._eval(comparator, context)
                 if isinstance(op, ast.Eq) and not (left == right):
                     return False

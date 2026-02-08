@@ -32,7 +32,7 @@ class KeyPairManager:
         signing_private = self._load_ed25519_private()
         meta = self._store.load_json(self._name("meta")) or {}
 
-        if rotation_hours:
+        if rotation_hours is not None:
             created_at = float(meta.get("created_at", 0.0))
             age_seconds = time.time() - created_at if created_at else None
             if age_seconds is None or age_seconds >= rotation_hours * 3600:

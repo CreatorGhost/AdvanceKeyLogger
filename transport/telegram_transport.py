@@ -5,6 +5,7 @@ Sends reports to a chat via sendMessage or sendDocument.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import requests
@@ -56,7 +57,7 @@ class TelegramTransport(BaseTransport):
                 raise ValueError(
                     f"Telegram bot token validation failed (token={self._masked_token})"
                 )
-        except requests.RequestException as exc:
+        except (requests.RequestException, json.JSONDecodeError) as exc:
             raise ValueError(
                 f"Telegram connection failed (token={self._masked_token}): {exc}"
             ) from exc
@@ -106,10 +107,14 @@ class TelegramTransport(BaseTransport):
                     "Telegram sendMessage HTTP error: %s", response.status_code
                 )
                 return False
-            if not response.json().get("ok"):
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                self.logger.error("Telegram sendMessage: invalid JSON response")
+                return False
+            if not body.get("ok"):
                 self.logger.error(
-                    "Telegram API error: %s",
-                    response.json().get("description"),
+                    "Telegram API error: %s", body.get("description")
                 )
                 return False
             return True
@@ -132,10 +137,14 @@ class TelegramTransport(BaseTransport):
                     response.status_code,
                 )
                 return False
-            if not response.json().get("ok"):
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                self.logger.error("Telegram sendDocument: invalid JSON response")
+                return False
+            if not body.get("ok"):
                 self.logger.error(
-                    "Telegram API error: %s",
-                    response.json().get("description"),
+                    "Telegram API error: %s", body.get("description")
                 )
                 return False
             return True

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from typing import Any
 
 from pynput.keyboard import Key, Listener
@@ -42,9 +43,9 @@ class KeyboardCapture(BaseCapture):
 
     def __init__(self, config: dict[str, Any], global_config: dict[str, Any] | None = None):
         super().__init__(config, global_config)
-        self._buffer: list[dict[str, Any]] = []
         self._include_key_up = bool(config.get("include_key_up", False))
         self._max_buffer = int(config.get("max_buffer", 10000))
+        self._buffer: deque[dict[str, Any]] = deque(maxlen=self._max_buffer if self._max_buffer > 0 else None)
         global_enabled = bool(
             (global_config or {}).get("biometrics", {}).get("enabled", False)
         )
@@ -148,8 +149,6 @@ class KeyboardCapture(BaseCapture):
                     "timestamp": time.time(),
                 }
             )
-            if self._max_buffer > 0 and len(self._buffer) > self._max_buffer:
-                self._buffer.pop(0)
 
     @staticmethod
     def _format_key(key) -> str:

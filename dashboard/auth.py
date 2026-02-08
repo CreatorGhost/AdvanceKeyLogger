@@ -11,7 +11,6 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +111,6 @@ def require_auth(request: Request) -> RedirectResponse | None:
     if get_current_user(request) is None:
         return RedirectResponse(url="/login", status_code=302)
     return None
-
-
-class LoginForm(BaseModel):
-    username: str
-    password: str
 
 
 @auth_router.post("/auth/login")

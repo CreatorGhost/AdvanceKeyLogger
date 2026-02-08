@@ -647,7 +647,7 @@ def main() -> int:
                 profiler_tracker.process_batch(collected)
 
             if profiler_tracker is not None and profiler_scorer is not None:
-                if profiler_emit_interval and now - profiler_last_emit >= profiler_emit_interval:
+                if profiler_emit_interval is not None and now - profiler_last_emit >= profiler_emit_interval:
                     try:
                         profile = profiler_scorer.build_daily_profile(
                             profiler_tracker, now_ts=now

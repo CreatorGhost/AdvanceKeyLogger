@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from typing import Any
 
 
@@ -13,10 +14,9 @@ class BiometricsCollector:
 
     def __init__(self, max_buffer: int = 10000) -> None:
         self._pending: dict[str, tuple[float, float | None]] = {}
-        self._events: list[dict[str, Any]] = []
+        self._events: deque[dict[str, Any]] = deque(maxlen=max_buffer if max_buffer > 0 else None)
         self._last_release: float | None = None
         self._lock = threading.Lock()
-        self._max_buffer = max_buffer
 
     def on_key_down(self, key: str, timestamp: float | None = None) -> None:
         ts = timestamp if timestamp is not None else time.time()
@@ -44,8 +44,6 @@ class BiometricsCollector:
             }
             self._events.append(event)
             self._last_release = ts
-            if self._max_buffer > 0 and len(self._events) > self._max_buffer:
-                self._events.pop(0)
 
     def collect(self) -> list[dict[str, Any]]:
         with self._lock:
