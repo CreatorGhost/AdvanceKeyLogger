@@ -1,6 +1,7 @@
 """Authentication helpers for E2E server."""
 from __future__ import annotations
 
+import hmac
 from typing import Iterable
 
 from fastapi import Request
@@ -20,4 +21,4 @@ def is_authorized(request: Request, tokens: Iterable[str]) -> bool:
     token = extract_token(request)
     if not token:
         return False
-    return token in set(tokens)
+    return any(hmac.compare_digest(token, t) for t in tokens)

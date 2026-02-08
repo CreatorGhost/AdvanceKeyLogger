@@ -1,6 +1,7 @@
 """Replay protection for envelopes."""
 from __future__ import annotations
 
+import threading
 import time
 
 
@@ -9,16 +10,18 @@ class ReplayCache:
         self._ttl = ttl_seconds
         self._max_entries = max_entries
         self._seen: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def seen(self, envelope_id: str) -> bool:
         now = time.time()
-        self._purge(now)
-        if envelope_id in self._seen:
-            return True
-        if len(self._seen) >= self._max_entries:
-            self._purge(now, force=True)
-        self._seen[envelope_id] = now
-        return False
+        with self._lock:
+            self._purge(now)
+            if envelope_id in self._seen:
+                return True
+            if len(self._seen) >= self._max_entries:
+                self._purge(now, force=True)
+            self._seen[envelope_id] = now
+            return False
 
     def _purge(self, now: float, force: bool = False) -> None:
         if not self._seen:
