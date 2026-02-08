@@ -2,10 +2,14 @@
 Active window capture module.
 
 Polls for the currently focused window title and records changes.
+
+On macOS with pyobjc installed, uses native NSWorkspace + CGWindowListCopyWindowInfo
+instead of spawning osascript subprocesses.
 """
 from __future__ import annotations
 
 import ctypes
+import logging
 import subprocess
 import threading
 import time
@@ -14,6 +18,19 @@ from typing import Any
 from capture import register_capture
 from capture.base import BaseCapture
 from utils.system_info import get_platform
+
+_logger = logging.getLogger(__name__)
+
+_USE_NATIVE_MACOS_WINDOW = False
+if get_platform() == "darwin":
+    try:
+        from capture.macos_window_backend import get_active_window_title_native, APPKIT_AVAILABLE
+
+        if APPKIT_AVAILABLE:
+            _USE_NATIVE_MACOS_WINDOW = True
+            _logger.debug("Native macOS window backend available")
+    except ImportError:
+        pass
 
 
 @register_capture("window")
@@ -95,7 +112,6 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
-            # Check for command failure or empty output
             if result.returncode != 0:
                 return "Unknown"
             title = result.stdout.strip()
@@ -110,6 +126,11 @@ def _get_active_window_title() -> str:
             return title if title else "Unknown"
 
         if system == "darwin":
+            # Prefer native API when available (no subprocess overhead)
+            if _USE_NATIVE_MACOS_WINDOW:
+                return get_active_window_title_native()
+
+            # Fallback: osascript subprocess
             script = (
                 'tell application "System Events" to '
                 'get name of first application process whose frontmost is true'
@@ -121,7 +142,6 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
-            # Check for command failure or empty output
             if result.returncode != 0:
                 return "Unknown"
             title = result.stdout.strip()

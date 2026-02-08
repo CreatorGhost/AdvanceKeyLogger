@@ -83,26 +83,40 @@ The capture system uses a **plugin architecture** with auto-discovery. All plugi
 - **Output:** `{"type": "keystroke", "data": "a", "timestamp": 1700000000.0}`
 
 #### Mouse Capture
-- **Source:** [`capture/mouse_capture.py`](capture/mouse_capture.py)
-- **Concepts:** OS-level mouse hooks via `pynput`, click vs movement tracking, callback integration with screenshot capture
+- **Source:** [`capture/mouse_capture.py`](capture/mouse_capture.py), [`capture/macos_mouse_backend.py`](capture/macos_mouse_backend.py)
+- **Concepts:** OS-level mouse hooks, click vs movement tracking, callback integration with screenshot capture
+- **Backends:**
+  - **macOS native (CGEventTap):** Uses `pyobjc-framework-Quartz` for direct mouse event taps. More reliable permission handling and higher precision coordinates.
+  - **pynput (cross-platform):** Default backend. Used on Linux, Windows, and macOS when pyobjc is not available.
 - **Config:** `capture.mouse.enabled`, `track_movement`
 - **Output:** `{"type": "mouse_click", "data": {"x": 500, "y": 300, "button": "left", "pressed": true}, ...}`
 
 #### Screenshot Capture
-- **Source:** [`capture/screenshot_capture.py`](capture/screenshot_capture.py)
-- **Concepts:** On-demand screen capture with Pillow, file-based output with metadata, max-count enforcement
+- **Source:** [`capture/screenshot_capture.py`](capture/screenshot_capture.py), [`capture/macos_screenshot_backend.py`](capture/macos_screenshot_backend.py)
+- **Concepts:** On-demand screen capture, file-based output with metadata, max-count enforcement
+- **Backends:**
+  - **macOS native (Quartz CoreGraphics):** Uses `CGWindowListCreateImage` for proper Retina/HiDPI display support and faster capture. Saves via AppKit `NSBitmapImageRep` or `CGImageDestination`.
+  - **PIL ImageGrab (cross-platform):** Default backend. Used on Linux, Windows, and macOS when pyobjc is not available.
 - **Config:** `capture.screenshot.enabled`, `quality`, `format`, `max_count`, `capture_region`
 - **Output:** `{"type": "screenshot", "path": "./data/screenshots/screenshot_0001.png", "size": 45230, ...}`
 
 #### Clipboard Capture
-- **Source:** [`capture/clipboard_capture.py`](capture/clipboard_capture.py)
-- **Concepts:** Polling-based change detection, content truncation, daemon thread with stop event
+- **Source:** [`capture/clipboard_capture.py`](capture/clipboard_capture.py), [`capture/macos_clipboard_backend.py`](capture/macos_clipboard_backend.py)
+- **Concepts:** Change detection, content truncation, daemon thread with stop event
+- **Backends:**
+  - **macOS native (NSPasteboard):** Uses `AppKit.NSPasteboard` with `changeCount` for efficient change detection without subprocess overhead.
+  - **pyperclip (cross-platform):** Default backend using `pbpaste`/`xclip` subprocesses. Used on Linux, Windows, and macOS when pyobjc is not available.
 - **Config:** `capture.clipboard.enabled`, `poll_interval`, `max_length`
 - **Output:** `{"type": "clipboard", "data": "copied text", ...}`
 
 #### Window Capture
-- **Source:** [`capture/window_capture.py`](capture/window_capture.py)
-- **Concepts:** Platform-native APIs (ctypes on Windows, osascript on macOS, xdotool on Linux), change detection
+- **Source:** [`capture/window_capture.py`](capture/window_capture.py), [`capture/macos_window_backend.py`](capture/macos_window_backend.py)
+- **Concepts:** Platform-native APIs, change detection
+- **Backends:**
+  - **macOS native (NSWorkspace + CGWindowList):** Uses `NSWorkspace.frontmostApplication()` and `CGWindowListCopyWindowInfo` for app name + window title without subprocess overhead.
+  - **osascript (macOS fallback):** AppleScript subprocess, used when pyobjc is not installed.
+  - **xdotool (Linux):** Subprocess-based window title query.
+  - **ctypes (Windows):** Direct Win32 API calls.
 - **Config:** `capture.window.enabled`, `poll_interval`
 - **Output:** `{"type": "window", "data": "Visual Studio Code", ...}`
 
@@ -110,11 +124,14 @@ The capture system uses a **plugin architecture** with auto-discovery. All plugi
 
 ### 2. Audio Recording
 
-Records audio clips at a configurable interval using `sounddevice` and saves WAV files to disk.
+Records audio clips at a configurable interval and saves WAV files to disk.
 
-- **Source:** [`capture/audio_capture.py`](capture/audio_capture.py)
+- **Source:** [`capture/audio_capture.py`](capture/audio_capture.py), [`capture/macos_audio_backend.py`](capture/macos_audio_backend.py)
 - **Test:** [`tests/test_audio_capture.py`](tests/test_audio_capture.py)
-- **Concepts:** Daemon thread for periodic recording, `sounddevice.rec()` + `wave` stdlib for WAV output, graceful import with `SOUNDDEVICE_AVAILABLE` flag, thread-safe buffer, max-count enforcement
+- **Concepts:** Daemon thread for periodic recording, WAV output, graceful import, thread-safe buffer, max-count enforcement
+- **Backends:**
+  - **macOS native (AVFoundation):** Uses `AVAudioEngine` via `pyobjc-framework-AVFoundation` for tighter Core Audio integration.
+  - **sounddevice (cross-platform):** Default backend using PortAudio. Used on Linux, Windows, and macOS when pyobjc is not available.
 - **Config:**
   ```yaml
   capture:
@@ -414,12 +431,17 @@ AdvanceKeyLogger/
 │   ├── __init__.py                  # Plugin registry & auto-discovery
 │   ├── base.py                      # BaseCapture abstract class
 │   ├── keyboard_capture.py          # Keystroke monitoring (backend selection)
-│   ├── macos_keyboard_backend.py    # Native macOS CGEventTap backend
-│   ├── mouse_capture.py             # Mouse click/movement (pynput)
-│   ├── screenshot_capture.py        # Screen capture (Pillow)
-│   ├── clipboard_capture.py         # Clipboard polling (pyperclip)
-│   ├── window_capture.py            # Active window tracking (platform-native)
-│   └── audio_capture.py             # Audio recording (sounddevice)
+│   ├── macos_keyboard_backend.py    # Native macOS CGEventTap keyboard backend
+│   ├── mouse_capture.py             # Mouse click/movement (backend selection)
+│   ├── macos_mouse_backend.py       # Native macOS CGEventTap mouse backend
+│   ├── screenshot_capture.py        # Screen capture (backend selection)
+│   ├── macos_screenshot_backend.py  # Native macOS Quartz screenshot backend
+│   ├── clipboard_capture.py         # Clipboard monitoring (backend selection)
+│   ├── macos_clipboard_backend.py   # Native macOS NSPasteboard backend
+│   ├── window_capture.py            # Active window tracking (backend selection)
+│   ├── macos_window_backend.py      # Native macOS NSWorkspace+CGWindowList backend
+│   ├── audio_capture.py             # Audio recording (backend selection)
+│   └── macos_audio_backend.py       # Native macOS AVFoundation audio backend
 ├── transport/
 │   ├── __init__.py                  # Plugin registry & auto-discovery
 │   ├── base.py                      # BaseTransport abstract class
@@ -493,7 +515,12 @@ AdvanceKeyLogger/
 │   ├── test_audio_capture.py        # Audio capture tests
 │   ├── test_dependency_check.py     # Dependency checker tests
 │   ├── test_self_destruct.py        # Self-destruct tests
-│   └── test_macos_keyboard_backend.py  # macOS keyboard backend tests
+│   ├── test_macos_keyboard_backend.py  # macOS keyboard backend tests
+│   ├── test_macos_mouse_backend.py     # macOS mouse backend tests
+│   ├── test_macos_screenshot_backend.py # macOS screenshot backend tests
+│   ├── test_macos_clipboard_backend.py # macOS clipboard backend tests
+│   ├── test_macos_window_backend.py    # macOS window backend tests
+│   └── test_macos_audio_backend.py     # macOS audio backend tests
 ├── requirements.txt
 └── README.md
 ```
@@ -522,7 +549,9 @@ AdvanceKeyLogger/
 | `sounddevice` | >= 0.4.6 | Audio recording |
 | `numpy` | >= 1.24.0 | Audio data handling |
 | `psutil` | >= 5.9.0 | System metrics |
-| `pyobjc-framework-Quartz` | >= 10.0 | Native macOS keyboard capture (macOS only) |
+| `pyobjc-framework-Quartz` | >= 10.0 | Native macOS capture: keyboard, mouse, screenshot, window (macOS only) |
+| `pyobjc-framework-Cocoa` | >= 10.0 | Native macOS capture: clipboard, window (macOS only) |
+| `pyobjc-framework-AVFoundation` | >= 10.0 | Native macOS audio capture (macOS only) |
 | `fastapi` | >= 0.104.0 | Dashboard web UI |
 
 **Platform-specific:**
@@ -764,7 +793,12 @@ python -m pytest tests/test_dependency_check.py -v
 | Audio Capture | [`tests/test_audio_capture.py`](tests/test_audio_capture.py) | 7 |
 | Dependency Checker | [`tests/test_dependency_check.py`](tests/test_dependency_check.py) | 9 |
 | Self-Destruct | [`tests/test_self_destruct.py`](tests/test_self_destruct.py) | 14 |
-| macOS Keyboard Backend | [`tests/test_macos_keyboard_backend.py`](tests/test_macos_keyboard_backend.py) | 13 |
+| macOS Keyboard Backend | [`tests/test_macos_keyboard_backend.py`](tests/test_macos_keyboard_backend.py) | 18 |
+| macOS Mouse Backend | [`tests/test_macos_mouse_backend.py`](tests/test_macos_mouse_backend.py) | 8 |
+| macOS Screenshot Backend | [`tests/test_macos_screenshot_backend.py`](tests/test_macos_screenshot_backend.py) | 6 |
+| macOS Clipboard Backend | [`tests/test_macos_clipboard_backend.py`](tests/test_macos_clipboard_backend.py) | 5 |
+| macOS Window Backend | [`tests/test_macos_window_backend.py`](tests/test_macos_window_backend.py) | 8 |
+| macOS Audio Backend | [`tests/test_macos_audio_backend.py`](tests/test_macos_audio_backend.py) | 4 |
 
 ---
 

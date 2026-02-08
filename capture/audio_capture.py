@@ -2,10 +2,15 @@
 Audio capture module.
 
 Records audio clips at a configurable interval and saves WAV files to disk.
-Requires the ``sounddevice`` and ``numpy`` packages (optional dependencies).
+
+Backend selection:
+  - macOS with pyobjc (AVFoundation) → native AVAudioEngine backend
+  - All other platforms / missing pyobjc → sounddevice backend (default)
+  - sounddevice requires ``sounddevice`` and ``numpy`` packages.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import wave
@@ -22,6 +27,20 @@ except ImportError:  # pragma: no cover
 
 from capture import register_capture
 from capture.base import BaseCapture
+from utils.system_info import get_platform
+
+_logger = logging.getLogger(__name__)
+
+_USE_NATIVE_MACOS_AUDIO = False
+if get_platform() == "darwin":
+    try:
+        from capture.macos_audio_backend import AVFoundationAudioBackend, AVFOUNDATION_AVAILABLE
+
+        if AVFOUNDATION_AVAILABLE:
+            _USE_NATIVE_MACOS_AUDIO = True
+            _logger.debug("Native macOS AVFoundation audio backend available")
+    except ImportError:
+        pass
 
 
 @register_capture("audio")
@@ -34,11 +53,13 @@ class AudioCapture(BaseCapture):
         global_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(config, global_config)
-        if not SOUNDDEVICE_AVAILABLE:
+        self._use_native_audio = _USE_NATIVE_MACOS_AUDIO
+        if not self._use_native_audio and not SOUNDDEVICE_AVAILABLE:
             raise ImportError(
                 "sounddevice and numpy are required for audio capture. "
                 "Install them with: pip install sounddevice numpy"
             )
+        self._native_audio_backend: AVFoundationAudioBackend | None = None  # noqa: F821
 
         self._duration = int(config.get("duration", 10))
         self._sample_rate = int(config.get("sample_rate", 44100))
@@ -69,9 +90,15 @@ class AudioCapture(BaseCapture):
             self._stop_event.clear()
             thread = threading.Thread(target=self._run, daemon=True)
             self._thread = thread
+            if self._use_native_audio:
+                self._native_audio_backend = AVFoundationAudioBackend(
+                    sample_rate=self._sample_rate,
+                    channels=self._channels,
+                )
             self._running = True
             thread.start()
-            self.logger.info("Audio capture started")
+            backend_name = "native macOS AVFoundation" if self._use_native_audio else "sounddevice"
+            self.logger.info("Audio capture started (%s backend)", backend_name)
 
     def stop(self) -> None:
         with self._lifecycle_lock:
@@ -116,18 +143,24 @@ class AudioCapture(BaseCapture):
             self._counter += 1
 
         try:
-            frames = int(self._duration * self._sample_rate)
-            recording = sd.rec(
-                frames,
-                samplerate=self._sample_rate,
-                channels=self._channels,
-                dtype="int16",
-            )
-            sd.wait()
-
             filename = f"audio_{index:04d}.wav"
             filepath = self._output_dir / filename
-            self._save_wav(filepath, recording)
+
+            if self._use_native_audio and self._native_audio_backend is not None:
+                ok = self._native_audio_backend.record_clip(filepath, self._duration)
+                if not ok:
+                    self.logger.error("Native audio recording returned no data")
+                    return None
+            else:
+                frames = int(self._duration * self._sample_rate)
+                recording = sd.rec(
+                    frames,
+                    samplerate=self._sample_rate,
+                    channels=self._channels,
+                    dtype="int16",
+                )
+                sd.wait()
+                self._save_wav(filepath, recording)
 
             file_size = filepath.stat().st_size
             with self._lock:

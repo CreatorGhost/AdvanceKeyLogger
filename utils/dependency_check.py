@@ -30,6 +30,8 @@ PACKAGE_MAP: dict[str, str] = {
     "numpy": "numpy",
     "psutil": "psutil",
     "Quartz": "pyobjc-framework-Quartz",
+    "AppKit": "pyobjc-framework-Cocoa",
+    "AVFoundation": "pyobjc-framework-AVFoundation",
 }
 
 

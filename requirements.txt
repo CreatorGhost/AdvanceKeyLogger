@@ -12,8 +12,10 @@ pyperclip>=1.8.2
 sounddevice>=0.4.6
 numpy>=1.24.0
 
-# Optional: native macOS keyboard capture
+# Optional: native macOS capture backends (keyboard, mouse, screenshot, window, clipboard, audio)
 pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"
 
 # Optional: config management
 pyyaml>=6.0
