@@ -4,26 +4,28 @@ A Python-based input monitoring and screen capture tool built for **educational 
 
 ## Current Status
 
-This project is in early development. See [`REVIEW.md`](REVIEW.md) for a full codebase review, list of known issues, and a detailed improvement roadmap with code examples for every feature.
+Core architecture is implemented (config system, capture plugins, transports,
+storage, utilities, and tests). See [`REVIEW.md`](REVIEW.md) for the full review
+and detailed implementation roadmap.
 
 ## Project Structure
 
 ```
 AdvanceKeyLogger/
-├── main.py                    # Entry point (planned)
-├── createfile.py              # Current: mouse listener + screenshot
-├── mailLogger.py              # Current: email transport
+├── main.py                    # Entry point
+├── createfile.py              # Legacy: click-to-screenshot demo
+├── mailLogger.py              # Legacy: standalone email sender
 ├── credentials.json.example   # Credential template (copy to credentials.json)
 ├── requirements.txt           # Python dependencies
 ├── pyproject.toml             # Project config (planned)
 ├── .gitignore                 # Git ignore rules
 ├── REVIEW.md                  # Full review & implementation guide
-├── config/                    # Configuration management (planned)
-├── capture/                   # Input capture modules (planned)
-├── transport/                 # Data transport modules (planned)
-├── storage/                   # Storage layer (planned)
-├── utils/                     # Shared utilities (planned)
-└── tests/                     # Unit tests (planned)
+├── config/                    # Configuration management
+├── capture/                   # Input capture modules
+├── transport/                 # Data transport modules
+├── storage/                   # Storage layer
+├── utils/                     # Shared utilities
+└── tests/                     # Unit tests
 ```
 
 ## Setup
@@ -41,9 +43,16 @@ source venv/bin/activate  # Linux/macOS
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy and configure credentials
+# Copy and configure credentials (email transport)
 cp credentials.json.example credentials.json
 # Edit credentials.json with your settings
+
+# Run (uses config/default_config.yaml)
+python main.py
+
+# List available plugins
+python main.py --list-captures
+python main.py --list-transports
 ```
 
 ## Dependencies

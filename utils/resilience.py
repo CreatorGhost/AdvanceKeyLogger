@@ -38,6 +38,7 @@ def retry(
     max_attempts: int = 3,
     backoff_base: float = 2.0,
     exceptions: tuple[type[Exception], ...] = (Exception,),
+    retry_on_false: bool = False,
 ):
     """
     Decorator that retries a function with exponential backoff.
@@ -60,7 +61,7 @@ def retry(
         def wrapper(*args, **kwargs):
             for attempt in range(max_attempts):
                 try:
-                    return func(*args, **kwargs)
+                    result = func(*args, **kwargs)
                 except exceptions as e:
                     if attempt == max_attempts - 1:
                         logger.error(
@@ -80,6 +81,23 @@ def retry(
                         e,
                     )
                     time.sleep(wait_time)
+                    continue
+
+                if retry_on_false and result is False:
+                    if attempt == max_attempts - 1:
+                        return False
+                    wait_time = backoff_base**attempt
+                    logger.warning(
+                        "%s attempt %d/%d returned False, retrying in %.1fs",
+                        func.__name__,
+                        attempt + 1,
+                        max_attempts,
+                        wait_time,
+                    )
+                    time.sleep(wait_time)
+                    continue
+
+                return result
 
         return wrapper
 

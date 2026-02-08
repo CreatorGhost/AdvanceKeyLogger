@@ -20,8 +20,13 @@ from typing import Any
 class BaseCapture(ABC):
     """Abstract base class that all capture modules must implement."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        global_config: dict[str, Any] | None = None,
+    ) -> None:
         self.config = config
+        self.global_config = global_config or {}
         self.logger = logging.getLogger(self.__class__.__name__)
         self._running = False
 

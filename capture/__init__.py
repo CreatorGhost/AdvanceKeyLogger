@@ -17,6 +17,7 @@ Then load enabled captures from config:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from capture.base import BaseCapture
@@ -73,8 +74,27 @@ def create_enabled_captures(config: dict[str, Any]) -> list[BaseCapture]:
         if isinstance(settings, dict) and settings.get("enabled", False):
             try:
                 cls = get_capture_class(name)
-                captures.append(cls(settings))
+                try:
+                    captures.append(cls(settings, global_config=config))
+                except TypeError:
+                    captures.append(cls(settings))
             except ValueError:
                 pass
 
     return captures
+
+
+# Import built-in capture modules so they self-register.
+logger = logging.getLogger(__name__)
+
+for _module in (
+    "keyboard_capture",
+    "mouse_capture",
+    "screenshot_capture",
+    "clipboard_capture",
+    "window_capture",
+):
+    try:
+        __import__(f"{__name__}.{_module}")
+    except Exception as exc:  # pragma: no cover - optional deps/platforms
+        logger.debug("Capture module '%s' not loaded: %s", _module, exc)
