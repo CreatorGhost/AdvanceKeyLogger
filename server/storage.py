@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import os
 import stat as stat_module
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+
+_last_cleanup_ts = 0.0
+_CLEANUP_INTERVAL = 30.0  # seconds between cleanup runs
 
 
 def detect_extension(payload: bytes) -> str:
@@ -33,13 +37,22 @@ def store_payload(payload: bytes, config: dict[str, Any]) -> Path:
     except OSError:
         pass
 
-    cleanup_storage(base_dir, config)
+    # Throttle cleanup to avoid O(n) filesystem scan on every request
+    global _last_cleanup_ts
+    now = time.time()
+    if now - _last_cleanup_ts >= _CLEANUP_INTERVAL:
+        _last_cleanup_ts = now
+        cleanup_storage(base_dir, config)
+
     return filepath
 
 
 def cleanup_storage(base_dir: Path, config: dict[str, Any]) -> None:
     retention_hours = config.get("retention_hours")
     max_storage_mb = config.get("max_storage_mb")
+
+    if not retention_hours and not max_storage_mb:
+        return
 
     files = [p for p in base_dir.glob("payload_*") if p.is_file()]
     if retention_hours:

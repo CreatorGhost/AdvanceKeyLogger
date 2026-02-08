@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ class E2EProtocol:
         self._keys = KeyPairManager(self._store).load_or_create(rotation_val)
         self._server_public_key = self._load_server_public_key()
         self._envelope = HybridEnvelope(self._server_public_key)
+        self._seq_lock = threading.Lock()
 
     def encrypt(self, payload: bytes) -> bytes:
         sequence = self._next_sequence()
@@ -88,8 +90,9 @@ class E2EProtocol:
         )
 
     def _next_sequence(self) -> int:
-        meta = self._store.load_json("sequence") or {}
-        current = int(meta.get("value", 0))
-        current += 1
-        self._store.save_json("sequence", {"value": current})
-        return current
+        with self._seq_lock:
+            meta = self._store.load_json("sequence") or {}
+            current = int(meta.get("value", 0))
+            current += 1
+            self._store.save_json("sequence", {"value": current})
+            return current

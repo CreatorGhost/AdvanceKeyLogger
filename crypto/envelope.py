@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -282,14 +283,14 @@ def _decrypt_wrapped_key(envelope: Envelope, wrap_key: bytes) -> bytes | None:
             envelope.wrapped_key,
             _wrap_aad(envelope.sender_public_key),
         )
-    except Exception:
+    except InvalidTag:
         try:
             return aesgcm_wrap.decrypt(
                 envelope.wrap_nonce,
                 envelope.wrapped_key,
                 _wrap_aad(envelope.sender_public_key, legacy=True),
             )
-        except Exception:
+        except InvalidTag:
             return None
 
 
@@ -301,14 +302,14 @@ def _decrypt_payload(envelope: Envelope, data_key: bytes) -> bytes | None:
             envelope.ciphertext,
             _payload_aad(envelope.sender_public_key),
         )
-    except Exception:
+    except InvalidTag:
         try:
             return aesgcm_payload.decrypt(
                 envelope.payload_nonce,
                 envelope.ciphertext,
                 _payload_aad(envelope.sender_public_key, legacy=True),
             )
-        except Exception:
+        except InvalidTag:
             return None
 
 
@@ -359,6 +360,10 @@ def _validate_lengths(envelope: Envelope) -> None:
         raise ValueError("payload_nonce must be 12 bytes")
     if len(envelope.signature) != 64:
         raise ValueError("signature must be 64 bytes")
+    if len(envelope.wrapped_key) < 16:
+        raise ValueError("wrapped_key too short (min 16 bytes for GCM tag)")
+    if len(envelope.ciphertext) < 16:
+        raise ValueError("ciphertext too short (min 16 bytes for GCM tag)")
 
 
 def _safe_int(value: Any) -> int | None:

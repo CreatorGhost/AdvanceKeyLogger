@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 from typing import Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -37,6 +38,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
     )
     max_payload = int(config.get("max_payload_bytes", 10 * 1024 * 1024))
     last_sequences: dict[str, int] = {}
+    seq_lock = threading.Lock()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -53,6 +55,12 @@ def create_app(config: dict[str, Any]) -> FastAPI:
         key_b64 = str(data.get("sender_public_key", "")).strip()
         if not key_b64:
             raise HTTPException(status_code=400, detail="missing sender_public_key")
+        try:
+            raw_key = base64.b64decode(key_b64)
+            if len(raw_key) != 32:
+                raise ValueError("key must be 32 bytes")
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid public key format")
         registry.register(key_b64)
         audit_logger.info("client_registered key=%s", _truncate(key_b64))
         return {"status": "registered"}
@@ -101,25 +109,26 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             raise HTTPException(status_code=409, detail="replay detected")
 
         if envelope.sequence is not None:
-            last = last_sequences.get(sender_key_b64)
-            if last is not None and envelope.sequence <= last:
-                audit_logger.warning(
-                    "sequence_replay ip=%s key=%s seq=%d last=%d",
-                    client_ip,
-                    _truncate(sender_key_b64),
-                    envelope.sequence,
-                    last,
-                )
-                raise HTTPException(status_code=409, detail="sequence replay")
-            if last is not None and envelope.sequence > last + 1:
-                audit_logger.info(
-                    "sequence_gap ip=%s key=%s last=%d current=%d",
-                    client_ip,
-                    _truncate(sender_key_b64),
-                    last,
-                    envelope.sequence,
-                )
-            last_sequences[sender_key_b64] = envelope.sequence
+            with seq_lock:
+                last = last_sequences.get(sender_key_b64)
+                if last is not None and envelope.sequence <= last:
+                    audit_logger.warning(
+                        "sequence_replay ip=%s key=%s seq=%d last=%d",
+                        client_ip,
+                        _truncate(sender_key_b64),
+                        envelope.sequence,
+                        last,
+                    )
+                    raise HTTPException(status_code=409, detail="sequence replay")
+                if last is not None and envelope.sequence > last + 1:
+                    audit_logger.info(
+                        "sequence_gap ip=%s key=%s last=%d current=%d",
+                        client_ip,
+                        _truncate(sender_key_b64),
+                        last,
+                        envelope.sequence,
+                    )
+                last_sequences[sender_key_b64] = envelope.sequence
 
         payload = None
         decrypt_error = None
