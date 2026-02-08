@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,16 +11,33 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from dashboard.auth import auth_router
-from dashboard.routes.pages import pages_router
 from dashboard.routes.api import api_router
+from dashboard.routes.pages import pages_router
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
 
 
-def create_app(secret_key: str = "change-me-in-production") -> FastAPI:
+_INSECURE_DEFAULT = "change-me-in-production"
+
+
+def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
     """Create and configure the FastAPI application."""
+    env = os.environ.get("APP_ENV", "development").lower()
+    if secret_key == _INSECURE_DEFAULT and env != "development":
+        raise RuntimeError(
+            "Insecure default secret_key detected in non-development mode. "
+            "Set a strong secret_key in config or the APP_ENV=development "
+            "environment variable to allow the default."
+        )
+    if secret_key == _INSECURE_DEFAULT:
+        logger.warning(
+            "Using insecure default secret_key — "
+            "do NOT use in production (APP_ENV=%s)",
+            env,
+        )
+
     app = FastAPI(
         title="AdvanceKeyLogger Dashboard",
         version="1.0.0",

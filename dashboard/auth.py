@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import time
 from typing import Any
@@ -19,9 +20,14 @@ auth_router = APIRouter(tags=["auth"])
 # In-memory session store (simple, no external deps)
 _sessions: dict[str, dict[str, Any]] = {}
 
+# PBKDF2 parameters
+_PBKDF2_ITERATIONS = 480_000
+_PBKDF2_HASH = "sha256"
+_SALT_LENGTH = 32
+
 # Default credentials — should be changed via config
 _ADMIN_USERNAME = "admin"
-_ADMIN_PASSWORD_HASH = hashlib.sha256(b"admin").hexdigest()
+_ADMIN_PASSWORD_HASH = ""  # set by configure_auth or first hash_password call
 _SESSION_TTL = 3600  # 1 hour
 
 
@@ -34,15 +40,48 @@ def configure_auth(username: str, password_hash: str, session_ttl: int = 3600) -
 
 
 def hash_password(password: str) -> str:
-    """Hash a password with SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password with PBKDF2-HMAC-SHA256 and a random salt.
+
+    Returns a string in the format: ``iterations$salt_hex$derived_hex``.
+    """
+    salt = os.urandom(_SALT_LENGTH)
+    derived = hashlib.pbkdf2_hmac(
+        _PBKDF2_HASH,
+        password.encode(),
+        salt,
+        _PBKDF2_ITERATIONS,
+    )
+    return f"{_PBKDF2_ITERATIONS}${salt.hex()}${derived.hex()}"
 
 
-def verify_password(password: str, password_hash: str) -> bool:
-    """Constant-time password comparison."""
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Constant-time password verification against a PBKDF2 hash string.
+
+    Also accepts legacy SHA-256 hex digests for backwards compatibility.
+    """
+    if "$" in stored_hash:
+        # PBKDF2 format: iterations$salt_hex$derived_hex
+        parts = stored_hash.split("$", 2)
+        if len(parts) != 3:
+            return False
+        iterations_str, salt_hex, expected_hex = parts
+        try:
+            iterations = int(iterations_str)
+            salt = bytes.fromhex(salt_hex)
+        except (ValueError, TypeError):
+            return False
+        derived = hashlib.pbkdf2_hmac(
+            _PBKDF2_HASH,
+            password.encode(),
+            salt,
+            iterations,
+        )
+        return hmac.compare_digest(derived.hex(), expected_hex)
+
+    # Legacy SHA-256 (no salt) — kept for migration only
     return hmac.compare_digest(
         hashlib.sha256(password.encode()).hexdigest(),
-        password_hash,
+        stored_hash,
     )
 
 
@@ -109,9 +148,9 @@ async def login(request: Request) -> Response:
     )
 
 
-@auth_router.get("/auth/logout")
+@auth_router.post("/auth/logout")
 async def logout(request: Request) -> RedirectResponse:
-    """Handle logout."""
+    """Handle logout (POST only to prevent CSRF via GET)."""
     token = request.cookies.get("session_token")
     if token:
         _sessions.pop(token, None)

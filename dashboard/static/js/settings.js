@@ -2,6 +2,12 @@
    Settings Page JS
    ============================================================ */
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     loadSettings();
 
@@ -40,8 +46,8 @@ function renderSettingsGroup(elementId, obj, prefix = '') {
 
         return `
             <div class="setting-item">
-                <span class="setting-key">${key}</span>
-                <span class="${valueClass}">${displayValue}</span>
+                <span class="setting-key">${escapeHtml(key)}</span>
+                <span class="${valueClass}">${escapeHtml(displayValue)}</span>
             </div>
         `;
     }).join('');
@@ -69,8 +75,8 @@ function renderStorageSettings(config) {
 
         return `
             <div class="setting-item">
-                <span class="setting-key">${key}</span>
-                <span class="${valueClass}">${displayValue}</span>
+                <span class="setting-key">${escapeHtml(key)}</span>
+                <span class="${valueClass}">${escapeHtml(displayValue)}</span>
             </div>
         `;
     }).join('');

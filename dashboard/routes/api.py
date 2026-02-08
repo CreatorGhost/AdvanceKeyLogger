@@ -1,6 +1,7 @@
 """REST API routes for dashboard data."""
 from __future__ import annotations
 
+import asyncio
 import os
 import platform
 import time
@@ -11,6 +12,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from dashboard.auth import get_current_user
+
+try:
+    import psutil
+
+    _proc = psutil.Process(os.getpid())
+except ImportError:
+    psutil = None  # type: ignore[assignment]
+    _proc = None
 
 api_router = APIRouter(tags=["api"])
 
@@ -34,16 +43,24 @@ async def system_status(request: Request) -> dict[str, Any]:
     """System status overview."""
     _require_api_auth(request)
 
-    import psutil
-    proc = psutil.Process(os.getpid())
-
     uptime = time.time() - _start_time
     hours, remainder = divmod(int(uptime), 3600)
     minutes, seconds = divmod(remainder, 60)
 
+    # CPU / memory (safely degraded when psutil unavailable)
+    cpu_pct = 0.0
+    mem_mb = 0.0
+    if _proc is not None:
+        cpu_pct = await asyncio.to_thread(_proc.cpu_percent, 0.1)
+        mem_mb = round(_proc.memory_info().rss / 1024 / 1024, 1)
+
     # Check storage
     data_dir = Path("data")
-    storage_used = sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file()) if data_dir.exists() else 0
+    storage_used = (
+        sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
+        if data_dir.exists()
+        else 0
+    )
 
     # Check SQLite
     db_path = Path("data/captures.db")
@@ -53,6 +70,7 @@ async def system_status(request: Request) -> dict[str, Any]:
     if db_path.exists():
         try:
             from storage.sqlite_storage import SQLiteStorage
+
             with SQLiteStorage(str(db_path)) as db:
                 pending_count = db.count_pending()
                 total_count = db.count()
@@ -66,8 +84,8 @@ async def system_status(request: Request) -> dict[str, Any]:
             "hostname": platform.node(),
             "os": f"{platform.system()} {platform.release()}",
             "python": platform.python_version(),
-            "cpu_percent": proc.cpu_percent(interval=0.1),
-            "memory_mb": round(proc.memory_info().rss / 1024 / 1024, 1),
+            "cpu_percent": cpu_pct,
+            "memory_mb": mem_mb,
         },
         "storage": {
             "data_dir_bytes": storage_used,
@@ -99,17 +117,27 @@ async def list_captures(
 
     try:
         from storage.sqlite_storage import SQLiteStorage
+
         with SQLiteStorage(str(db_path)) as db:
             total = db.count()
             rows = db.get_pending(limit=limit)
             items = []
             for row in rows:
+                data_val = row["data"]
                 item = {
-                    "id": row[0],
-                    "capture_type": row[1],
-                    "data": row[2][:500] if isinstance(row[2], str) else str(row[2])[:500],
-                    "timestamp": row[3] if len(row) > 3 else None,
-                    "status": row[4] if len(row) > 4 else "pending",
+                    "id": row["id"],
+                    "capture_type": row["type"],
+                    "data": (
+                        data_val[:500]
+                        if isinstance(data_val, str)
+                        else str(data_val)[:500]
+                    ),
+                    "timestamp": (
+                        datetime.fromtimestamp(row["timestamp"]).isoformat()
+                        if row.get("timestamp")
+                        else None
+                    ),
+                    "status": row.get("status", "pending"),
                 }
                 if capture_type and item["capture_type"] != capture_type:
                     continue
@@ -132,7 +160,11 @@ async def list_screenshots(
     if not screenshot_dir.exists():
         return {"screenshots": [], "total": 0}
 
-    files = sorted(screenshot_dir.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True)
+    files = sorted(
+        screenshot_dir.glob("*.png"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
     total = len(files)
     files = files[:limit]
 
@@ -164,6 +196,7 @@ async def get_screenshot(request: Request, filename: str) -> Any:
         raise HTTPException(status_code=404, detail="Screenshot not found")
 
     from fastapi.responses import FileResponse
+
     return FileResponse(str(filepath), media_type="image/png")
 
 
@@ -181,15 +214,17 @@ async def activity_data(request: Request) -> dict[str, Any]:
 
     try:
         from storage.sqlite_storage import SQLiteStorage
+
         with SQLiteStorage(str(db_path)) as db:
             rows = db.get_pending(limit=10000)
             for row in rows:
                 total += 1
-                if len(row) > 3 and row[3]:
+                ts_val = row.get("timestamp")
+                if ts_val:
                     try:
-                        ts = datetime.fromisoformat(row[3])
+                        ts = datetime.fromtimestamp(float(ts_val))
                         heatmap[ts.weekday()][ts.hour] += 1
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, OSError):
                         pass
     except Exception:
         pass
@@ -203,7 +238,7 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
     _require_api_auth(request)
 
     db_path = Path("data/captures.db")
-    stats = {
+    stats: dict[str, Any] = {
         "total_captures": 0,
         "pending": 0,
         "sent": 0,
@@ -215,11 +250,14 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
     if db_path.exists():
         try:
             from storage.sqlite_storage import SQLiteStorage
+
             with SQLiteStorage(str(db_path)) as db:
                 stats["total_captures"] = db.count()
                 stats["pending"] = db.count_pending()
                 stats["sent"] = stats["total_captures"] - stats["pending"]
-            stats["db_size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
+            stats["db_size_mb"] = round(
+                db_path.stat().st_size / 1024 / 1024, 2
+            )
         except Exception:
             pass
 
@@ -236,6 +274,7 @@ async def get_config(request: Request) -> dict[str, Any]:
     _require_api_auth(request)
     try:
         from config.settings import Settings
+
         settings = Settings()
         return {"config": settings.as_dict()}
     except Exception as exc:
@@ -252,6 +291,7 @@ async def list_modules(request: Request) -> dict[str, Any]:
 
     try:
         from capture import _CAPTURE_REGISTRY
+
         for name, cls in _CAPTURE_REGISTRY.items():
             capture_modules.append({
                 "name": name,
@@ -263,6 +303,7 @@ async def list_modules(request: Request) -> dict[str, Any]:
 
     try:
         from transport import _TRANSPORT_REGISTRY
+
         for name, cls in _TRANSPORT_REGISTRY.items():
             transport_modules.append({
                 "name": name,

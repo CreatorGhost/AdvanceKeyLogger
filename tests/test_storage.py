@@ -171,3 +171,22 @@ class TestSQLiteStorage:
         with SQLiteStorage(str(tmp_path / "ctx.db")) as db:
             db.insert("test", data="hello")
             assert db.count_total() == 1
+
+    def test_insert_profile(self, tmp_path: Path):
+        """Can insert and retrieve a biometrics profile."""
+        db = SQLiteStorage(str(tmp_path / "bio.db"))
+        profile = {
+            "profile_id": "usr_test",
+            "created_at": "2026-02-08T00:00:00Z",
+            "sample_size": 3,
+            "avg_dwell_ms": 100.0,
+            "avg_flight_ms": 120.0,
+            "error_rate": 1.0,
+            "digraph_model": {},
+        }
+        row_id = db.insert_profile(profile)
+        assert row_id >= 1
+        latest = db.get_latest_profile()
+        assert latest is not None
+        assert latest.get("profile_id") == "usr_test"
+        db.close()

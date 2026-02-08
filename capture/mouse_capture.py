@@ -25,6 +25,8 @@ class MouseCapture(BaseCapture):
         self._lock = threading.Lock()
         self._listener: Listener | None = None
         self._track_movement = bool(config.get("track_movement", False))
+        self._move_throttle_interval = float(config.get("move_throttle_interval", 0.02))
+        self._last_move_ts: float = 0.0
         self._click_callback = None
 
     def start(self) -> None:
@@ -65,11 +67,15 @@ class MouseCapture(BaseCapture):
             self._events.append(event)
 
     def _on_move(self, x: int, y: int) -> None:
+        now = time.time()
+        if now - self._last_move_ts < self._move_throttle_interval:
+            return
+        self._last_move_ts = now
         self._record(
             {
                 "type": "mouse_move",
                 "data": {"x": x, "y": y},
-                "timestamp": time.time(),
+                "timestamp": now,
             }
         )
 
