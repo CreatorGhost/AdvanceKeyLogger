@@ -32,12 +32,29 @@ class KeyPairManager:
         signing_private = self._load_ed25519_private()
         meta = self._store.load_json(self._name("meta")) or {}
 
+        rotation_needed = False
         if rotation_hours is not None:
             created_at = float(meta.get("created_at", 0.0))
             age_seconds = time.time() - created_at if created_at else None
             if age_seconds is None or age_seconds >= rotation_hours * 3600:
+                rotation_needed = True
                 exchange_private = None
                 signing_private = None
+
+        if rotation_needed:
+            current_exchange = self._store.load_bytes(self._name("x25519_private"))
+            current_exchange_pub = self._store.load_bytes(self._name("x25519_public"))
+            current_signing = self._store.load_bytes(self._name("ed25519_private"))
+            current_signing_pub = self._store.load_bytes(self._name("ed25519_public"))
+
+            if current_exchange:
+                self._store.save_bytes(self._name("x25519_private_prev"), current_exchange)
+            if current_exchange_pub:
+                self._store.save_bytes(self._name("x25519_public_prev"), current_exchange_pub)
+            if current_signing:
+                self._store.save_bytes(self._name("ed25519_private_prev"), current_signing)
+            if current_signing_pub:
+                self._store.save_bytes(self._name("ed25519_public_prev"), current_signing_pub)
 
         regenerated = False
 

@@ -11,9 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 class ClientRegistry:
-    def __init__(self, allowed_keys: Iterable[str], clients_file: str | None) -> None:
+    def __init__(
+        self,
+        allowed_keys: Iterable[str],
+        clients_file: str | None,
+        allow_open: bool = False,
+    ) -> None:
         self._clients_file = Path(clients_file).expanduser() if clients_file else None
         self._allowed = {key.strip() for key in allowed_keys if key}
+        self._allow_open = allow_open
         self._lock = threading.Lock()
         if self._clients_file:
             self._load_from_file()
@@ -21,7 +27,7 @@ class ClientRegistry:
     def is_allowed(self, key_b64: str) -> bool:
         with self._lock:
             if not self._allowed:
-                return True
+                return self._allow_open
             return key_b64 in self._allowed
 
     def register(self, key_b64: str) -> None:

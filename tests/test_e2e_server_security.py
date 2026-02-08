@@ -14,7 +14,10 @@ def test_client_registry_allowlist():
 
 def test_client_registry_open_when_empty():
     registry = ClientRegistry([], None)
-    assert registry.is_allowed("anything") is True
+    assert registry.is_allowed("anything") is False
+
+    registry_open = ClientRegistry([], None, allow_open=True)
+    assert registry_open.is_allowed("anything") is True
 
 
 def test_rate_limiter():
