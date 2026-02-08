@@ -70,6 +70,14 @@ def create_transport(config: dict[str, Any]) -> BaseTransport:
     return cls(method_config)
 
 
+def create_transport_for_method(config: dict[str, Any], method: str) -> BaseTransport:
+    """Instantiate a transport module for a specific method."""
+    transport_config = config.get("transport", {})
+    method_config = transport_config.get(method, {})
+    cls = get_transport_class(method)
+    return cls(method_config)
+
+
 # Import built-in transport modules so they self-register.
 logger = logging.getLogger(__name__)
 

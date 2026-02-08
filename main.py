@@ -30,6 +30,7 @@ from typing import Any
 from capture import create_enabled_captures, list_captures
 from config.settings import Settings
 from pipeline import Pipeline
+from engine.rule_engine import RuleEngine
 from biometrics.analyzer import BiometricsAnalyzer
 from storage.manager import StorageManager
 from storage.sqlite_storage import SQLiteStorage
@@ -373,6 +374,10 @@ def main() -> int:
 
     logger.info("Enabled captures: %s", ", ".join(str(c) for c in captures))
 
+    # --- Rule engine (optional) ---
+    rules_enabled = bool(settings.get("rules.enabled", False))
+    rule_engine = None
+
     # --- Wire mouse clicks to screenshot capture (on-demand screenshots) ---
     screenshot_capture = next(
         (cap for cap in captures if hasattr(cap, "take_screenshot")), None
@@ -421,6 +426,14 @@ def main() -> int:
 
     # --- Main loop ---
     report_interval = settings.get("general.report_interval", 30)
+    report_interval_ref = {"value": float(report_interval)}
+
+    def _set_report_interval(value: float) -> None:
+        report_interval_ref["value"] = max(1.0, float(value))
+
+    if rules_enabled:
+        rule_engine = RuleEngine(config, captures, _set_report_interval)
+        logger.info("Rule engine enabled (rules: %s)", settings.get("rules.path"))
     logger.info("Entering main loop (report interval: %ds)", report_interval)
 
     if args.dry_run:
@@ -431,7 +444,7 @@ def main() -> int:
         while not shutdown.requested:
             time.sleep(0.2)
             now = time.time()
-            if now - last_report < report_interval:
+            if now - last_report < report_interval_ref["value"]:
                 continue
             last_report = now
 
@@ -445,6 +458,9 @@ def main() -> int:
 
             if pipeline is not None and collected:
                 collected = pipeline.process_batch(collected)
+
+            if rule_engine is not None and collected:
+                rule_engine.process_events(collected)
 
             if biometrics_enabled:
                 timing_events = [e for e in collected if e.get("type") == "keystroke_timing"]

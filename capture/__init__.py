@@ -77,21 +77,24 @@ def create_enabled_captures(config: dict[str, Any]) -> list[BaseCapture]:
         if isinstance(settings, dict) and settings.get("enabled", False):
             try:
                 cls = get_capture_class(name)
+            except ValueError:
+                # Unknown capture name - skip silently (not registered)
+                continue
+            try:
                 sig = inspect.signature(cls.__init__)
                 if "global_config" in sig.parameters:
-                    captures.append(cls(settings, global_config=config))
+                    instance = cls(settings, global_config=config)
                 else:
                     logger.debug(
                         "%s.__init__ does not accept 'global_config'; "
                         "calling with settings only",
                         cls.__name__,
                     )
-                    captures.append(cls(settings))
-            except ValueError:
-                # Unknown capture name - skip silently (not registered)
-                pass
+                    instance = cls(settings)
+                setattr(instance, "capture_name", name)
+                captures.append(instance)
             except Exception as exc:
-                # Log and skip any other instantiation errors
+                # Log and skip any instantiation errors (including ValueError)
                 logger.warning("Failed to instantiate capture '%s': %s", name, exc)
 
     return captures
