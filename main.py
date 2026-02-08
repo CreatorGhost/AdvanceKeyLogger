@@ -38,6 +38,7 @@ from storage.sqlite_storage import SQLiteStorage
 from transport import create_transport, list_transports
 from service import ServiceManager
 from utils.compression import gzip_data
+from crypto.protocol import E2EProtocol
 from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
 from utils.logger_setup import setup_logging
 from utils.process import GracefulShutdown, PIDLock
@@ -233,10 +234,21 @@ def _apply_encryption(
     metadata: dict[str, str],
     config: dict[str, Any],
     data_dir: str,
+    e2e_protocol: E2EProtocol | None = None,
 ) -> tuple[bytes, dict[str, str]]:
     enc_cfg = config.get("encryption", {})
     if not enc_cfg.get("enabled", False):
         return payload, metadata
+
+    mode = str(enc_cfg.get("mode", "symmetric")).lower()
+    if mode == "e2e":
+        if e2e_protocol is None:
+            e2e_protocol = E2EProtocol(enc_cfg.get("e2e", {}))
+        encrypted = e2e_protocol.encrypt(payload)
+        meta = dict(metadata)
+        meta["filename"] = f"{meta.get('filename', 'report.bin')}.e2e"
+        meta["content_type"] = "application/json"
+        return encrypted, meta
 
     key = _load_encryption_key(config, data_dir)
     encrypted = encrypt(payload, key)
@@ -373,6 +385,19 @@ def main() -> int:
 
     # --- Create config snapshot ---
     config = settings.as_dict()
+
+    # --- Encryption setup ---
+    e2e_protocol = None
+    enc_cfg = config.get("encryption", {}) if isinstance(config, dict) else {}
+    if bool(enc_cfg.get("enabled", False)):
+        mode = str(enc_cfg.get("mode", "symmetric")).lower()
+        if mode == "e2e":
+            try:
+                e2e_protocol = E2EProtocol(enc_cfg.get("e2e", {}))
+                logger.info("E2E encryption enabled")
+            except Exception as exc:
+                logger.error("Failed to initialize E2E encryption: %s", exc)
+                return 1
 
     # --- Pipeline (optional) ---
     pipeline_enabled = bool(settings.get("pipeline.enabled", False))
@@ -626,7 +651,9 @@ def main() -> int:
                 continue
 
             payload, metadata, file_paths = _build_report_bundle(batch_items, config, sys_info)
-            payload, metadata = _apply_encryption(payload, metadata, config, data_dir)
+            payload, metadata = _apply_encryption(
+                payload, metadata, config, data_dir, e2e_protocol=e2e_protocol
+            )
 
             try:
                 success = transport.send(payload, metadata)

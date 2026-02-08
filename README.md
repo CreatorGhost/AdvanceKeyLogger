@@ -241,8 +241,15 @@ transport:
 ```yaml
 encryption:
   enabled: false
+  mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
   algorithm: "AES-256-CBC"
-  key: ""                    # Base64-encoded key (auto-generated if empty)
+  key: ""
+  e2e:
+    server_public_key: ""    # Base64 X25519 public key from collector server
+    key_store_path: "~/.advancekeylogger/keys/"
+    pin_server_key: true
+
+Note: E2E mode wraps each payload with an ephemeral X25519 key exchange and AES-256-GCM.
 
 compression:
   enabled: true

