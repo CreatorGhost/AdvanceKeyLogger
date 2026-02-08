@@ -21,9 +21,9 @@ Generated: 2026-02-08
 | # | Module | File | Status | Issues Found |
 |---|--------|------|--------|--------------|
 | 6 | Email Transport | `transport/email_transport.py` | DONE | None. Uses EmailMessage (not legacy MIME), @retry on send(), reconnect on disconnect. |
-| 7 | HTTP Transport | `transport/http_transport.py` | DONE - HAS ISSUES | Missing @retry decorator (unlike email). |
-| 8 | FTP Transport | `transport/ftp_transport.py` | DONE - HAS ISSUES | Missing @retry decorator (unlike email). |
-| 9 | Telegram Transport | `transport/telegram_transport.py` | DONE - HAS ISSUES | (a) API calls at lines 30, 51, 60 lack try/except — will crash on network errors. (b) No 50MB file size validation. (c) Should check response.json()["ok"] not just HTTP status. |
+| 7 | HTTP Transport | `transport/http_transport.py` | DONE | @retry decorator added, error handling in place. |
+| 8 | FTP Transport | `transport/ftp_transport.py` | DONE | @retry decorator added, error handling in place. |
+| 9 | Telegram Transport | `transport/telegram_transport.py` | DONE | All 3 issues fixed: (a) try/except on all API calls, (b) 50MB file size validation, (c) checks response.json()["ok"] + HTTP status. |
 
 ---
 
@@ -34,37 +34,38 @@ Generated: 2026-02-08
 | 10 | Collect/send/rotate cycle in main.py | DONE | Full implementation with SQLite + file storage, compression, encryption, circuit breaker, dry-run mode. |
 | 11 | All capture modules imported in main.py | DONE | Auto-imported via plugin system in capture/__init__.py and transport/__init__.py. No explicit imports needed. |
 | 12 | Integration tests (`tests/test_integration.py`) | DONE | 2 tests: pipeline bundle+encrypt+cleanup, SQLite roundtrip. |
-| 13 | Full test suite passes | DONE | 79/79 tests passing (5.22s). |
+| 13 | Full test suite passes | DONE | 79/79 tests passing. |
 
 ---
 
-## Issues Requiring Fixes
+## Issues Found & Fixed
 
-### Issue 1: HTTP Transport — No retry logic
+### Issue 1: HTTP Transport — No retry logic (FIXED)
 - **File:** `transport/http_transport.py`
-- **Problem:** `send()` has no `@retry` decorator. Email transport has one; HTTP should too.
+- **Fix:** Added `@retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)` to `send()`.
 
-### Issue 2: FTP Transport — No retry logic
+### Issue 2: FTP Transport — No retry logic (FIXED)
 - **File:** `transport/ftp_transport.py`
-- **Problem:** `send()` has no `@retry` decorator. Email transport has one; FTP should too.
+- **Fix:** Added `@retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)` to `send()`.
 
-### Issue 3: Telegram Transport — Unprotected API calls
+### Issue 3: Telegram Transport — Unprotected API calls (FIXED)
 - **File:** `transport/telegram_transport.py`
-- **Problem:** `requests.get/post` calls in `connect()`, `_send_message()`, and `_send_document()` are not wrapped in try/except. Network errors will crash the transport.
+- **Fix:** Wrapped all `requests.get/post` calls in `connect()`, `_send_message()`, and `_send_document()` with `try/except requests.RequestException`.
 
-### Issue 4: Telegram Transport — No file size check
+### Issue 4: Telegram Transport — No file size check (FIXED)
 - **File:** `transport/telegram_transport.py`
-- **Problem:** Spec requires 50MB file size limit enforcement. No validation exists.
+- **Fix:** Added `_MAX_FILE_SIZE = 50 * 1024 * 1024` constant and validation check at top of `send()`.
 
-### Issue 5: Telegram Transport — API success check
+### Issue 5: Telegram Transport — API success check (FIXED)
 - **File:** `transport/telegram_transport.py`
-- **Problem:** Uses `response.ok` (HTTP status) but Telegram API returns `{"ok": true/false}` in JSON body. Should check both.
+- **Fix:** `_send_message()` and `_send_document()` now check both `response.ok` (HTTP status) and `response.json().get("ok")` (Telegram API result).
 
 ---
 
 ## Summary
 
 - **Completed:** 13/13 checklist items implemented
-- **Issues found:** 5 (in transport modules only)
+- **Issues found:** 5 (all fixed)
 - **Capture modules:** All 5 perfect — no issues
+- **Transport modules:** All 4 now have @retry, error handling, and proper validation
 - **Test suite:** 79/79 passing

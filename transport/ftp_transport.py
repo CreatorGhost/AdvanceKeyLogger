@@ -11,6 +11,7 @@ from typing import Any
 
 from transport import register_transport
 from transport.base import BaseTransport
+from utils.resilience import retry
 
 
 @register_transport("ftp")
@@ -46,6 +47,7 @@ class FTPTransport(BaseTransport):
                 self._ftp.cwd(self._remote_dir)
         self._connected = True
 
+    @retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         if not self._connected:
             self.connect()
