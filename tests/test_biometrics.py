@@ -38,8 +38,35 @@ def test_analyzer_generates_profile():
     assert "th" in profile.digraph_model
 
 
+def test_analyzer_trigraph_model():
+    analyzer = BiometricsAnalyzer(profile_id_prefix="test")
+    base = time.time()
+    events = [
+        {"key": "t", "down_ts": base, "up_ts": base + 0.05, "dwell_ms": 50, "flight_ms": None},
+        {"key": "h", "down_ts": base + 0.1, "up_ts": base + 0.15, "dwell_ms": 50, "flight_ms": 50},
+        {"key": "e", "down_ts": base + 0.2, "up_ts": base + 0.25, "dwell_ms": 50, "flight_ms": 50},
+        {"key": "n", "down_ts": base + 0.3, "up_ts": base + 0.35, "dwell_ms": 50, "flight_ms": 50},
+    ]
+    profile = analyzer.generate_profile(events)
+    assert "the" in profile.trigraph_model
+    assert "hen" in profile.trigraph_model
+    assert profile.trigraph_model["the"].count == 1
+
+
+def test_analyzer_pressure_variance():
+    analyzer = BiometricsAnalyzer(profile_id_prefix="test")
+    base = time.time()
+    events = [
+        {"key": "a", "down_ts": base, "up_ts": base + 0.05, "dwell_ms": 50, "flight_ms": None},
+        {"key": "b", "down_ts": base + 0.1, "up_ts": base + 0.15, "dwell_ms": 50, "flight_ms": 50},
+        {"key": "c", "down_ts": base + 0.3, "up_ts": base + 0.35, "dwell_ms": 50, "flight_ms": 150},
+    ]
+    profile = analyzer.generate_profile(events)
+    assert profile.pressure_variance > 0
+
+
 def test_matcher_distance():
     matcher = ProfileMatcher(threshold=10.0)
-    a = {"avg_dwell_ms": 100, "avg_flight_ms": 120, "error_rate": 1.0, "digraph_model": {}}
-    b = {"avg_dwell_ms": 101, "avg_flight_ms": 119, "error_rate": 1.0, "digraph_model": {}}
+    a = {"avg_dwell_ms": 100, "avg_flight_ms": 120, "error_rate": 1.0, "pressure_variance": 5.0, "digraph_model": {}, "trigraph_model": {}}
+    b = {"avg_dwell_ms": 101, "avg_flight_ms": 119, "error_rate": 1.0, "pressure_variance": 5.0, "digraph_model": {}, "trigraph_model": {}}
     assert matcher.is_match(a, b) is True

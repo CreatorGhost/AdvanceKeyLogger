@@ -55,6 +55,7 @@ def _unit_path(name: str) -> Path:
 
 def _render_unit(spec) -> str:
     python_path = os.environ.get("PYTHON_BIN", sys.executable)
+    project_dir = str(Path(__file__).resolve().parent.parent)
     exec_cmd = f"{shlex.quote(python_path)} -m main --config {shlex.quote(spec.config_path)}"
     return f"""[Unit]
 Description={spec.description}
@@ -63,6 +64,7 @@ Wants=graphical-session.target
 
 [Service]
 Type=notify
+WorkingDirectory={project_dir}
 ExecStart={exec_cmd}
 Restart=on-failure
 RestartSec={spec.restart_sec}
@@ -84,6 +86,7 @@ def sd_notify(message: str) -> None:
     notify_socket = os.environ.get("NOTIFY_SOCKET")
     if not notify_socket:
         return
+    sock = None
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         sock.connect(notify_socket)
@@ -91,7 +94,8 @@ def sd_notify(message: str) -> None:
     except Exception:
         pass
     finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass

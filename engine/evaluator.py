@@ -115,16 +115,19 @@ class SafeEvaluator:
 
 def _normalize_condition(expression: str) -> str:
     """
-    Convert DSL syntax like:
-        window_title matches ".*Chrome.*"
-    to:
-        matches(window_title, ".*Chrome.*")
+    Convert DSL infix syntax to function call syntax.
+
+    Supported operators:
+        window_title matches ".*Chrome.*"  -> matches(window_title, ".*Chrome.*")
+        window_title contains "Chrome"     -> contains(window_title, "Chrome")
+        window_title startswith "Google"   -> startswith(window_title, "Google")
+        data endswith ".exe"               -> endswith(data, ".exe")
     """
-    pattern = re.compile(r"([A-Za-z0-9_\\.]+)\s+matches\s+([\"'].*?[\"'])")
-
-    def replacer(match: re.Match) -> str:
-        left = match.group(1)
-        right = match.group(2)
-        return f"matches({left}, {right})"
-
-    return pattern.sub(replacer, expression)
+    operators = ["matches", "contains", "startswith", "endswith"]
+    result = expression
+    for op in operators:
+        pattern = re.compile(
+            rf"([A-Za-z0-9_\\.]+)\s+{op}\s+([\"'].*?[\"'])"
+        )
+        result = pattern.sub(rf"{op}(\1, \2)", result)
+    return result

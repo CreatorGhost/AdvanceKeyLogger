@@ -61,6 +61,7 @@ def _label(name: str) -> str:
 def _render_plist(spec) -> str:
     python_path = os.environ.get("PYTHON_BIN", sys.executable)
     label = _label(spec.name)
+    project_dir = str(Path(__file__).resolve().parent.parent)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -68,6 +69,8 @@ def _render_plist(spec) -> str:
 <dict>
     <key>Label</key>
     <string>{label}</string>
+    <key>WorkingDirectory</key>
+    <string>{project_dir}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{python_path}</string>
