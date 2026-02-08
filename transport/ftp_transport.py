@@ -40,12 +40,22 @@ class FTPTransport(BaseTransport):
         if self._use_tls and isinstance(self._ftp, FTP_TLS):
             self._ftp.prot_p()
         if self._remote_dir:
-            try:
-                self._ftp.cwd(self._remote_dir)
-            except Exception:
-                self._ftp.mkd(self._remote_dir)
-                self._ftp.cwd(self._remote_dir)
+            self._ensure_remote_dir(self._remote_dir)
         self._connected = True
+
+    def _ensure_remote_dir(self, path: str) -> None:
+        """Navigate to *path*, creating each component that doesn't exist."""
+        assert self._ftp is not None  # noqa: S101
+        if path.startswith("/"):
+            self._ftp.cwd("/")
+        for part in path.split("/"):
+            if not part:
+                continue
+            try:
+                self._ftp.cwd(part)
+            except Exception:
+                self._ftp.mkd(part)
+                self._ftp.cwd(part)
 
     @retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:

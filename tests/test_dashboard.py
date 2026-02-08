@@ -5,7 +5,9 @@ import pytest
 
 try:
     from fastapi.testclient import TestClient
+
     from dashboard.app import create_app
+    from dashboard.auth import configure_auth, hash_password
     _DASHBOARD_AVAILABLE = True
 except ImportError:
     _DASHBOARD_AVAILABLE = False
@@ -20,6 +22,7 @@ class TestDashboardAuth:
     """Test authentication flow."""
 
     def setup_method(self):
+        configure_auth("admin", hash_password("admin"))
         self.app = create_app(secret_key="test-secret")
         self.client = TestClient(self.app)
 
@@ -57,8 +60,8 @@ class TestDashboardAuth:
             "/auth/login",
             data={"username": "admin", "password": "admin"},
         )
-        # Logout
-        response = self.client.get("/auth/logout", follow_redirects=False)
+        # Logout (POST to prevent CSRF)
+        response = self.client.post("/auth/logout", follow_redirects=False)
         assert response.status_code == 302
 
 
@@ -67,6 +70,7 @@ class TestDashboardAPI:
     """Test API endpoints."""
 
     def setup_method(self):
+        configure_auth("admin", hash_password("admin"))
         self.app = create_app(secret_key="test-secret")
         self.client = TestClient(self.app)
         # Login
@@ -151,6 +155,7 @@ class TestDashboardPages:
     """Test page rendering for authenticated users."""
 
     def setup_method(self):
+        configure_auth("admin", hash_password("admin"))
         self.app = create_app(secret_key="test-secret")
         self.client = TestClient(self.app)
         self.client.post(

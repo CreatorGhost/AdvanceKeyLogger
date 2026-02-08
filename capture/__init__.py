@@ -17,6 +17,7 @@ Then load enabled captures from config:
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -76,10 +77,15 @@ def create_enabled_captures(config: dict[str, Any]) -> list[BaseCapture]:
         if isinstance(settings, dict) and settings.get("enabled", False):
             try:
                 cls = get_capture_class(name)
-                try:
+                sig = inspect.signature(cls.__init__)
+                if "global_config" in sig.parameters:
                     captures.append(cls(settings, global_config=config))
-                except TypeError:
-                    # Fallback for captures that don't accept global_config
+                else:
+                    logger.debug(
+                        "%s.__init__ does not accept 'global_config'; "
+                        "calling with settings only",
+                        cls.__name__,
+                    )
                     captures.append(cls(settings))
             except ValueError:
                 # Unknown capture name - skip silently (not registered)

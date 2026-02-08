@@ -25,23 +25,33 @@ class WindowCapture(BaseCapture):
         self._poll_interval = float(config.get("poll_interval", 2))
         self._buffer: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_title: str | None = None
 
     def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        with self._lifecycle_lock:
+            if self._thread is not None:
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._running = True
         self._thread.start()
-        self._running = True
 
     def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
+        with self._lifecycle_lock:
+            if self._thread is None:
+                return
+            thread = self._thread
             self._thread = None
+        self._stop_event.set()
+        thread.join(timeout=5.0)
+        if thread.is_alive():
+            self.logger.warning(
+                "Window capture thread still alive after join; "
+                "_stop_event was set"
+            )
         self._running = False
 
     def collect(self) -> list[dict[str, Any]]:
