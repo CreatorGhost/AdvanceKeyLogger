@@ -4,6 +4,7 @@ Adds high-precision timestamps and timezone info.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from pipeline.base_middleware import BaseMiddleware, CaptureEvent
@@ -25,6 +26,6 @@ class TimestampEnricher(BaseMiddleware):
         now = datetime.now(timezone.utc)
         event.setdefault("timestamp", now.timestamp())
         event["timestamp_iso"] = now.isoformat()
-        event["timestamp_ns"] = now.timestamp_ns()
+        event["timestamp_ns"] = time.time_ns()
         event["timezone"] = "UTC"
         return event

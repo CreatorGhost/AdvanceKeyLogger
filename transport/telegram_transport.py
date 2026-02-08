@@ -62,7 +62,12 @@ class TelegramTransport(BaseTransport):
             ) from exc
         self._connected = True
 
-    @retry(max_attempts=3, backoff_base=2.0, retry_on_false=True)
+    @retry(
+        max_attempts=3,
+        backoff_base=2.0,
+        exceptions=(requests.RequestException, OSError),
+        retry_on_false=True,
+    )
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         if not self._connected:
             self.connect()

@@ -73,7 +73,7 @@ async def system_status(request: Request) -> dict[str, Any]:
 
             with SQLiteStorage(str(db_path)) as db:
                 pending_count = db.count_pending()
-                total_count = db.count()
+                total_count = db.count_total()
         except Exception:
             pass
 
@@ -119,7 +119,7 @@ async def list_captures(
         from storage.sqlite_storage import SQLiteStorage
 
         with SQLiteStorage(str(db_path)) as db:
-            total = db.count()
+            total = db.count_total()
             rows = db.get_pending(limit=limit)
             items = []
             for row in rows:
@@ -252,7 +252,7 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
             from storage.sqlite_storage import SQLiteStorage
 
             with SQLiteStorage(str(db_path)) as db:
-                stats["total_captures"] = db.count()
+                stats["total_captures"] = db.count_total()
                 stats["pending"] = db.count_pending()
                 stats["sent"] = stats["total_captures"] - stats["pending"]
             stats["db_size_mb"] = round(
