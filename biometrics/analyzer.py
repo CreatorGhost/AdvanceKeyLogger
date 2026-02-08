@@ -31,7 +31,9 @@ class BiometricsAnalyzer:
         avg_flight = _mean(flight_times)
 
         digraph_model = self._build_digraph_model(events_sorted)
+        trigraph_model = self._build_trigraph_model(events_sorted)
         rhythm_signature = self._compute_rhythm_signature(flight_times)
+        pressure_variance = _std(flight_times) if flight_times else 0.0
         fatigue_curve = self._compute_fatigue_curve(events_sorted)
         error_rate = self._compute_error_rate(events_sorted)
         wpm_bursts = self._compute_wpm_bursts(events_sorted)
@@ -45,7 +47,9 @@ class BiometricsAnalyzer:
             sample_size=sample_size,
             avg_dwell_ms=avg_dwell,
             avg_flight_ms=avg_flight,
+            pressure_variance=pressure_variance,
             digraph_model=digraph_model,
+            trigraph_model=trigraph_model,
             rhythm_signature=rhythm_signature,
             fatigue_curve=fatigue_curve,
             error_rate=error_rate,
@@ -69,6 +73,30 @@ class BiometricsAnalyzer:
         model: dict[str, DigraphStats] = {}
         for digraph, values in latencies.items():
             model[digraph] = DigraphStats(
+                mean=_mean(values),
+                std=_std(values),
+                count=len(values),
+            )
+        return model
+
+    def _build_trigraph_model(self, events: list[dict[str, Any]]) -> dict[str, DigraphStats]:
+        latencies: dict[str, list[float]] = defaultdict(list)
+        for i in range(len(events) - 2):
+            k1 = _normalize_key(events[i].get("key", ""))
+            k2 = _normalize_key(events[i + 1].get("key", ""))
+            k3 = _normalize_key(events[i + 2].get("key", ""))
+            if len(k1) != 1 or len(k2) != 1 or len(k3) != 1:
+                continue
+            trigraph = f"{k1}{k2}{k3}"
+            t1 = events[i].get("down_ts")
+            t3 = events[i + 2].get("down_ts")
+            if t1 is None or t3 is None:
+                continue
+            latencies[trigraph].append((t3 - t1) * 1000.0)
+
+        model: dict[str, DigraphStats] = {}
+        for trigraph, values in latencies.items():
+            model[trigraph] = DigraphStats(
                 mean=_mean(values),
                 std=_std(values),
                 count=len(values),

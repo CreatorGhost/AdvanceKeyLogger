@@ -24,7 +24,9 @@ class BiometricsProfile:
     sample_size: int
     avg_dwell_ms: float
     avg_flight_ms: float
+    pressure_variance: float = 0.0
     digraph_model: dict[str, DigraphStats] = field(default_factory=dict)
+    trigraph_model: dict[str, DigraphStats] = field(default_factory=dict)
     rhythm_signature: list[float] = field(default_factory=list)
     fatigue_curve: dict[str, float] = field(default_factory=dict)
     error_rate: float = 0.0
@@ -37,8 +39,12 @@ class BiometricsProfile:
             "sample_size": self.sample_size,
             "avg_dwell_ms": self.avg_dwell_ms,
             "avg_flight_ms": self.avg_flight_ms,
+            "pressure_variance": self.pressure_variance,
             "digraph_model": {
                 key: stats.to_dict() for key, stats in self.digraph_model.items()
+            },
+            "trigraph_model": {
+                key: stats.to_dict() for key, stats in self.trigraph_model.items()
             },
             "rhythm_signature": self.rhythm_signature,
             "fatigue_curve": self.fatigue_curve,

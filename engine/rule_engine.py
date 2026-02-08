@@ -73,7 +73,14 @@ class RuleEngine:
             try:
                 self._dispatcher.dispatch(rule.action, event)
                 rule.last_triggered = time.time()
-                logger.info("Rule triggered: %s", rule.name)
+                data_summary = str(event.get("data", ""))[:80]
+                logger.info(
+                    "Rule triggered: %s | event=%s | action=%s | data=%s",
+                    rule.name,
+                    event.get("type", "?"),
+                    rule.action.type,
+                    data_summary,
+                )
             except Exception as exc:
                 logger.error("Rule action failed (%s): %s", rule.name, exc)
 

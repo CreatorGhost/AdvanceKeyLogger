@@ -15,6 +15,27 @@ def test_evaluator_matches_syntax():
     assert evaluator.evaluate("window_title matches '.*Firefox.*'", ctx) is False
 
 
+def test_evaluator_contains_syntax():
+    evaluator = SafeEvaluator()
+    ctx = {"window_title": "Google Chrome - Test"}
+    assert evaluator.evaluate("window_title contains 'Chrome'", ctx) is True
+    assert evaluator.evaluate("window_title contains 'Firefox'", ctx) is False
+
+
+def test_evaluator_startswith_syntax():
+    evaluator = SafeEvaluator()
+    ctx = {"window_title": "Google Chrome - Test"}
+    assert evaluator.evaluate("window_title startswith 'Google'", ctx) is True
+    assert evaluator.evaluate("window_title startswith 'Chrome'", ctx) is False
+
+
+def test_evaluator_endswith_syntax():
+    evaluator = SafeEvaluator()
+    ctx = {"data": "report.pdf"}
+    assert evaluator.evaluate("data endswith '.pdf'", ctx) is True
+    assert evaluator.evaluate("data endswith '.exe'", ctx) is False
+
+
 def test_rule_registry_loads(tmp_path):
     rules_path = tmp_path / "rules.yaml"
     rules_path.write_text(
