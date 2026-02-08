@@ -80,6 +80,11 @@ class EmailTransport(BaseTransport):
 
             self._smtp.send_message(msg)
             return True
+        except smtplib.SMTPServerDisconnected:
+            self.logger.warning("SMTP connection lost, will reconnect on next attempt")
+            self._connected = False
+            self._smtp = None
+            return False
         except Exception as exc:
             self.logger.error("Email send failed: %s", exc)
             return False

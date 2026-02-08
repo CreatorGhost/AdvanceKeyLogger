@@ -6,9 +6,29 @@ import io
 import zipfile
 from pathlib import Path
 
-from main import _apply_encryption, _build_report_bundle, _cleanup_files, _items_from_sqlite
+import pytest
+
 from storage.sqlite_storage import SQLiteStorage
 from utils.crypto import generate_key, key_to_base64
+
+
+# Import helpers from main.py — this may fail in headless environments
+# because capture/__init__.py tries to import pynput.
+try:
+    from main import (
+        _apply_encryption,
+        _build_report_bundle,
+        _cleanup_files,
+        _items_from_sqlite,
+    )
+    _MAIN_AVAILABLE = True
+except ImportError:
+    _MAIN_AVAILABLE = False
+
+needs_main = pytest.mark.skipif(
+    not _MAIN_AVAILABLE,
+    reason="main.py imports require display server (pynput/Pillow)",
+)
 
 
 class DummyTransport:
@@ -20,6 +40,7 @@ class DummyTransport:
         return True
 
 
+@needs_main
 def test_pipeline_bundle_encrypt_cleanup(tmp_path: Path):
     screenshot = tmp_path / "screenshot_0001.png"
     screenshot.write_bytes(b"fake-image-data")
@@ -67,6 +88,7 @@ def test_pipeline_bundle_encrypt_cleanup(tmp_path: Path):
     assert not screenshot.exists()
 
 
+@needs_main
 def test_pipeline_sqlite_roundtrip(tmp_path: Path):
     db_path = tmp_path / "test.db"
     db = SQLiteStorage(str(db_path))

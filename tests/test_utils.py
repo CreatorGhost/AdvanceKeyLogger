@@ -327,6 +327,34 @@ class TestRetry:
             fail_with_type_error()
         assert call_count == 1  # No retry for TypeError
 
+    def test_retry_on_false(self):
+        """retry_on_false retries when function returns False."""
+        call_count = 0
+
+        @retry(max_attempts=3, backoff_base=0.01, retry_on_false=True)
+        def fail_then_succeed():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                return False
+            return True
+
+        assert fail_then_succeed() is True
+        assert call_count == 3
+
+    def test_retry_on_false_exhausted(self):
+        """retry_on_false returns False after all attempts exhausted."""
+        call_count = 0
+
+        @retry(max_attempts=2, backoff_base=0.01, retry_on_false=True)
+        def always_false():
+            nonlocal call_count
+            call_count += 1
+            return False
+
+        assert always_false() is False
+        assert call_count == 2
+
 
 class TestTransportQueue:
     """Tests for TransportQueue."""

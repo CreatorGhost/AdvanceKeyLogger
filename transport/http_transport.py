@@ -38,17 +38,21 @@ class HttpTransport(BaseTransport):
             self.connect()
         if not self._session:
             return False
-        headers = {}
-        if metadata and metadata.get("content_type"):
-            headers["Content-Type"] = metadata["content_type"]
-        response = self._session.request(
-            self._method,
-            self._url,
-            data=data,
-            headers=headers,
-            timeout=self._timeout,
-        )
-        return 200 <= response.status_code < 300
+        try:
+            headers = {}
+            if metadata and metadata.get("content_type"):
+                headers["Content-Type"] = metadata["content_type"]
+            response = self._session.request(
+                self._method,
+                self._url,
+                data=data,
+                headers=headers,
+                timeout=self._timeout,
+            )
+            return 200 <= response.status_code < 300
+        except requests.RequestException as exc:
+            self.logger.error("HTTP send failed: %s", exc)
+            return False
 
     def disconnect(self) -> None:
         if self._session is not None:

@@ -51,10 +51,14 @@ class FTPTransport(BaseTransport):
             self.connect()
         if not self._ftp:
             return False
-        filename = (metadata or {}).get("filename", "report.bin")
-        bio = io.BytesIO(data)
-        self._ftp.storbinary(f"STOR {filename}", bio)
-        return True
+        try:
+            filename = (metadata or {}).get("filename", "report.bin")
+            bio = io.BytesIO(data)
+            self._ftp.storbinary(f"STOR {filename}", bio)
+            return True
+        except Exception as exc:
+            self.logger.error("FTP send failed: %s", exc)
+            return False
 
     def disconnect(self) -> None:
         if self._ftp is not None:

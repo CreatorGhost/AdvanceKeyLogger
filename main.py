@@ -37,17 +37,9 @@ from storage.sqlite_storage import SQLiteStorage
 from capture import create_enabled_captures, list_captures
 from transport import list_transports, create_transport
 
-# Ensure plugin modules are imported and registered.
-import capture.keyboard_capture  # noqa: F401
-import capture.mouse_capture  # noqa: F401
-import capture.screenshot_capture  # noqa: F401
-import capture.clipboard_capture  # noqa: F401
-import capture.window_capture  # noqa: F401
-
-import transport.email_transport  # noqa: F401
-import transport.http_transport  # noqa: F401
-import transport.ftp_transport  # noqa: F401
-import transport.telegram_transport  # noqa: F401
+# Plugin modules are auto-imported by capture/__init__.py and
+# transport/__init__.py via their self-registration loops.
+# No explicit imports needed here.
 
 logger = logging.getLogger(__name__)
 
