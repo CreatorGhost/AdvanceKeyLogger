@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+import stat as stat_module
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,4 +33,42 @@ def store_payload(payload: bytes, config: dict[str, Any]) -> Path:
     except OSError:
         pass
 
+    cleanup_storage(base_dir, config)
     return filepath
+
+
+def cleanup_storage(base_dir: Path, config: dict[str, Any]) -> None:
+    retention_hours = config.get("retention_hours")
+    max_storage_mb = config.get("max_storage_mb")
+
+    files = [p for p in base_dir.glob("payload_*") if p.is_file()]
+    if retention_hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=float(retention_hours))
+        for path in files:
+            try:
+                if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < cutoff:
+                    path.unlink()
+            except OSError:
+                continue
+
+    if max_storage_mb:
+        max_bytes = float(max_storage_mb) * 1024 * 1024
+        entries: list[tuple[Path, float, int]] = []
+        for p in base_dir.glob("payload_*"):
+            try:
+                st = p.stat()
+                if not stat_module.S_ISREG(st.st_mode):
+                    continue
+                entries.append((p, st.st_mtime, st.st_size))
+            except OSError:
+                continue
+        entries.sort(key=lambda e: e[1])
+        total = sum(size for _, _, size in entries)
+        for path, _, cached_size in entries:
+            if total <= max_bytes:
+                break
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            total -= cached_size

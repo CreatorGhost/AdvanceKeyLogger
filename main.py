@@ -458,6 +458,13 @@ def main() -> int:
             try:
                 e2e_protocol = E2EProtocol(e2e_cfg)
                 logger.info("E2E encryption enabled")
+                if e2e_cfg.get("emit_client_keys", False):
+                    keys = e2e_protocol.export_client_keys()
+                    logger.info("E2E client signing public key: %s", keys["signing_public_key"])
+                    logger.info("E2E client exchange public key: %s", keys["exchange_public_key"])
+                client_keys_path = str(e2e_cfg.get("client_keys_path", "")).strip()
+                if client_keys_path:
+                    e2e_protocol.save_client_keys(client_keys_path)
             except Exception as exc:
                 logger.error("Failed to initialize E2E encryption: %s", exc)
                 return 1
@@ -700,6 +707,19 @@ def main() -> int:
 
             if not batch_items:
                 continue
+
+            if hasattr(transport, "preflight"):
+                try:
+                    if not transport.preflight():
+                        logger.warning("Transport health check failed; skipping send")
+                        if sqlite_store is None:
+                            queue.requeue(batch_items)
+                        continue
+                except Exception as exc:
+                    logger.warning("Transport preflight error: %s", exc)
+                    if sqlite_store is None:
+                        queue.requeue(batch_items)
+                    continue
 
             if args.dry_run:
                 logger.info("Dry run: captured %d items", len(batch_items))

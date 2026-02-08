@@ -851,10 +851,12 @@ Client/Server separation is explicit:
 - Server holds the private key, receives envelopes, decrypts, and stores payloads.
 - Crypto flow: X25519 key agreement → HKDF → AES-256-GCM.
 
+Server config example lives in `config/server_config.example.yaml`.
+
 ### Generate server keys
 
 ```bash
-python -m server.run --generate-keys --config server/config.example.yaml
+python -m server.run --generate-keys --config config/server_config.example.yaml
 ```
 
 This prints the base64 **server public key**. Put it in the client config:
@@ -865,14 +867,50 @@ encryption:
   mode: "e2e"
   e2e:
     server_public_key: "<paste key>"
+    emit_client_keys: true
+    client_keys_path: "~/.advancekeylogger/keys/client_keys.json"
 ```
 
 ### Run the server
 
 ```bash
-python -m server.run --config server/config.example.yaml --host 0.0.0.0 --port 8000
+python -m server.run --config config/server_config.example.yaml --host 0.0.0.0 --port 8000
 ```
 
 The server exposes:
 - `GET /health`
 - `POST /ingest` (expects the envelope body from the client)
+- `POST /register` (optional client registration when enabled)
+
+### Auth & allowlist
+
+Configure server authentication and allowed client keys:
+
+```yaml
+e2e_server:
+  auth_tokens:
+    - "change-me"
+  registration_tokens:
+    - "register-me"
+  allowed_client_keys: []
+  clients_file: "./server_data/clients.json"
+```
+
+### TLS
+
+Provide `ssl_certfile` and `ssl_keyfile` in server config to enable HTTPS.
+On the client, set `transport.http.verify` to `true` (default) or to a CA bundle path.
+
+### HTTP health check
+
+If you use HTTP transport, you can set `transport.http.healthcheck_url` to the server
+`/health` endpoint. The client will skip sends while the server is unhealthy.
+
+### Error recovery (pinned keys)
+
+If the server key rotates or is lost, clients that pin the old key will reject it.
+To recover:
+1. Generate a new server keypair.
+2. Update clients with the new `server_public_key`.
+3. Remove the old pinned key file from the client key store:
+   `~/.advancekeylogger/keys/server_public_key.key`

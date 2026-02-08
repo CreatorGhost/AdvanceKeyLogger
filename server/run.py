@@ -47,7 +47,16 @@ def main() -> int:
         return 0
 
     app = create_app(config)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    ssl_certfile = config.get("ssl_certfile")
+    ssl_keyfile = config.get("ssl_keyfile")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        ssl_certfile=ssl_certfile or None,
+        ssl_keyfile=ssl_keyfile or None,
+    )
     return 0
 
 
