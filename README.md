@@ -841,3 +841,38 @@ python -m pytest tests/ -v
 ## Disclaimer
 
 This project is for **educational and authorized security research purposes only**. Do not use this software on systems you do not own or without explicit written permission from the system owner. Unauthorized monitoring of computer activity may violate local, state, and federal laws.
+
+---
+
+## E2E Collector Server
+
+Client/Server separation is explicit:
+- Client encrypts data with the server's public key and sends encrypted envelopes.
+- Server holds the private key, receives envelopes, decrypts, and stores payloads.
+- Crypto flow: X25519 key agreement → HKDF → AES-256-GCM.
+
+### Generate server keys
+
+```bash
+python -m server.run --generate-keys --config server/config.example.yaml
+```
+
+This prints the base64 **server public key**. Put it in the client config:
+
+```yaml
+encryption:
+  enabled: true
+  mode: "e2e"
+  e2e:
+    server_public_key: "<paste key>"
+```
+
+### Run the server
+
+```bash
+python -m server.run --config server/config.example.yaml --host 0.0.0.0 --port 8000
+```
+
+The server exposes:
+- `GET /health`
+- `POST /ingest` (expects the envelope body from the client)
