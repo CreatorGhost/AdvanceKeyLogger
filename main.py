@@ -229,14 +229,17 @@ def _items_from_sqlite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     ids: list[int] = []
     for row in rows:
         ids.append(int(row["id"]))
-        items.append(
-            {
-                "type": row.get("type"),
-                "data": row.get("data"),
-                "path": row.get("file_path"),
-                "timestamp": row.get("timestamp"),
-            }
-        )
+        item: dict[str, Any] = {
+            "type": row.get("type"),
+            "data": row.get("data"),
+            "path": row.get("file_path"),
+            "timestamp": row.get("timestamp"),
+        }
+        # Include file_size as "size" so _build_report_bundle can use it
+        file_size = row.get("file_size")
+        if file_size is not None:
+            item["size"] = file_size
+        items.append(item)
     return items, ids
 
 
