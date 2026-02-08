@@ -430,8 +430,33 @@ def main() -> int:
     if bool(enc_cfg.get("enabled", False)):
         mode = str(enc_cfg.get("mode", "symmetric")).lower()
         if mode == "e2e":
+            e2e_cfg = enc_cfg.get("e2e", {})
+            if not str(e2e_cfg.get("server_public_key", "")).strip():
+                logger.error(
+                    "E2E encryption enabled but encryption.e2e.server_public_key is empty. "
+                    "Generate server keys with: python -m server.run --generate-keys"
+                )
+                return 1
+            transport_cfg = config.get("transport", {})
+            transport_method = str(transport_cfg.get("method", "email")).lower()
+            if transport_method == "http":
+                http_url = str(transport_cfg.get("http", {}).get("url", "")).strip()
+                if not http_url:
+                    logger.error(
+                        "E2E encryption with HTTP transport "
+                        "enabled but transport.http.url "
+                        "is empty. "
+                        "Set it to the server /ingest endpoint, e.g. http://localhost:8000/ingest"
+                    )
+                    return 1
+            else:
+                logger.warning(
+                    "E2E encryption enabled but transport method is '%s'. "
+                    "E2E is typically used with HTTP transport pointing to the /ingest endpoint.",
+                    transport_method,
+                )
             try:
-                e2e_protocol = E2EProtocol(enc_cfg.get("e2e", {}))
+                e2e_protocol = E2EProtocol(e2e_cfg)
                 logger.info("E2E encryption enabled")
             except Exception as exc:
                 logger.error("Failed to initialize E2E encryption: %s", exc)

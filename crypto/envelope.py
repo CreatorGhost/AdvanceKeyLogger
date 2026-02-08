@@ -42,17 +42,30 @@ class Envelope:
 
     @staticmethod
     def from_bytes(data: bytes) -> Envelope:
-        raw = json.loads(data.decode("utf-8"))
-        return Envelope(
-            version=int(raw.get("version", 1)),
-            sender_public_key=_b64_decode(raw.get("sender_public_key", "")),
-            ephemeral_public_key=_b64_decode(raw.get("ephemeral_public_key", "")),
-            wrap_nonce=_b64_decode(raw.get("wrap_nonce", "")),
-            wrapped_key=_b64_decode(raw.get("wrapped_key", "")),
-            payload_nonce=_b64_decode(raw.get("payload_nonce", "")),
-            ciphertext=_b64_decode(raw.get("ciphertext", "")),
-            signature=_b64_decode(raw.get("signature", "")),
-        )
+        try:
+            raw = json.loads(data.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Invalid envelope data: {exc}") from exc
+        required = [
+            "sender_public_key", "ephemeral_public_key", "wrap_nonce",
+            "wrapped_key", "payload_nonce", "ciphertext", "signature",
+        ]
+        missing = [k for k in required if not raw.get(k)]
+        if missing:
+            raise ValueError(f"Envelope missing required fields: {missing}")
+        try:
+            return Envelope(
+                version=int(raw.get("version", 1)),
+                sender_public_key=_b64_decode(raw["sender_public_key"]),
+                ephemeral_public_key=_b64_decode(raw["ephemeral_public_key"]),
+                wrap_nonce=_b64_decode(raw["wrap_nonce"]),
+                wrapped_key=_b64_decode(raw["wrapped_key"]),
+                payload_nonce=_b64_decode(raw["payload_nonce"]),
+                ciphertext=_b64_decode(raw["ciphertext"]),
+                signature=_b64_decode(raw["signature"]),
+            )
+        except Exception as exc:
+            raise ValueError(f"Invalid envelope field encoding: {exc}") from exc
 
 
 class HybridEnvelope:
@@ -90,7 +103,9 @@ class HybridEnvelope:
             format=serialization.PublicFormat.Raw,
         )
 
+        version = 1
         signature_payload = _signature_payload(
+            version,
             sender_pub_bytes,
             ephemeral_pub_bytes,
             wrap_nonce,
@@ -101,7 +116,7 @@ class HybridEnvelope:
         signature = sign_message(sender_signing_key, signature_payload)
 
         return Envelope(
-            version=1,
+            version=version,
             sender_public_key=sender_pub_bytes,
             ephemeral_public_key=ephemeral_pub_bytes,
             wrap_nonce=wrap_nonce,
@@ -117,9 +132,12 @@ class HybridEnvelope:
         server_private_key: x25519.X25519PrivateKey,
         verify_signature: bool = True,
     ) -> bytes:
+        if envelope.version != 1:
+            raise ValueError(f"Unsupported envelope version: {envelope.version}")
         sender_public = ed25519.Ed25519PublicKey.from_public_bytes(envelope.sender_public_key)
         if verify_signature:
             signature_payload = _signature_payload(
+                envelope.version,
                 envelope.sender_public_key,
                 envelope.ephemeral_public_key,
                 envelope.wrap_nonce,
@@ -153,6 +171,7 @@ def _derive_wrap_key(shared_secret: bytes) -> bytes:
 
 
 def _signature_payload(
+    version: int,
     sender_pub: bytes,
     ephemeral_pub: bytes,
     wrap_nonce: bytes,
@@ -162,6 +181,7 @@ def _signature_payload(
 ) -> bytes:
     return b"|".join(
         [
+            version.to_bytes(4, "big"),
             sender_pub,
             ephemeral_pub,
             wrap_nonce,

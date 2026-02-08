@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import base64
+import logging
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from crypto.key_store import KeyStore
+
+logger = logging.getLogger(__name__)
 
 
 def generate_server_keypair(key_store_path: str) -> str:
@@ -45,9 +48,17 @@ def load_server_private_key(config: dict[str, Any]) -> x25519.X25519PrivateKey:
         raw = base64.b64decode(key_b64.encode("utf-8"))
         return x25519.X25519PrivateKey.from_private_bytes(raw)
 
-    key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/") )
+    key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/"))
     store = KeyStore(key_store_path)
     raw = store.load_bytes("server_x25519_private")
     if not raw:
-        raise ValueError("Server private key not found in key store")
+        logger.warning(
+            "Server private key not found; auto-generating keypair in %s",
+            key_store_path,
+        )
+        public_b64 = generate_server_keypair(key_store_path)
+        logger.info("Generated server public key: %s", public_b64)
+        raw = store.load_bytes("server_x25519_private")
+        if not raw:
+            raise ValueError("Failed to generate server keypair")
     return x25519.X25519PrivateKey.from_private_bytes(raw)

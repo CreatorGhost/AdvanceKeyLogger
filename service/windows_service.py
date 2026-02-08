@@ -108,8 +108,13 @@ if "win32serviceutil" in sys.modules:
             win32event.SetEvent(self._stop_event)
             if self._process:
                 self._process.terminate()
+                try:
+                    self._process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
 
         def SvcDoRun(self):
+            self.ReportServiceStatus(win32service.SERVICE_RUNNING)
             args = [sys.executable, "-m", "main"] + sys.argv[1:]
             self._process = subprocess.Popen(args)
             win32event.WaitForSingleObject(self._stop_event, win32event.INFINITE)

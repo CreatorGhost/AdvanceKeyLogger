@@ -3,6 +3,7 @@ Ed25519 signing helpers.
 """
 from __future__ import annotations
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 
@@ -16,5 +17,5 @@ def verify_message(
     try:
         public_key.verify(signature, message)
         return True
-    except Exception:
+    except InvalidSignature:
         return False

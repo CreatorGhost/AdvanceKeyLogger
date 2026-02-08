@@ -20,7 +20,7 @@ def _load_config(path: str | None) -> dict[str, Any]:
         raise FileNotFoundError(f"Config not found: {config_path}")
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
-    return data.get("e2e_server", data)
+    return data.get("e2e_server", {})
 
 
 def parse_args() -> argparse.Namespace:

