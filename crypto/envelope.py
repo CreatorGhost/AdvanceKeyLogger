@@ -103,7 +103,9 @@ class HybridEnvelope:
             format=serialization.PublicFormat.Raw,
         )
 
+        version = 1
         signature_payload = _signature_payload(
+            version,
             sender_pub_bytes,
             ephemeral_pub_bytes,
             wrap_nonce,
@@ -114,7 +116,7 @@ class HybridEnvelope:
         signature = sign_message(sender_signing_key, signature_payload)
 
         return Envelope(
-            version=1,
+            version=version,
             sender_public_key=sender_pub_bytes,
             ephemeral_public_key=ephemeral_pub_bytes,
             wrap_nonce=wrap_nonce,
@@ -130,9 +132,12 @@ class HybridEnvelope:
         server_private_key: x25519.X25519PrivateKey,
         verify_signature: bool = True,
     ) -> bytes:
+        if envelope.version != 1:
+            raise ValueError(f"Unsupported envelope version: {envelope.version}")
         sender_public = ed25519.Ed25519PublicKey.from_public_bytes(envelope.sender_public_key)
         if verify_signature:
             signature_payload = _signature_payload(
+                envelope.version,
                 envelope.sender_public_key,
                 envelope.ephemeral_public_key,
                 envelope.wrap_nonce,
@@ -166,6 +171,7 @@ def _derive_wrap_key(shared_secret: bytes) -> bytes:
 
 
 def _signature_payload(
+    version: int,
     sender_pub: bytes,
     ephemeral_pub: bytes,
     wrap_nonce: bytes,
@@ -175,6 +181,7 @@ def _signature_payload(
 ) -> bytes:
     return b"|".join(
         [
+            version.to_bytes(4, "big"),
             sender_pub,
             ephemeral_pub,
             wrap_nonce,

