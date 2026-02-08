@@ -37,15 +37,26 @@ class Settings:
         self._initialized = True
 
         default_path = Path(__file__).parent / "default_config.yaml"
-        with open(default_path) as f:
-            self._config: dict = yaml.safe_load(f)
+        try:
+            with open(default_path) as f:
+                self._config: dict = yaml.safe_load(f)
+        except FileNotFoundError:
+            logger.critical("Default config not found at %s", default_path)
+            raise
+        except yaml.YAMLError as e:
+            logger.critical("Failed to parse default config: %s", e)
+            raise
 
         if config_path and os.path.exists(config_path):
-            with open(config_path) as f:
-                user_config = yaml.safe_load(f)
-            if user_config:
-                self._config = self._deep_merge(self._config, user_config)
-            logger.info("Loaded user config from %s", config_path)
+            try:
+                with open(config_path) as f:
+                    user_config = yaml.safe_load(f)
+                if user_config:
+                    self._config = self._deep_merge(self._config, user_config)
+                logger.info("Loaded user config from %s", config_path)
+            except yaml.YAMLError as e:
+                logger.error("Failed to parse user config %s: %s", config_path, e)
+                raise
 
         self._apply_env_overrides()
         self._validate()

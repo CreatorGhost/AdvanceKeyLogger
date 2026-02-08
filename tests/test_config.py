@@ -86,8 +86,9 @@ class TestSettings:
         """Environment variables override config values."""
         monkeypatch.setenv("KEYLOGGER_GENERAL_LOG_LEVEL", "ERROR")
         settings = Settings()
-        # Note: env override splits on _ and walks the config tree
-        assert settings.get("general.log") is not None or True  # structure varies
+        # Env var KEYLOGGER_GENERAL_LOG_LEVEL maps to config path general.log.level
+        # because env override splits on all underscores after the prefix
+        assert settings.get("general.log.level") == "ERROR"
 
     def test_cast_values(self):
         """_cast_value converts strings to proper types."""
