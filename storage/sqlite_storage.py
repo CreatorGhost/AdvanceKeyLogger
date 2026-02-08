@@ -155,5 +155,10 @@ class SQLiteStorage:
     def __enter__(self) -> SQLiteStorage:
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         self.close()
