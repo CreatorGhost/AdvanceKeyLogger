@@ -35,9 +35,10 @@ class WindowCapture(BaseCapture):
             if self._thread is not None:
                 return
             self._stop_event.clear()
-            self._thread = threading.Thread(target=self._run, daemon=True)
+            thread = threading.Thread(target=self._run, daemon=True)
+            self._thread = thread
             self._running = True
-        self._thread.start()
+            thread.start()
 
     def stop(self) -> None:
         with self._lifecycle_lock:
