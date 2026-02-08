@@ -15,6 +15,7 @@ Usage:
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 import logging
@@ -47,6 +48,17 @@ class SQLiteStorage:
                 sent INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS biometrics_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                sample_size INTEGER NOT NULL,
+                avg_dwell_ms REAL NOT NULL,
+                avg_flight_ms REAL NOT NULL,
+                error_rate REAL NOT NULL,
+                profile_json TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_captures_sent
                 ON captures(sent);
 
@@ -55,6 +67,9 @@ class SQLiteStorage:
 
             CREATE INDEX IF NOT EXISTS idx_captures_type
                 ON captures(type);
+
+            CREATE INDEX IF NOT EXISTS idx_profiles_created_at
+                ON biometrics_profiles(created_at);
         """)
         self._conn.commit()
 
@@ -146,6 +161,46 @@ class SQLiteStorage:
         if deleted:
             logger.info("Purged %d sent records older than %ds", deleted, older_than_seconds)
         return deleted
+
+    def insert_profile(self, profile: dict) -> int:
+        """
+        Insert a biometrics profile.
+
+        Args:
+            profile: Biometrics profile dict (see biometrics.models.BiometricsProfile.to_dict).
+
+        Returns:
+            The row ID of the inserted profile.
+        """
+        cursor = self._conn.execute(
+            "INSERT INTO biometrics_profiles "
+            "(profile_id, created_at, sample_size, avg_dwell_ms, avg_flight_ms, error_rate, profile_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                profile.get("profile_id", ""),
+                profile.get("created_at", ""),
+                int(profile.get("sample_size", 0)),
+                float(profile.get("avg_dwell_ms", 0.0)),
+                float(profile.get("avg_flight_ms", 0.0)),
+                float(profile.get("error_rate", 0.0)),
+                json.dumps(profile),
+            ),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def get_latest_profile(self) -> dict | None:
+        """Return the most recently created biometrics profile."""
+        cursor = self._conn.execute(
+            "SELECT profile_json FROM biometrics_profiles ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return None
 
     def close(self) -> None:
         """Close the database connection."""

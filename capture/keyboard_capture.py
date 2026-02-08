@@ -10,10 +10,11 @@ import threading
 import time
 from typing import Any
 
-from pynput.keyboard import Listener, Key
+from pynput.keyboard import Key, Listener
 
 from capture import register_capture
 from capture.base import BaseCapture
+from biometrics.collector import BiometricsCollector
 
 
 @register_capture("keyboard")
@@ -25,6 +26,15 @@ class KeyboardCapture(BaseCapture):
         self._buffer: list[dict[str, Any]] = []
         self._include_key_up = bool(config.get("include_key_up", False))
         self._max_buffer = int(config.get("max_buffer", 10000))
+        global_enabled = bool(
+            (global_config or {}).get("biometrics", {}).get("enabled", False)
+        )
+        self._biometrics_enabled = bool(config.get("biometrics_enabled", False)) and global_enabled
+        self._biometrics = (
+            BiometricsCollector(max_buffer=self._max_buffer)
+            if self._biometrics_enabled
+            else None
+        )
         self._lock = threading.Lock()
         self._listener: Listener | None = None
 
@@ -51,18 +61,27 @@ class KeyboardCapture(BaseCapture):
     def collect(self) -> list[dict[str, Any]]:
         with self._lock:
             if not self._buffer:
-                return []
-            data = list(self._buffer)
+                data = []
+            else:
+                data = list(self._buffer)
             self._buffer.clear()
+        if self._biometrics:
+            data.extend(self._biometrics.collect())
         return data
 
     def _on_press(self, key) -> None:
-        self._append(self._format_key(key))
+        text = self._format_key(key)
+        self._append(text)
+        if self._biometrics:
+            self._biometrics.on_key_down(text)
 
     def _on_release(self, key) -> None:
+        text = self._format_key(key)
+        if self._biometrics:
+            self._biometrics.on_key_up(text)
         if not self._include_key_up:
             return
-        self._append(f"{self._format_key(key)}_up")
+        self._append(f"{text}_up")
 
     def _append(self, text: str) -> None:
         if not text:

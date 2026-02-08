@@ -9,6 +9,7 @@ capture:
     enabled: false
     include_key_up: false
     max_buffer: 10000
+    biometrics_enabled: false
   mouse:
     enabled: false
     track_movement: false
@@ -75,3 +76,40 @@ encryption:
 compression:
   enabled: true
   format: "zip"
+
+biometrics:
+  enabled: false
+  sample_size: 500
+  profile_id_prefix: "usr"
+  store_profiles: true
+
+pipeline:
+  enabled: false
+  middleware:
+    - name: timestamp_enricher
+      enabled: true
+    - name: context_annotator
+      enabled: true
+    - name: deduplicator
+      enabled: true
+      config:
+        window_seconds: 5
+        types: ["clipboard", "window"]
+    - name: content_truncator
+      enabled: true
+      config:
+        default_max_length: 10000
+    - name: rate_limiter
+      enabled: true
+      config:
+        max_events_per_second: 50
+    - name: conditional_router
+      enabled: false
+      config:
+        routes:
+          screenshot: "s3"
+          keystroke: "sqlite"
+    - name: metrics_emitter
+      enabled: true
+      config:
+        log_interval_seconds: 60
