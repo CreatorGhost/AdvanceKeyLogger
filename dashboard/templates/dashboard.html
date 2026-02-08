@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Overview{% endblock %}
+
+{% block content %}
+<!-- Metric Tabs -->
+<div class="metric-tabs" id="metric-tabs">
+    <div class="metric-tab active" data-metric="captures">
+        <div class="metric-tab-label">Total Captures</div>
+        <div class="metric-tab-value" id="totalCaptures">--</div>
+    </div>
+    <div class="metric-tab" data-metric="pending">
+        <div class="metric-tab-label">Pending</div>
+        <div class="metric-tab-value" id="pendingCount">--</div>
+    </div>
+    <div class="metric-tab" data-metric="screenshots">
+        <div class="metric-tab-label">Screenshots</div>
+        <div class="metric-tab-value" id="screenshotsCount">--</div>
+    </div>
+    <div class="metric-tab" data-metric="uptime">
+        <div class="metric-tab-label">Uptime</div>
+        <div class="metric-tab-value" id="uptimeValue">--</div>
+    </div>
+</div>
+
+<div class="content">
+    <!-- Recent Activity -->
+    <div class="section">
+        <div class="card">
+            <div class="section-header">
+                <div class="section-title">Recent activity</div>
+                <a href="/captures" class="section-link">View all &#8594;</a>
+            </div>
+            <div class="tbl-wrap-mobile">
+                <table class="tbl" id="activityTable">
+                    <thead>
+                        <tr>
+                            <th>Event</th>
+                            <th>Details</th>
+                            <th style="text-align:right">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityBody">
+                        <tr><td colspan="3" class="empty-state-sm">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-list-mobile" id="activityMobile"></div>
+        </div>
+    </div>
+
+    <!-- Two Columns: Modules + Resources/Transport -->
+    <div class="two-col">
+        <!-- Modules -->
+        <div class="section">
+            <div class="card">
+                <div class="section-header">
+                    <div class="section-title">Modules</div>
+                </div>
+                <div id="modulesList">
+                    <div class="empty-state-sm">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Resources + Transport -->
+        <div>
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Resources</div>
+                    </div>
+                    <div id="resourcesPanel">
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">CPU</span>
+                                <span class="res-value" id="resCpu">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resCpuBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Memory</span>
+                                <span class="res-value" id="resMemory">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resMemoryBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Storage</span>
+                                <span class="res-value" id="resStorage">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resStorageBar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Transport</div>
+                    </div>
+                    <div id="transportPanel">
+                        <div class="queue-row">
+                            <span class="queue-label">Queue</span>
+                            <span class="queue-val" id="transportQueue">--</span>
+                        </div>
+                        <div class="queue-row">
+                            <span class="queue-label">Status</span>
+                            <span class="queue-val" id="transportStatus">
+                                <span class="queue-dot"></span> Active
+                            </span>
+                        </div>
+                        <div class="queue-row">
+                            <span class="queue-label">Sent</span>
+                            <span class="queue-val" id="transportSent">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

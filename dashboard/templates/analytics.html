@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block content %}
+<!-- Summary Stats -->
+<div class="stats-grid" id="analyticsStats">
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-blue">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+        </div>
+        <div>
+            <span class="stat-value" id="analyticsTotalEvents">--</span>
+            <span class="stat-label">Total Events</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-green">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+        </div>
+        <div>
+            <span class="stat-value" id="analyticsPeakHour">--</span>
+            <span class="stat-label">Peak Hour</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-purple">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+        </div>
+        <div>
+            <span class="stat-value" id="analyticsPeakDay">--</span>
+            <span class="stat-label">Most Active Day</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-amber">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+        </div>
+        <div>
+            <span class="stat-value" id="analyticsDbSize">--</span>
+            <span class="stat-label">DB Size</span>
+        </div>
+    </div>
+</div>
+
+<!-- Heatmap -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Activity Heatmap</h2>
+        <span class="card-subtitle">Events by hour and day of week</span>
+    </div>
+    <div class="heatmap-container" id="heatmapContainer">
+        <div class="empty-state">Loading heatmap data...</div>
+    </div>
+</div>
+
+<!-- Hourly Distribution -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Hourly Distribution</h2>
+    </div>
+    <div style="padding:16px">
+        <div class="chart-container">
+            <canvas id="hourlyChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Daily Distribution -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Daily Distribution</h2>
+    </div>
+    <div style="padding:16px">
+        <div class="chart-container">
+            <canvas id="dailyChart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/analytics.js"></script>
+{% endblock %}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Dashboard{% endblock %} — AKL</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-sans/style.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/style.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    {% block body %}
+    <!-- Top Navbar -->
+    <nav class="topnav">
+        <div class="topnav-left">
+            <button class="hamburger" id="hamburger-btn">&#9776;</button>
+            <span class="icon">&#9670;</span>
+            <span class="brand">AKL</span>
+            <span class="sep">/</span>
+            <span class="page">{% block page_title %}Dashboard{% endblock %}</span>
+        </div>
+        <div class="topnav-right">
+            <div class="search-wrapper">
+                <input type="text" class="search-input" placeholder="Search..." id="search-trigger" readonly>
+                <span class="search-badge">&#8984;K</span>
+            </div>
+            <button class="theme-toggle" id="theme-toggle" title="Toggle theme">
+                <span class="icon-sun">&#9788;</span>
+                <span class="icon-moon">&#9790;</span>
+            </button>
+            <div class="nav-avatar">{{ (user[0]|upper) if user else 'A' }}</div>
+        </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-nav">
+            <div class="nav-section">
+                <span class="nav-label">Overview</span>
+                <a href="/dashboard" class="nav-item {% if page == 'dashboard' %}active{% endif %}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                        <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+                    </svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/analytics" class="nav-item {% if page == 'analytics' %}active{% endif %}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6" y1="20" x2="6" y2="14"/>
+                    </svg>
+                    <span>Analytics</span>
+                </a>
+            </div>
+            <div class="nav-sep"></div>
+            <div class="nav-section">
+                <span class="nav-label">Data</span>
+                <a href="/captures" class="nav-item {% if page == 'captures' %}active{% endif %}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/>
+                        <line x1="12" y1="4" x2="12" y2="20"/>
+                    </svg>
+                    <span>Captures</span>
+                </a>
+                <a href="/screenshots" class="nav-item {% if page == 'screenshots' %}active{% endif %}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                    </svg>
+                    <span>Screenshots</span>
+                </a>
+            </div>
+            <div class="nav-sep"></div>
+            <div class="nav-section">
+                <span class="nav-label">System</span>
+                <a href="/settings" class="nav-item {% if page == 'settings' %}active{% endif %}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    <span>Settings</span>
+                </a>
+            </div>
+        </div>
+        <div class="sidebar-footer">
+            <div class="sidebar-user">
+                <div class="sidebar-avatar">{{ (user[0]|upper) if user else 'A' }}</div>
+                <span class="sidebar-username">{{ user or 'Admin' }}</span>
+            </div>
+            <form action="/auth/logout" method="POST" style="margin:0">
+                <button type="submit" class="logout-btn" title="Logout">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="content-area">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    <!-- Command Palette -->
+    <div class="cmd-overlay" id="cmd-overlay">
+        <div class="cmd-card">
+            <input type="text" class="cmd-input" id="cmd-input" placeholder="Search pages...">
+            <div class="cmd-list" id="cmd-list">
+                <div class="cmd-item" data-href="/dashboard">Dashboard</div>
+                <div class="cmd-item" data-href="/analytics">Analytics</div>
+                <div class="cmd-item" data-href="/captures">Captures</div>
+                <div class="cmd-item" data-href="/screenshots">Screenshots</div>
+                <div class="cmd-item" data-href="/settings">Settings</div>
+            </div>
+            <div class="cmd-footer">
+                <span><kbd>&#8593;&#8595;</kbd> Navigate</span>
+                <span><kbd>&#9166;</kbd> Select</span>
+                <span><kbd>esc</kbd> Close</span>
+            </div>
+        </div>
+    </div>
+    {% endblock %}
+
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/cmd-palette.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

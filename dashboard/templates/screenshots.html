@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Screenshots{% endblock %}
+{% block page_title %}Screenshots{% endblock %}
+
+{% block content %}
+<!-- Controls -->
+<div class="card">
+    <div class="filter-bar" style="padding:0">
+        <div class="filter-group">
+            <label class="filter-label">Show</label>
+            <select id="screenshotLimit" class="form-select">
+                <option value="12">12</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" id="refreshScreenshots">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Refresh
+        </button>
+    </div>
+</div>
+
+<!-- Gallery -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Screenshot Gallery</h2>
+        <span class="badge" id="screenshotCountBadge">--</span>
+    </div>
+    <div class="screenshot-grid" id="screenshotGrid">
+        <div class="empty-state" style="grid-column:1/-1">Loading screenshots...</div>
+    </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-content">
+        <button class="lightbox-close" id="lightboxClose">&times;</button>
+        <img id="lightboxImage" src="" alt="Screenshot">
+        <div class="lightbox-info" id="lightboxInfo"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/screenshots.js"></script>
+{% endblock %}

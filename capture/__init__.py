@@ -17,9 +17,13 @@ Then load enabled captures from config:
 """
 from __future__ import annotations
 
+import inspect
+import logging
 from typing import Any
 
 from capture.base import BaseCapture
+
+logger = logging.getLogger(__name__)
 
 _CAPTURE_REGISTRY: dict[str, type[BaseCapture]] = {}
 
@@ -73,8 +77,36 @@ def create_enabled_captures(config: dict[str, Any]) -> list[BaseCapture]:
         if isinstance(settings, dict) and settings.get("enabled", False):
             try:
                 cls = get_capture_class(name)
-                captures.append(cls(settings))
+                sig = inspect.signature(cls.__init__)
+                if "global_config" in sig.parameters:
+                    captures.append(cls(settings, global_config=config))
+                else:
+                    logger.debug(
+                        "%s.__init__ does not accept 'global_config'; "
+                        "calling with settings only",
+                        cls.__name__,
+                    )
+                    captures.append(cls(settings))
             except ValueError:
+                # Unknown capture name - skip silently (not registered)
                 pass
+            except Exception as exc:
+                # Log and skip any other instantiation errors
+                logger.warning("Failed to instantiate capture '%s': %s", name, exc)
 
     return captures
+
+
+# Import built-in capture modules so they self-register.
+
+for _module in (
+    "keyboard_capture",
+    "mouse_capture",
+    "screenshot_capture",
+    "clipboard_capture",
+    "window_capture",
+):
+    try:
+        __import__(f"{__name__}.{_module}")
+    except Exception as exc:  # pragma: no cover - optional deps/platforms
+        logger.debug("Capture module '%s' not loaded: %s", _module, exc)

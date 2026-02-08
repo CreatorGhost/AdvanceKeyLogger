@@ -38,6 +38,7 @@ def retry(
     max_attempts: int = 3,
     backoff_base: float = 2.0,
     exceptions: tuple[type[Exception], ...] = (Exception,),
+    retry_on_false: bool = False,
 ):
     """
     Decorator that retries a function with exponential backoff.
@@ -60,7 +61,7 @@ def retry(
         def wrapper(*args, **kwargs):
             for attempt in range(max_attempts):
                 try:
-                    return func(*args, **kwargs)
+                    result = func(*args, **kwargs)
                 except exceptions as e:
                     if attempt == max_attempts - 1:
                         logger.error(
@@ -80,6 +81,23 @@ def retry(
                         e,
                     )
                     time.sleep(wait_time)
+                    continue
+
+                if retry_on_false and result is False:
+                    if attempt == max_attempts - 1:
+                        return False
+                    wait_time = backoff_base**attempt
+                    logger.warning(
+                        "%s attempt %d/%d returned False, retrying in %.1fs",
+                        func.__name__,
+                        attempt + 1,
+                        max_attempts,
+                        wait_time,
+                    )
+                    time.sleep(wait_time)
+                    continue
+
+                return result
 
         return wrapper
 
@@ -101,9 +119,41 @@ class TransportQueue:
         """Add an item to the transport queue."""
         self._queue.append(item)
 
-    def enqueue_many(self, items: list[dict[str, Any]]) -> None:
-        """Add multiple items to the transport queue."""
+    def enqueue_many(self, items: list[dict[str, Any]]) -> int:
+        """
+        Add multiple items to the transport queue.
+
+        Returns the number of items that were dropped due to queue capacity.
+        Logs a warning if any items are dropped.
+        """
+        if not items:
+            return 0
+
+        max_size = self._queue.maxlen
+        if max_size is None:
+            # Unbounded queue, no drops possible
+            self._queue.extend(items)
+            return 0
+
+        current_size = len(self._queue)
+        available_space = max_size - current_size
+        incoming_count = len(items)
+
+        if incoming_count <= available_space:
+            # All items fit, no drops
+            self._queue.extend(items)
+            return 0
+
+        # Would exceed capacity — calculate how many will be dropped
+        dropped_count = incoming_count - available_space
+        logger.warning(
+            "TransportQueue overflow: dropping %d oldest items to make room for %d new items (capacity: %d)",
+            dropped_count,
+            incoming_count,
+            max_size,
+        )
         self._queue.extend(items)
+        return dropped_count
 
     def drain(self, batch_size: int = 50) -> list[dict[str, Any]]:
         """

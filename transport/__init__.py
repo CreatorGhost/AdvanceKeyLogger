@@ -17,6 +17,7 @@ Then load the configured transport:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from transport.base import BaseTransport
@@ -67,3 +68,18 @@ def create_transport(config: dict[str, Any]) -> BaseTransport:
 
     cls = get_transport_class(method)
     return cls(method_config)
+
+
+# Import built-in transport modules so they self-register.
+logger = logging.getLogger(__name__)
+
+for _module in (
+    "email_transport",
+    "http_transport",
+    "ftp_transport",
+    "telegram_transport",
+):
+    try:
+        __import__(f"{__name__}.{_module}")
+    except Exception as exc:  # pragma: no cover - optional deps/platforms
+        logger.debug("Transport module '%s' not loaded: %s", _module, exc)

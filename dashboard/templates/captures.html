@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Captures{% endblock %}
+{% block page_title %}Captures{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="card">
+    <div class="filter-bar" style="padding:0">
+        <div class="filter-group">
+            <label class="filter-label">Type</label>
+            <select id="captureTypeFilter" class="form-select">
+                <option value="">All Types</option>
+                <option value="keyboard">Keyboard</option>
+                <option value="mouse">Mouse</option>
+                <option value="clipboard">Clipboard</option>
+                <option value="window">Window</option>
+                <option value="screenshot">Screenshot</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label class="filter-label">Limit</label>
+            <select id="captureLimitFilter" class="form-select">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" id="refreshCaptures">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Refresh
+        </button>
+    </div>
+</div>
+
+<!-- Captures Table -->
+<div class="card" style="padding:0">
+    <div class="card-header" style="padding:14px 16px;margin-bottom:0;border-bottom:1px solid var(--border)">
+        <h2 class="card-title">Captured Data</h2>
+        <span class="badge" id="captureCountBadge">--</span>
+    </div>
+    <div class="table-wrapper">
+        <table class="data-table" id="capturesTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Type</th>
+                    <th>Data</th>
+                    <th>Timestamp</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody id="capturesBody">
+                <tr><td colspan="5" class="empty-state">Loading captures...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/captures.js"></script>
+{% endblock %}

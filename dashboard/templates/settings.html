@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<div class="grid-2col">
+    <!-- Capture Settings -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Capture Configuration</h2>
+        </div>
+        <div class="settings-group" id="captureSettings">
+            <div class="empty-state-sm">Loading configuration...</div>
+        </div>
+    </div>
+
+    <!-- Transport Settings -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Transport Configuration</h2>
+        </div>
+        <div class="settings-group" id="transportSettings">
+            <div class="empty-state-sm">Loading configuration...</div>
+        </div>
+    </div>
+
+    <!-- General Settings -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">General Settings</h2>
+        </div>
+        <div class="settings-group" id="generalSettings">
+            <div class="empty-state-sm">Loading configuration...</div>
+        </div>
+    </div>
+
+    <!-- Storage Settings -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Storage & Encryption</h2>
+        </div>
+        <div class="settings-group" id="storageSettings">
+            <div class="empty-state-sm">Loading configuration...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Raw Config -->
+<div class="card" style="padding:0">
+    <div class="card-header" style="padding:14px 16px;margin-bottom:0;border-bottom:1px solid var(--border)">
+        <h2 class="card-title">Raw Configuration (YAML)</h2>
+        <button class="btn btn-sm" id="copyConfig">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy
+        </button>
+    </div>
+    <div style="padding:16px">
+        <pre class="config-raw" id="rawConfig">Loading...</pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}

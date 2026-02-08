@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Login{% endblock %}
+
+{% block body %}
+<div class="login-page">
+    <div class="login-header-bar">
+        <button class="theme-toggle" id="theme-toggle" title="Toggle theme">
+            <span class="icon-sun">&#9788;</span>
+            <span class="icon-moon">&#9790;</span>
+        </button>
+    </div>
+
+    <div class="login-icon">&#9670;</div>
+    <div class="login-brand">AKL</div>
+    <p class="login-subtitle">Sign in to your dashboard</p>
+
+    {% if error %}
+    <div style="margin-top:16px;width:100%;max-width:360px">
+        <div class="alert alert-error">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+            {{ error }}
+        </div>
+    </div>
+    {% endif %}
+
+    <form action="{{ url_for('login') }}" method="POST" class="login-form">
+        <label for="username" class="sr-only">Username</label>
+        <input type="text" id="username" name="username" class="login-input" placeholder="Username" autocomplete="username" required autofocus>
+        <label for="password" class="sr-only">Password</label>
+        <input type="password" id="password" name="password" class="login-input" placeholder="Password" autocomplete="current-password" required>
+        <button type="submit" class="login-btn-primary">Continue</button>
+    </form>
+
+    <div class="login-footer">
+        AKL Dashboard v1.0
+    </div>
+</div>
+{% endblock %}

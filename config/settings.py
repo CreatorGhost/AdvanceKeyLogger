@@ -110,13 +110,18 @@ class Settings:
         """
         Allow environment variables to override config.
 
-        Convention: KEYLOGGER_SECTION_KEY=value
-        Example:    KEYLOGGER_GENERAL_LOG_LEVEL=DEBUG
+        Convention: KEYLOGGER_SECTION__KEY=value (double underscore separates levels)
+        Example:    KEYLOGGER_GENERAL__LOG_LEVEL=DEBUG -> general.log_level
+
+        Double underscore (__) separates config path levels, single underscore
+        within a level is preserved. This allows keys like "log_level" to work.
         """
         prefix = "KEYLOGGER_"
         for env_key, env_value in os.environ.items():
             if env_key.startswith(prefix):
-                parts = env_key[len(prefix) :].lower().split("_")
+                # Split on double underscore to get path parts
+                # Each part can contain single underscores (e.g., log_level)
+                parts = env_key[len(prefix) :].lower().split("__")
                 self._set_nested(self._config, parts, env_value)
                 logger.debug("Env override: %s = %s", env_key, env_value)
 
