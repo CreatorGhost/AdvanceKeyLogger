@@ -65,18 +65,30 @@ class StorageManager:
             return 0
 
         target = int(self.max_size_bytes * 0.8)
-        files = sorted(
-            [f for f in self.data_dir.rglob("*") if f.is_file()],
-            key=lambda f: f.stat().st_mtime,
-        )
+        cached: list[tuple[Path, float, int]] = []
+        for f in self.data_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            try:
+                st = f.stat()
+                cached.append((f, st.st_mtime, st.st_size))
+            except OSError:
+                continue
+        cached.sort(key=lambda t: t[1])
 
+        total = sum(sz for _, _, sz in cached)
         deleted = 0
-        while self.get_total_size() > target and files:
-            oldest = files.pop(0)
-            size = oldest.stat().st_size
-            oldest.unlink()
+        for path, _mtime, size in cached:
+            if total <= target:
+                break
+            try:
+                path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to rotate %s: %s", path.name, exc)
+                continue
             deleted += 1
-            logger.info("Rotated out: %s (%d bytes)", oldest.name, size)
+            total -= size
+            logger.info("Rotated out: %s (%d bytes)", path.name, size)
 
         if deleted:
             logger.info(

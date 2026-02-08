@@ -67,13 +67,15 @@ class RuleRegistry:
         now = time.time()
         if now - self._last_check < self.reload_interval:
             return
-        self._last_check = now
         if not self.rules_path or not os.path.exists(self.rules_path):
+            self._last_check = now
             return
         try:
             mtime = os.path.getmtime(self.rules_path)
         except OSError:
+            self._last_check = now
             return
+        self._last_check = now
         if mtime > self._last_mtime:
             self.load()
 
