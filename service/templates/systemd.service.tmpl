@@ -1,0 +1,16 @@
+[Unit]
+Description={description}
+After=network.target graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart={exec_start}
+Restart=on-failure
+RestartSec={restart_sec}
+StartLimitBurst={start_limit_burst}
+StartLimitIntervalSec={start_limit_interval}
+Environment=DISPLAY={display}
+
+[Install]
+WantedBy=default.target
