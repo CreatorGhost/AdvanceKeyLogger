@@ -108,6 +108,7 @@ for _module in (
     "screenshot_capture",
     "clipboard_capture",
     "window_capture",
+    "audio_capture",
 ):
     try:
         __import__(f"{__name__}.{_module}")

