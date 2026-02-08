@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 def create_app(config: dict[str, Any]) -> FastAPI:
     app = FastAPI()
     server_keys = load_server_private_keys(config)
+    if not server_keys:
+        raise RuntimeError("no server keys configured; cannot start ingest server")
     audit_logger = get_audit_logger(config)
 
     auth_tokens = list(config.get("auth_tokens", []))
@@ -122,7 +124,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             last_sequences[sender_key_b64] = envelope.sequence
 
         payload = None
-        decrypt_error = None
+        decrypt_error: str | Exception = "no server keys configured"
         for key in server_keys:
             try:
                 payload = HybridEnvelope.decrypt(envelope, key)
