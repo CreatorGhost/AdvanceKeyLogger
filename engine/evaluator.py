@@ -82,7 +82,9 @@ class SafeEvaluator:
             value = self._eval(node.value, context)
             if isinstance(value, dict):
                 return value.get(node.attr)
-            return getattr(value, node.attr, None)
+            raise ValueError(
+                f"Attribute access only allowed on dict objects, got {type(value).__name__}"
+            )
 
         if isinstance(node, ast.Constant):
             return node.value

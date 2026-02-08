@@ -154,3 +154,12 @@ rules:
   mode: "all"                 # "all" or "first"
   reload_interval_seconds: 2
   keystroke_buffer_max: 1024
+
+service:
+  name: "advancekeylogger"
+  description: "AdvanceKeyLogger Monitoring Service"
+  config_path: "~/.config/advancekeylogger/config.yaml"
+  restart_sec: 10
+  start_limit_burst: 3
+  start_limit_interval: 60
+  display: ":0"
