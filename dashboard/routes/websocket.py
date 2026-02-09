@@ -40,7 +40,17 @@ class ConnectionManager:
         logger.info("Dashboard client connected")
 
     async def connect_agent(self, websocket: WebSocket, agent_id: str) -> None:
-        """Connect agent client."""
+        """Connect agent client, gracefully closing any previous connection."""
+        # Close existing connection for this agent if present
+        previous = self.agent_connections.get(agent_id)
+        if previous is not None:
+            try:
+                await previous.close(code=1012, reason="Replaced by new connection")
+            except Exception:
+                pass
+            self.active_connections.discard(previous)
+            logger.info(f"Agent {agent_id} previous connection closed (reconnection)")
+
         await websocket.accept()
         self.active_connections.add(websocket)
         self.agent_connections[agent_id] = websocket
@@ -114,9 +124,44 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _extract_ws_token(websocket: WebSocket) -> str | None:
+    """Extract auth token from WebSocket headers or query params."""
+    # Try Authorization header first
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    # Fall back to query param
+    return websocket.query_params.get("token")
+
+
+def _validate_session_token(token: str) -> str | None:
+    """Validate a session token and return username, or None if invalid."""
+    from dashboard.auth import _sessions, _SESSION_TTL
+    import time as _time
+
+    session = _sessions.get(token)
+    if not session:
+        return None
+    if _time.time() - session["created"] > _SESSION_TTL:
+        _sessions.pop(token, None)
+        return None
+    return session["username"]
+
+
 @ws_router.websocket("/ws/dashboard")
 async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
-    """WebSocket endpoint for dashboard clients."""
+    """WebSocket endpoint for dashboard clients (authenticated)."""
+    # Authenticate before accepting
+    token = _extract_ws_token(websocket)
+    if not token:
+        await websocket.close(code=4001, reason="Missing authentication token")
+        return
+
+    user = _validate_session_token(token)
+    if not user:
+        await websocket.close(code=4003, reason="Invalid or expired token")
+        return
+
     await manager.connect_dashboard(websocket)
 
     try:
@@ -136,7 +181,19 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
 
 @ws_router.websocket("/ws/agent/{agent_id}")
 async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
-    """WebSocket endpoint for agent clients."""
+    """WebSocket endpoint for agent clients (authenticated)."""
+    # Authenticate the agent before accepting
+    token = _extract_ws_token(websocket)
+    if not token:
+        await websocket.close(code=4001, reason="Missing authentication token")
+        return
+
+    # Validate that the token belongs to the requested agent_id
+    agent_user = _validate_session_token(token)
+    if not agent_user:
+        await websocket.close(code=4003, reason="Invalid or expired token")
+        return
+
     await manager.connect_agent(websocket, agent_id)
 
     try:
@@ -279,13 +336,18 @@ async def _get_recent_captures() -> List[Dict[str, Any]]:
 async def _update_agent_status(agent_id: str, status_data: Dict[str, Any]) -> None:
     """Update agent status in storage."""
     # In production, this would update the actual agent status in database
-    logger.info(f"Agent {agent_id} status updated: {status_data}")
+    logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
 
 
 async def _handle_capture_data(agent_id: str, capture_data: Dict[str, Any]) -> None:
     """Handle capture data from agent."""
     # In production, this would store the capture data
-    logger.info(f"Agent {agent_id} sent capture: {capture_data}")
+    logger.debug(
+        "Agent %s sent capture (type=%s, size=%d)",
+        agent_id,
+        capture_data.get("type", "unknown"),
+        len(str(capture_data)),
+    )
 
 
 async def _handle_command_response(agent_id: str, response_data: Dict[str, Any]) -> None:

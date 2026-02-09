@@ -219,6 +219,34 @@ def encrypt_with_public_key(public_key_pem: bytes, data: bytes) -> bytes:
     return encrypted
 
 
+def sign_with_private_key(private_key_pem: bytes, data: bytes) -> bytes:
+    """
+    Sign data using RSA private key with PSS padding.
+
+    Args:
+        private_key_pem: Private key in PEM format.
+        data: Data to sign.
+
+    Returns:
+        Signature bytes.
+    """
+    private_key = cast(
+        RSAPrivateKey, serialization.load_pem_private_key(private_key_pem, password=None)
+    )
+
+    signature = private_key.sign(
+        data,
+        asymmetric_padding.PSS(
+            mgf=asymmetric_padding.MGF1(hashes.SHA256()),
+            salt_length=asymmetric_padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+
+    logger.debug("Signed %d bytes with RSA private key (PSS)", len(data))
+    return signature
+
+
 def decrypt_with_private_key(private_key_pem: bytes, encrypted_data: bytes) -> bytes:
     """
     Decrypt data using RSA private key.

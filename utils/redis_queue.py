@@ -69,13 +69,17 @@ class Message:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Message":
         """Create message from dictionary."""
-        return cls(
+        msg = cls(
             message_id=data["message_id"],
             data=data["data"],
             priority=MessagePriority(data["priority"]),
             ttl=data["ttl"],
             metadata=data.get("metadata", {}),
         )
+        msg.timestamp = data.get("timestamp", msg.timestamp)
+        msg.attempts = data.get("attempts", 0)
+        msg.max_attempts = data.get("max_attempts", 3)
+        return msg
 
 
 class RedisQueue:
@@ -124,11 +128,14 @@ class RedisQueue:
             # Publish to channel
             await self._redis.publish(channel_key, json.dumps(message_data))
 
-            # Add to persistent queue if needed
+            # Add to persistent queue with per-message expiry as the score
             if message.ttl > 0:
                 queue_key = f"{self.queue_prefix}:queue:{channel}"
-                await self._redis.zadd(queue_key, {json.dumps(message_data): message.timestamp})
-                await self._redis.expire(queue_key, message.ttl)
+                expiry = message.timestamp + message.ttl
+                await self._redis.zadd(queue_key, {json.dumps(message_data): expiry})
+                # Remove expired entries
+                now = time.time()
+                await self._redis.zremrangebyscore(queue_key, "-inf", now)
 
             logger.debug(f"Published message to channel {channel}")
             return True
@@ -191,11 +198,25 @@ class RedisQueue:
         try:
             queue_key = f"{self.queue_prefix}:queue:{channel}"
 
-            # Remove message from queue
-            await self._redis.zremrangebyscore(queue_key, message_id, message_id)
+            # Scan sorted-set members to find the one matching message_id
+            members = await self._redis.zrange(queue_key, 0, -1)
+            removed = False
+            for member in members:
+                try:
+                    member_data = json.loads(member)
+                    if member_data.get("message", {}).get("message_id") == message_id:
+                        await self._redis.zrem(queue_key, member)
+                        removed = True
+                        break
+                except (json.JSONDecodeError, TypeError):
+                    continue
 
-            logger.debug(f"Acknowledged message {message_id} on {channel}")
-            return True
+            if removed:
+                logger.debug(f"Acknowledged message {message_id} on {channel}")
+            else:
+                logger.warning(f"Message {message_id} not found in queue {channel}")
+
+            return removed
 
         except Exception as e:
             logger.error(f"Failed to acknowledge message {message_id}: {e}")
@@ -254,8 +275,18 @@ class RedisTransport(BaseTransport):
     def _run_async_loop(self) -> None:
         """Run async event loop in separate thread."""
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._async_connect())
-        self._loop.run_forever()
+        try:
+            self._loop.run_until_complete(self._async_connect())
+            self._loop.run_forever()
+        except Exception as e:
+            logger.error(f"Redis async loop failed: {e}")
+            self._connected = False
+        finally:
+            try:
+                self._loop.stop()
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _async_connect(self) -> None:
         """Async connection handler."""

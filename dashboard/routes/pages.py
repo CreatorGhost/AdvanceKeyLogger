@@ -46,15 +46,15 @@ async def dashboard_page(request: Request) -> HTMLResponse:
 @pages_router.get("/live", response_class=HTMLResponse)
 async def live_dashboard_page(request: Request) -> HTMLResponse:
     """Render real-time live dashboard."""
-    redirect = require_auth(request)
-    if redirect:
-        return redirect
+    user = get_current_user(request)
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
-        "live-dashboard.html",
+        "dashboard.html",
         {
-            "user": get_current_user(request),
+            "user": user,
             "page": "live",
         },
     )

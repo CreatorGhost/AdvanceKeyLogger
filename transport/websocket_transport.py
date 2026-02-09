@@ -8,6 +8,7 @@ Supports automatic reconnection, compression, and heartbeat mechanisms.
 from __future__ import annotations
 
 import asyncio
+import base64
 import gzip
 import json
 import logging
@@ -32,7 +33,8 @@ class WebSocketTransport(BaseTransport):
         self._url = config.get("url")
         self._reconnect_interval = float(config.get("reconnect_interval", 5))
         self._heartbeat_interval = float(config.get("heartbeat_interval", 30))
-        self._compression = config.get("compression", True)
+        # Use None for websockets compression param; manual gzip is used in send/receive
+        self._compression = None
         self._ssl_context = None
         self._websocket: Optional[Any] = None
         self._connected = False
@@ -80,8 +82,18 @@ class WebSocketTransport(BaseTransport):
     def _run_async_loop(self) -> None:
         """Run async event loop in separate thread."""
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._async_connect())
-        self._loop.run_forever()
+        try:
+            self._loop.run_until_complete(self._async_connect())
+            self._loop.run_forever()
+        except Exception as e:
+            logger.error(f"Async loop failed: {e}")
+            self._connected = False
+        finally:
+            try:
+                self._loop.stop()
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _async_connect(self) -> None:
         """Async connection handler."""
@@ -143,17 +155,27 @@ class WebSocketTransport(BaseTransport):
             return False
 
         try:
-            # Prepare message
+            # Prepare message — handle binary data safely
+            if metadata is None:
+                metadata = {}
+            if isinstance(data, bytes):
+                try:
+                    data_str = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    data_str = base64.b64encode(data).decode("ascii")
+                    metadata["encoding"] = "base64"
+            else:
+                data_str = data
+
             message = {
                 "timestamp": time.time(),
-                "data": data.decode() if isinstance(data, bytes) else data,
-                "metadata": metadata or {},
+                "data": data_str,
+                "metadata": metadata,
             }
 
-            # Serialize and compress if needed
+            # Serialize and compress (manual gzip)
             serialized = json.dumps(message).encode()
-            if self._compression:
-                serialized = gzip.compress(serialized)
+            serialized = gzip.compress(serialized)
 
             # Send message using event loop
             future = asyncio.run_coroutine_threadsafe(self._websocket.send(serialized), self._loop)
@@ -178,9 +200,8 @@ class WebSocketTransport(BaseTransport):
                 # Receive message
                 message = await self._websocket.recv()
 
-                # Decompress if needed
-                if self._compression:
-                    message = gzip.decompress(message)
+                # Decompress (manual gzip matching send path)
+                message = gzip.decompress(message)
 
                 # Parse JSON
                 data = json.loads(message)
@@ -198,6 +219,7 @@ class WebSocketTransport(BaseTransport):
                 logger.error(f"Receive error: {e}")
                 await asyncio.sleep(1)
 
+    @property
     def is_connected(self) -> bool:
         """Check if WebSocket is connected."""
         return self._connected and self._websocket is not None

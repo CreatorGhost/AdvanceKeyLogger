@@ -8,21 +8,28 @@ Provides secure communication, command distribution, and fleet coordination.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 import struct
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
-from utils.crypto import generate_rsa_key_pair, encrypt_with_public_key, decrypt_with_private_key
 from transport.base import BaseTransport
 from transport.http_transport import HttpTransport
+from utils.crypto import (
+    decrypt_with_private_key,
+    encrypt_with_public_key,
+    generate_rsa_key_pair,
+    sign_with_private_key,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -180,7 +187,7 @@ class ProtocolMessage:
             "agent_id": self.agent_id,
             "timestamp": self.timestamp,
             "payload": self.payload,
-            "signature": self.signature.decode() if self.signature else None,
+            "signature": base64.b64encode(self.signature).decode("ascii") if self.signature else None,
         }
         return json.dumps(data).encode("utf-8")
 
@@ -188,11 +195,12 @@ class ProtocolMessage:
     def from_bytes(cls, data: bytes) -> "ProtocolMessage":
         """Deserialize message from bytes."""
         parsed = json.loads(data.decode("utf-8"))
+        sig = parsed.get("signature")
         return cls(
             msg_type=parsed["type"],
             payload=parsed["payload"],
             agent_id=parsed.get("agent_id"),
-            signature=parsed.get("signature").encode() if parsed.get("signature") else None,
+            signature=base64.b64decode(sig) if sig else None,
         )
 
 
@@ -231,12 +239,10 @@ class SecureChannel:
         return decrypt_with_private_key(self.private_key, data)
 
     def sign(self, data: bytes) -> bytes:
-        """Sign data with private key."""
-        if not self.private_key or not self.public_key:
-            raise ValueError("Keys not initialized")
-        # Simple signature: hash and encrypt with private key (decrypt operation)
-        data_hash = hashlib.sha256(data).digest()
-        return decrypt_with_private_key(self.private_key, data_hash)
+        """Sign data with private key using RSA-PSS."""
+        if not self.private_key:
+            raise ValueError("Private key not initialized")
+        return sign_with_private_key(self.private_key, data)
 
 
 class Controller:
@@ -401,7 +407,11 @@ class Controller:
             return
 
         agent.last_seen = time.time()
-        agent.status = AgentStatus(data.get("status", "ONLINE"))
+        status_name = data.get("status", "ONLINE")
+        try:
+            agent.status = AgentStatus[status_name]
+        except KeyError:
+            logger.warning("Unknown agent status %r, keeping current status", status_name)
         agent.uptime = data.get("uptime", 0.0)
 
         # Update capabilities if provided
@@ -463,15 +473,34 @@ class Controller:
         assert channel is not None
 
         try:
-            # Encrypt command payload
+            # Hybrid encryption: AES-GCM for payload, RSA for session key
             command_data = json.dumps(command.to_dict()).encode()
-            encrypted_payload = channel.encrypt(command_data)
+
+            # Generate random AES session key and encrypt payload with AES-GCM
+            session_key = os.urandom(32)
+            nonce = os.urandom(12)
+
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            aesgcm = AESGCM(session_key)
+            aes_ciphertext = aesgcm.encrypt(nonce, command_data, None)
+            # aes_ciphertext includes the 16-byte tag appended by AESGCM
+
+            # RSA-encrypt the AES session key
+            encrypted_session_key = channel.encrypt(session_key)
+
+            # Sign the original plaintext
             signature = channel.sign(command_data)
 
-            # Create message
+            # Build message with base64-encoded binary blobs
             message = ProtocolMessage(
                 msg_type="command",
-                payload={"encrypted": encrypted_payload.decode(), "signature": signature.decode()},
+                payload={
+                    "encrypted_session_key": base64.b64encode(encrypted_session_key).decode("ascii"),
+                    "aes_ciphertext": base64.b64encode(aes_ciphertext).decode("ascii"),
+                    "nonce": base64.b64encode(nonce).decode("ascii"),
+                    "signature": base64.b64encode(signature).decode("ascii"),
+                },
                 agent_id=agent_id,
             )
 
@@ -733,6 +762,10 @@ class Agent:
             encrypted_payload = message.payload.get("encrypted", "").encode()
             decrypted_data = self.secure_channel.decrypt(encrypted_payload)
             command_dict = json.loads(decrypted_data.decode())
+
+            # Convert priority string back to CommandPriority enum
+            if "priority" in command_dict and isinstance(command_dict["priority"], str):
+                command_dict["priority"] = CommandPriority[command_dict["priority"]]
 
             command = Command(**command_dict)
             handler = self.command_handlers.get(command.action)
