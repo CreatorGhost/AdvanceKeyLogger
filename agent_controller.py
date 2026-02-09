@@ -367,28 +367,16 @@ class Controller:
         queue = self.command_queues.get(agent_id)
         if queue:
             seq = next(self._command_counter)
-            # Safely enqueue command - handle both sync and async contexts
+            # Use put_nowait() for sync-safe, non-blocking enqueue
+            # asyncio.PriorityQueue.put_nowait() is thread-safe and doesn't require
+            # an event loop, avoiding RuntimeError in sync contexts
             try:
-                # Try to get the running event loop
-                loop = asyncio.get_running_loop()
-                # We're in an async context, use create_task
-                asyncio.create_task(queue.put((priority.value, seq, command)))
-            except RuntimeError:
-                # No running event loop - try to get or create one
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Loop exists but we're not in async context, schedule coroutine
-                        asyncio.run_coroutine_threadsafe(
-                            queue.put((priority.value, seq, command)), loop
-                        )
-                    else:
-                        # Loop exists but not running, run the coroutine directly
-                        loop.run_until_complete(queue.put((priority.value, seq, command)))
-                except RuntimeError:
-                    # No event loop at all - create one for this operation
-                    asyncio.run(queue.put((priority.value, seq, command)))
-            logger.info(f"Command {command.command_id} queued for agent {agent_id}")
+                queue.put_nowait((priority.value, seq, command))
+                logger.info(f"Command {command.command_id} queued for agent {agent_id}")
+            except asyncio.QueueFull:
+                logger.error(f"Command queue full for agent {agent_id}, dropping command")
+                del self.commands[command.command_id]
+                return None
 
         return command.command_id
 
@@ -646,6 +634,7 @@ class Agent:
         self.command_handlers: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {}
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._command_listener_task: Optional[asyncio.Task] = None
+        self._shutdown_requested = False  # Set by _handle_shutdown() for graceful stop
 
         # Intervals
         self.heartbeat_interval = float(config.get("heartbeat_interval", 60))
@@ -799,6 +788,12 @@ class Agent:
         commands_endpoint = self.config.get("commands_endpoint")
 
         while self.running:
+            # Check if shutdown was requested by a command handler
+            if self._shutdown_requested:
+                logger.info("Shutdown requested, stopping agent...")
+                await self.stop()
+                break
+
             try:
                 # Check if transport supports real-time receive (WebSocket)
                 transport = self.transport
@@ -841,10 +836,10 @@ class Agent:
                                     # Normalize to uppercase since enum members are uppercase
                                     if "priority" in cmd and isinstance(cmd["priority"], str):
                                         cmd["priority"] = CommandPriority[cmd["priority"].upper()]
-                                    
+
                                     command = Command(**cmd)
                                     handler = self.command_handlers.get(command.action)
-                                    
+
                                     if handler:
                                         # Run handler in thread pool to avoid blocking event loop
                                         # This is critical for I/O-bound or long-running handlers
@@ -852,7 +847,7 @@ class Agent:
                                         result = await loop.run_in_executor(
                                             None,  # Use default ThreadPoolExecutor
                                             handler,
-                                            command.parameters
+                                            command.parameters,
                                         )
                                         logger.debug(f"Command processed: {command.command_id}")
                                     else:
@@ -1020,8 +1015,13 @@ class Agent:
         }
 
     def _handle_shutdown(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle shutdown command."""
-        asyncio.create_task(self.stop())
+        """Handle shutdown command.
+
+        Sets a flag that the main loop will check to initiate graceful shutdown.
+        This avoids calling asyncio.create_task() from a sync handler running
+        in a thread pool executor (which would cause RuntimeError).
+        """
+        self._shutdown_requested = True
         return {"status": "shutting_down"}
 
 

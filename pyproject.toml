@@ -25,6 +25,16 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.5.0",
 ]
+# Optional transports - install with: pip install .[transports]
+transports = [
+    "redis>=5.0.0",
+    "websockets>=11.0",
+]
+# All optional dependencies
+all = [
+    "redis>=5.0.0",
+    "websockets>=11.0",
+]
 
 [project.scripts]
 advancekeylogger = "main:main"

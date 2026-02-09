@@ -142,17 +142,41 @@ def _extract_ws_token(websocket: WebSocket) -> str | None:
 
 
 def _validate_session_token(token: str) -> str | None:
-    """Validate a session token and return username, or None if invalid."""
+    """Validate a session token and return username, or None if invalid.
+
+    Tries dashboard session tokens first, then falls back to fleet JWT tokens
+    so that agents connecting via WebSocket transport can authenticate.
+    """
     from dashboard.auth import _sessions, _SESSION_TTL
     import time as _time
 
+    # Try dashboard session token first
     session = _sessions.get(token)
-    if not session:
-        return None
-    if _time.time() - session["created"] > _SESSION_TTL:
-        _sessions.pop(token, None)
-        return None
-    return session["username"]
+    if session:
+        if _time.time() - session["created"] > _SESSION_TTL:
+            _sessions.pop(token, None)
+        else:
+            return session["username"]
+
+    # Fall back to fleet JWT token validation
+    try:
+        from fleet.auth import FleetAuth
+
+        # Try to get the app's fleet_auth instance via the global fleet_controller reference
+        if _fleet_controller and hasattr(_fleet_controller, "config"):
+            jwt_secret = _fleet_controller.config.get(
+                "jwt_secret", "CHANGE_ME_IN_PRODUCTION"
+            )
+            auth = FleetAuth(jwt_secret)
+            agent_id = auth.verify_token(token, token_type="access")
+            if agent_id:
+                return agent_id
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    return None
 
 
 @ws_router.websocket("/ws/dashboard")
@@ -230,10 +254,24 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
         action = command.get("action")
 
         if action == "get_status":
+            # Collect system resource metrics
+            system_info = {}
+            try:
+                import psutil
+
+                system_info = {
+                    "cpu_percent": psutil.cpu_percent(interval=0),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "disk_percent": psutil.disk_usage("/").percent,
+                }
+            except Exception:
+                pass
+
             # Send dashboard status
             status = {
                 "clients": await manager.get_dashboard_clients(),
                 "agents": await manager.get_agent_clients(),
+                "system": system_info,
                 "timestamp": time.time(),
             }
             await websocket.send_text(json.dumps({"type": "status", "data": status}))
@@ -243,7 +281,8 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
             message = command.get("message", "")
             await _broadcast_to_agents(message)
 
-        elif action == "send_to_agent":
+        elif action == "send_to_agent" or action == "command":
+            # "command" is an alias for "send_to_agent" (frontend uses "command")
             # Validate agent_id before sending
             agent_id = command.get("agent_id")
             if not agent_id:
@@ -255,7 +294,15 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
                 await websocket.send_text(json.dumps(response))
                 return
 
-            message = command.get("message", "")
+            # Support both message (raw) and action/parameters (structured command)
+            cmd_action = command.get("action_type") or command.get("action")
+            parameters = command.get("parameters", {})
+            message = command.get("message") or json.dumps(
+                {
+                    "action": cmd_action,
+                    "parameters": parameters,
+                }
+            )
             success = await manager.send_to_agent(agent_id, message)
             response = {
                 "type": "command_result",
@@ -307,11 +354,14 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
             manager.update_agent_last_seen(agent_id)
             await _handle_capture_data(agent_id, capture_data)
 
-            # Broadcast to dashboard
+            # Broadcast to dashboard — flatten capture fields so frontend
+            # can access data.capture_type, data.data, data.status directly
             broadcast_data = {
                 "type": "new_capture",
                 "agent_id": agent_id,
-                "capture": capture_data,
+                "capture_type": capture_data.get("type", "unknown"),
+                "data": capture_data.get("data", ""),
+                "status": capture_data.get("status", "pending"),
                 "timestamp": time.time(),
             }
             await manager.broadcast_dashboard(json.dumps(broadcast_data))
@@ -441,7 +491,9 @@ async def _handle_command_response(agent_id: str, response_data: dict[str, Any])
     # Forward to fleet controller if available
     if _fleet_controller is not None:
         try:
-            await _fleet_controller.handle_command_response(agent_id, cmd_id, response_data)
+            # Pass only the result field, not the entire response_data dict
+            # The controller expects the result dict that contains success/error/data fields
+            await _fleet_controller.handle_command_response(agent_id, cmd_id, result)
             logger.debug(f"Command response forwarded to controller")
         except Exception as e:
             logger.warning(f"Failed to forward command response to controller: {e}")

@@ -56,13 +56,14 @@ class DashboardWebSocket {
         this.connecting = false;
     }
 
-    send(type, data = {}) {
+    send(action, data = {}) {
         if (!this.connected || !this.socket) {
             console.warn('[WS] Cannot send - not connected');
             return false;
         }
 
-        const message = JSON.stringify({ type, data });
+        // Backend expects {"action": "...", ...fields} at top level
+        const message = JSON.stringify({ action, ...data });
         try {
             this.socket.send(message);
             return true;
@@ -162,11 +163,19 @@ class DashboardWebSocket {
 class LiveDashboard {
     constructor() {
         this.ws = new DashboardWebSocket();
+        this._agents = {};
+        this._statusInterval = null;
         this._setupHandlers();
     }
 
     init() {
         this.ws.connect();
+        // Poll for status every 30 seconds to keep resources panel updated
+        this._statusInterval = setInterval(() => {
+            if (this.ws.connected) {
+                this.requestStatus();
+            }
+        }, 30000);
     }
 
     _setupHandlers() {
@@ -199,9 +208,9 @@ class LiveDashboard {
             this._handleStatusResponse(data);
         });
 
-        // Heartbeat (keep-alive)
-        this.ws.on('heartbeat', (data) => {
-            console.debug('[WS] Heartbeat received');
+        // Captures response (from get_captures action)
+        this.ws.on('captures', (data) => {
+            this._handleCapturesResponse(data);
         });
     }
 
@@ -223,13 +232,34 @@ class LiveDashboard {
     _handleAgentStatus(data) {
         console.log('[Live] Agent status:', data);
 
-        // Update agent list if visible
+        // Extract status string — data.status may be a dict or string
+        const statusObj = data.status || {};
+        const statusStr = (typeof statusObj === 'string')
+            ? statusObj
+            : (statusObj.status || 'ONLINE');
+
+        // Track agent in local state
+        this._agents[data.agent_id] = {
+            status: statusStr,
+            last_seen: data.timestamp || Date.now() / 1000
+        };
+
+        // Re-render agents list
+        const agentsList = document.getElementById('agentsList');
+        if (agentsList) {
+            this._renderAgentsList(agentsList);
+        }
+
+        // Update connected agents count
+        this._updateConnectedAgentsCount();
+
+        // Update existing agent row in fleet table if visible
         const agentRow = document.querySelector(`[data-agent-id="${data.agent_id}"]`);
         if (agentRow) {
             const statusCell = agentRow.querySelector('.agent-status');
             if (statusCell) {
-                statusCell.textContent = data.status;
-                statusCell.className = `agent-status status-${data.status.toLowerCase()}`;
+                statusCell.textContent = statusStr;
+                statusCell.className = `agent-status status-${statusStr.toLowerCase()}`;
             }
 
             const lastSeenCell = agentRow.querySelector('.agent-last-seen');
@@ -239,9 +269,9 @@ class LiveDashboard {
         }
 
         // Show notification for status changes
-        if (data.status === 'OFFLINE') {
+        if (statusStr === 'OFFLINE') {
             this._showNotification(`Agent ${data.agent_id} went offline`, 'warning');
-        } else if (data.status === 'ONLINE') {
+        } else if (statusStr === 'ONLINE') {
             this._showNotification(`Agent ${data.agent_id} is now online`, 'success');
         }
     }
@@ -310,12 +340,55 @@ class LiveDashboard {
     _handleStatusResponse(data) {
         console.log('[Live] Status response:', data);
 
-        // Update dashboard metrics if data available
-        if (data.connected_agents !== undefined) {
-            const agentCount = document.getElementById('connectedAgents');
-            if (agentCount) {
-                agentCount.textContent = data.connected_agents;
+        // data = { clients: N, agents: { id: { connected: bool, last_seen: T }, ... }, system: {...}, timestamp: T }
+        if (data.agents && typeof data.agents === 'object') {
+            // Populate local agent state from status response
+            for (const [agentId, info] of Object.entries(data.agents)) {
+                this._agents[agentId] = {
+                    status: info.connected ? 'ONLINE' : 'OFFLINE',
+                    last_seen: info.last_seen || 0
+                };
             }
+
+            // Update connected agents count
+            this._updateConnectedAgentsCount();
+
+            // Re-render agents list
+            const agentsList = document.getElementById('agentsList');
+            if (agentsList) {
+                this._renderAgentsList(agentsList);
+            }
+        }
+
+        // Update resources panel from system metrics
+        if (data.system) {
+            this._updateResources(data.system);
+        }
+    }
+
+    _handleCapturesResponse(data) {
+        console.log('[Live] Captures response:', data);
+
+        // Update captures list/table if visible
+        const capturesList = document.getElementById('capturesList');
+        if (capturesList && Array.isArray(data)) {
+            capturesList.innerHTML = '';
+            data.forEach(capture => {
+                const item = document.createElement('div');
+                item.className = 'capture-item';
+                item.innerHTML = `
+                    <span class="capture-type">${capture.type || 'unknown'}</span>
+                    <span class="capture-time">${new Date(capture.timestamp * 1000).toLocaleTimeString()}</span>
+                    <span class="capture-agent">${capture.agent_id || 'local'}</span>
+                `;
+                capturesList.appendChild(item);
+            });
+        }
+
+        // Update total count
+        const totalCaptures = document.getElementById('totalCaptures');
+        if (totalCaptures && Array.isArray(data)) {
+            totalCaptures.textContent = this._formatNumber(data.length);
         }
     }
 
@@ -359,19 +432,72 @@ class LiveDashboard {
         return new Intl.NumberFormat().format(num);
     }
 
+    _renderAgentsList(container) {
+        const agentIds = Object.keys(this._agents);
+        if (agentIds.length === 0) {
+            container.innerHTML = '<div class="empty-state-sm">No agents connected</div>';
+            return;
+        }
+
+        container.innerHTML = '';
+        for (const agentId of agentIds) {
+            const info = this._agents[agentId];
+            const statusClass = (info.status || '').toLowerCase() === 'online' ? 'online' : 'offline';
+            const el = document.createElement('div');
+            el.className = 'agent-item';
+            el.setAttribute('data-agent-id', agentId);
+            el.innerHTML = `
+                <span class="agent-status-dot status-dot-${statusClass}"></span>
+                <span class="agent-name">${this._escapeHtml(agentId)}</span>
+                <span class="agent-badge agent-badge-${statusClass}">${this._escapeHtml(info.status || 'UNKNOWN')}</span>
+            `;
+            container.appendChild(el);
+        }
+    }
+
+    _updateConnectedAgentsCount() {
+        const count = Object.values(this._agents).filter(a =>
+            (a.status || '').toUpperCase() === 'ONLINE'
+        ).length;
+        const el = document.getElementById('connectedAgents');
+        if (el) {
+            el.textContent = count;
+        }
+    }
+
+    _updateResources(system) {
+        if (system.cpu_percent !== undefined) {
+            const el = document.getElementById('resCpu');
+            const bar = document.getElementById('resCpuBar');
+            if (el) el.textContent = system.cpu_percent.toFixed(1) + '%';
+            if (bar) bar.style.width = Math.min(system.cpu_percent, 100) + '%';
+        }
+        if (system.memory_percent !== undefined) {
+            const el = document.getElementById('resMemory');
+            const bar = document.getElementById('resMemoryBar');
+            if (el) el.textContent = system.memory_percent.toFixed(1) + '%';
+            if (bar) bar.style.width = Math.min(system.memory_percent, 100) + '%';
+        }
+        if (system.disk_percent !== undefined) {
+            const el = document.getElementById('resStorage');
+            const bar = document.getElementById('resStorageBar');
+            if (el) el.textContent = system.disk_percent.toFixed(1) + '%';
+            if (bar) bar.style.width = Math.min(system.disk_percent, 100) + '%';
+        }
+    }
+
     // Public API for sending commands
     sendCommand(agentId, action, parameters = {}) {
         return this.ws.send('command', {
             agent_id: agentId,
-            action: action,
+            action_type: action,
             parameters: parameters
         });
     }
 
     broadcastCommand(action, parameters = {}) {
         return this.ws.send('broadcast', {
-            action: action,
-            parameters: parameters
+            message: JSON.stringify({ action: action, parameters: parameters })
         });
     }
 

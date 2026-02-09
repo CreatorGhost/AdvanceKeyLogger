@@ -54,12 +54,16 @@ class FleetController(Controller):
             pending_cmds = self.storage.get_pending_commands(agent_id)
             for cmd_data in pending_cmds:
                 try:
+                    try:
+                        priority = CommandPriority[cmd_data["priority"].upper()]
+                    except (KeyError, AttributeError):
+                        priority = CommandPriority.NORMAL
                     cmd = Command(
                         command_id=cmd_data["id"],
                         agent_id=cmd_data["agent_id"],
                         action=cmd_data["type"],
                         parameters=cmd_data["payload"],
-                        priority=CommandPriority[cmd_data["priority"].upper()],
+                        priority=priority,
                         timestamp=cmd_data["created_at"],
                         status=CommandStatus.PENDING,
                     )
@@ -249,7 +253,8 @@ class FleetController(Controller):
             error = command.error_message
             self.storage.update_command_status(command_id, status, result, error or "")
 
-    # New method for async-safe command enqueuing (Gap 8)
+    # Async command enqueuing - now just a convenience wrapper since send_command
+    # uses put_nowait() which is sync-safe
     async def send_command_async(
         self,
         agent_id: str,
@@ -258,10 +263,11 @@ class FleetController(Controller):
         priority: CommandPriority = CommandPriority.NORMAL,
         timeout: float = 300.0,
     ) -> Optional[str]:
-        """Async version of send_command that ensures event loop safety."""
-        # Since send_command is sync but queues async task, we can just call it?
-        # send_command uses asyncio.create_task which requires a running loop.
-        # If called from async context, loop is running.
+        """Async version of send_command.
+
+        Note: Since send_command() now uses put_nowait() internally, it's already
+        sync-safe. This method exists for API consistency in async contexts.
+        """
         return self.send_command(agent_id, action, parameters, priority, timeout)
 
     def send_command_sync_safe(
@@ -272,18 +278,9 @@ class FleetController(Controller):
         priority: CommandPriority = CommandPriority.NORMAL,
         timeout: float = 300.0,
     ) -> Optional[str]:
-        """Thread-safe command sending from sync context."""
-        # Use existing running loop or run in new loop?
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+        """Thread-safe command sending from sync context.
 
-        if loop and loop.is_running():
-            return self.send_command(agent_id, action, parameters, priority, timeout)
-        else:
-            # If no loop, we can't spawn the background task easily unless we have a reference to the main loop
-            # Ideally, the controller is initialized with a loop.
-            # For now, let's assume this is called from within a context where we can get a loop
-            # Or just fall back to super().send_command and hope for the best
-            return self.send_command(agent_id, action, parameters, priority, timeout)
+        Note: Since send_command() now uses put_nowait() internally, it's already
+        sync-safe. This method exists for API consistency.
+        """
+        return self.send_command(agent_id, action, parameters, priority, timeout)

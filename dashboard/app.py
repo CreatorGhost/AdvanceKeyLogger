@@ -34,7 +34,9 @@ async def lifespan(app: FastAPI):
 
     # Store config in app.state for access by route handlers
     # This is used by fleet_api.py for signature verification settings
-    app.state.config = settings._config if hasattr(settings, "_config") else {}
+    app.state.config = settings.as_dict() if hasattr(settings, "as_dict") else (
+        settings._config if hasattr(settings, "_config") else {}
+    )
 
     # Initialize SQLiteStorage for captures (used by WebSocket handlers)
     sqlite_storage = None

