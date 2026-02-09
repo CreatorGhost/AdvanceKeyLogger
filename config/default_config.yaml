@@ -83,6 +83,13 @@ transport:
     bot_token: ""
     chat_id: ""
 
+  websocket:
+    url: ""
+    reconnect_interval: 5
+    heartbeat_interval: 30
+    ssl: false
+    verify_ssl: true
+
 encryption:
   enabled: false
   mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
@@ -148,7 +155,7 @@ profiler:
       - "Netflix"
     uncategorized:
       - "*"
-  store_profiles: true
+  # store_profiles: true  # Unused — profiler.store_profiles is never read by code
 
 pipeline:
   enabled: false
@@ -195,7 +202,7 @@ service:
   restart_sec: 10
   start_limit_burst: 3
   start_limit_interval: 60
-  display: ":0"
+  # display: ":0"  # Unused — not read by any service manager code
 
 fleet:
   enabled: false

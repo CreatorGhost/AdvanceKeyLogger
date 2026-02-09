@@ -367,7 +367,27 @@ class Controller:
         queue = self.command_queues.get(agent_id)
         if queue:
             seq = next(self._command_counter)
-            asyncio.create_task(queue.put((priority.value, seq, command)))
+            # Safely enqueue command - handle both sync and async contexts
+            try:
+                # Try to get the running event loop
+                loop = asyncio.get_running_loop()
+                # We're in an async context, use create_task
+                asyncio.create_task(queue.put((priority.value, seq, command)))
+            except RuntimeError:
+                # No running event loop - try to get or create one
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Loop exists but we're not in async context, schedule coroutine
+                        asyncio.run_coroutine_threadsafe(
+                            queue.put((priority.value, seq, command)), loop
+                        )
+                    else:
+                        # Loop exists but not running, run the coroutine directly
+                        loop.run_until_complete(queue.put((priority.value, seq, command)))
+                except RuntimeError:
+                    # No event loop at all - create one for this operation
+                    asyncio.run(queue.put((priority.value, seq, command)))
             logger.info(f"Command {command.command_id} queued for agent {agent_id}")
 
         return command.command_id
@@ -442,12 +462,16 @@ class Controller:
 
         if result.get("success", False):
             command.status = CommandStatus.COMPLETED
-            self.agents[agent_id].total_commands_executed += 1
+            agent = self.agents.get(agent_id)
+            if agent:
+                agent.total_commands_executed += 1
             logger.info(f"Command {command_id} completed successfully")
         else:
             command.status = CommandStatus.FAILED
             command.error_message = result.get("error")
-            self.agents[agent_id].failed_commands += 1
+            agent = self.agents.get(agent_id)
+            if agent:
+                agent.failed_commands += 1
             logger.error(f"Command {command_id} failed: {command.error_message}")
 
     async def _process_commands(self) -> None:

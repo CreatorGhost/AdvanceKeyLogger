@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -477,7 +478,9 @@ def main() -> int:
     biometrics_enabled = bool(settings.get("biometrics.enabled", False))
     biometrics_buffer: list[dict[str, Any]] = []
     biometrics_analyzer = BiometricsAnalyzer(
-        profile_id_prefix=str(settings.get("biometrics.profile_id_prefix", "usr"))
+        profile_id_prefix=str(settings.get("biometrics.profile_id_prefix", "usr")),
+        match_threshold=float(settings.get("biometrics.authentication.match_threshold", 50.0)),
+        authentication_enabled=bool(settings.get("biometrics.authentication.enabled", False)),
     )
     biometrics_sample_size = int(settings.get("biometrics.sample_size", 500))
     biometrics_store = bool(settings.get("biometrics.store_profiles", True))
@@ -608,12 +611,16 @@ def main() -> int:
     # Use a mutable container so the closure captures the reference to the container,
     # not the list itself. This prevents the bug where reassigning biometrics_buffer
     # would leave the closure appending to the old list.
+    # A lock protects against race conditions when EventBus handlers may be invoked
+    # from different threads simultaneously accessing the buffer.
     biometrics_buffer_ref = {"buffer": biometrics_buffer}
+    biometrics_lock = threading.Lock()
     if biometrics_enabled:
 
         def _biometrics_handler(event: dict[str, Any]) -> None:
             if event.get("type") == "keystroke_timing":
-                biometrics_buffer_ref["buffer"].append(event)
+                with biometrics_lock:
+                    biometrics_buffer_ref["buffer"].append(event)
 
         event_bus.subscribe("keystroke", _biometrics_handler)
         event_bus.subscribe("keystroke_timing", _biometrics_handler)
@@ -666,12 +673,18 @@ def main() -> int:
             # Biometrics profile generation (triggered when buffer reaches sample_size)
             # Note: keystroke events are routed to biometrics_buffer via EventBus subscriber
             if biometrics_enabled:
-                current_buffer = biometrics_buffer_ref["buffer"]
-                if len(current_buffer) >= biometrics_sample_size:
-                    sample = current_buffer[:biometrics_sample_size]
-                    # Mutate the container's buffer reference instead of reassigning
-                    # the outer variable, so the closure continues using the same list
-                    biometrics_buffer_ref["buffer"] = current_buffer[biometrics_sample_size:]
+                # Use lock to safely access and modify the buffer
+                # This prevents race conditions with the EventBus handler
+                sample = None
+                with biometrics_lock:
+                    current_buffer = biometrics_buffer_ref["buffer"]
+                    if len(current_buffer) >= biometrics_sample_size:
+                        sample = current_buffer[:biometrics_sample_size]
+                        # Mutate the container's buffer reference instead of reassigning
+                        # the outer variable, so the closure continues using the same list
+                        biometrics_buffer_ref["buffer"] = current_buffer[biometrics_sample_size:]
+                # Process outside the lock to avoid holding it during expensive operations
+                if sample is not None:
                     try:
                         profile = biometrics_analyzer.generate_profile(sample)
                         if biometrics_store and sqlite_store is not None:

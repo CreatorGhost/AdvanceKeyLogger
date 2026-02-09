@@ -1,432 +1,600 @@
-# Identified Disconnections & Issues
+# Identified Issues — Full Audit Trail
 
-Scope: Full codebase audit of component wiring, dead code, protocol mismatches, and stub implementations. Each issue includes the root cause, all affected files with line numbers, and what a fix would need to address.
+Scope: Complete codebase audit covering component wiring, protocol mismatches, dead code, frontend-backend alignment, configuration gaps, import chains, async/sync safety, and runtime error risks. This document tracks all issues found across multiple audit passes, what was fixed, by whom, and what remains.
 
-Priority legend: **Critical** (will crash or 404), **High** (feature is dead/unreachable), **Medium** (incomplete/stub), **Low** (cleanup/dead code)
+**Audit date:** 2026-02-10
+**Branch:** `codex/fleet-management`
 
 ---
 
-## Issue 1 — RedisTransport lives in the wrong directory (High)
+# Part 1 — Resolved Issues
 
-**Root cause:** `transport/__init__.py` auto-imports all transport modules from `transport/` at startup. It expects a file at `transport/redis_transport.py` but the actual implementation is in `utils/redis_queue.py`. The import fails silently (caught by try/except), so RedisTransport never registers and is completely unavailable at runtime.
+## Round 1: Initial bugs (fixed by code review)
+
+### R1. Missing `/analytics` page route (was Critical — 404)
+
+**Problem:** Sidebar in `base.html:49` linked to `/analytics`. The template `analytics.html` and JS `analytics.js` both existed, and the API endpoints `/api/analytics/activity` and `/api/analytics/summary` worked. But no page route handler existed, so clicking Analytics gave a 404.
+
+**Fix applied:** Added route in `dashboard/routes/pages.py:101-115`:
+```python
+@pages_router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request) -> Response:
+```
+Follows the same auth-check + template-render pattern as all other page routes.
+
+**Files changed:** `dashboard/routes/pages.py`
+
+---
+
+### R2. `url_for('login')` Flask syntax in FastAPI template (was Critical — template crash)
+
+**Problem:** `dashboard/templates/login.html:30` used `{{ url_for('login') }}` which is Flask/Jinja2 URL generation. FastAPI does not provide this function by default, causing a template render crash.
+
+**Fix applied:** Replaced with the hardcoded path `/auth/login` which matches the POST endpoint in `dashboard/auth.py`.
+
+**Files changed:** `dashboard/templates/login.html:30`
+
+---
+
+## Round 2: Original 17 issues (Issues 1-17, fixed by user)
+
+### R3. Issue 1 — RedisTransport in wrong directory (was High)
+
+**Problem:** `transport/__init__.py:87-96` tried to auto-import `transport.redis_transport` but the file was at `utils/redis_queue.py`. Import failed silently.
+
+**Fix applied:** Created `transport/redis_transport.py` as a bridge module that re-exports `RedisTransport`, `RedisQueue`, `Message`, `MessagePriority` from `utils/redis_queue.py`. The `@register_transport("redis")` decorator now fires during import.
+
+**Files changed:** `transport/redis_transport.py` (new)
+
+---
+
+### R4. Issue 2 — Base Agent never instantiated (was High)
+
+**Problem:** `agent_controller.py:580-914` defined a full `Agent` class. `fleet/agent.py:29` defined `FleetAgent(Agent)`. Neither was instantiated by any entry point.
+
+**Fix applied:** Created `fleet/run_agent.py` CLI entry point with argparse. Updated base `Agent.start()` to use config-driven transport factory via `create_transport_for_method()` instead of hardcoding `HttpTransport`.
+
+**Files changed:** `fleet/run_agent.py` (new), `agent_controller.py`
+
+---
+
+### R5. Issue 3 — Agent `_command_listener()` was a stub (was High)
+
+**Problem:** `agent_controller.py:751-764` — infinite `asyncio.sleep(1)` loop, never polled or received commands.
+
+**Fix applied:** Implemented real polling/receive logic supporting both HTTP polling mode (requests to commands endpoint) and WebSocket receive mode (via transport's receive queue). `FleetAgent` has its own override at `fleet/agent.py:194` that polls `/api/v1/fleet/commands`.
+
+**Files changed:** `agent_controller.py`
+
+---
+
+### R6. Issue 4 — WebSocket receive loop was a no-op (was High)
+
+**Problem:** `transport/websocket_transport.py:196-221` received messages and logged them but had `# TODO: Process received messages`. Messages were silently dropped.
+
+**Fix applied:** Added `register_handler()`, `set_default_handler()`, and `receive()` methods. `_receive_loop()` now dispatches messages to registered handlers and queues them for sync consumers.
+
+**Files changed:** `transport/websocket_transport.py`
+
+---
+
+### R7. Issue 5 — No WebSocket frontend client (was High)
+
+**Problem:** Backend WebSocket endpoints `/ws/dashboard` and `/ws/agent/{agent_id}` existed with full `ConnectionManager`, but zero JavaScript code created WebSocket connections.
+
+**Fix applied:** Created `dashboard/static/js/ws-client.js` (536 lines) with `DashboardWebSocket` and `LiveDashboard` classes. Handles connection management, reconnection, and message routing. Included in `base.html:150`. Auto-initializes on pages with `data-enable-websocket="true"`.
+
+**Files changed:** `dashboard/static/js/ws-client.js` (new), `dashboard/templates/base.html`
+
+---
+
+### R8. Issue 6 — Signatures created but never verified (was High)
+
+**Problem:** `SecureChannel.sign()` at `agent_controller.py:248-252` created signatures. `ProtocolMessage` carried them. No code ever called verify.
+
+**Fix applied:**
+- Added `verify_with_public_key()` to `utils/crypto.py`
+- Added `SecureChannel.verify()` method
+- `fleet_api.py` verifies `X-Signature` header when `fleet.security.require_signature_verification` is `true` (now defaults to `true` in config)
+- `FleetAgent` signs requests when `sign_requests` config is `true`
+
+**Files changed:** `utils/crypto.py`, `agent_controller.py`, `dashboard/routes/fleet_api.py`, `fleet/agent.py`
+
+---
+
+### R9. Issues 7 & 16 — Three incompatible protocols / No HTTP endpoint for ProtocolMessage (was High)
+
+**Problem:** Three message formats coexisted: Protocol A (`ProtocolMessage` — `agent_controller.py:165-212`), Protocol B (REST JSON — `fleet/agent.py:102-228`), Protocol C (Dashboard WS — `websocket.py:228-333`). None interoperated.
+
+**Resolution:** REST JSON (Protocol B) is canonical. `FleetAgent` and `fleet_api.py` use it. `ProtocolMessage` (Protocol A) is retained as legacy for potential direct-transport use but is not the primary wire format.
+
+**Files changed:** Documentation only
+
+---
+
+### R10. Issues 8 & 9 — WS handlers log-only / Mock captures data (was Medium)
+
+**Problem:** `_update_agent_status()` (websocket.py:362), `_handle_capture_data()` (websocket.py:368), `_handle_command_response()` (websocket.py:379) only logged. `_get_recent_captures()` (websocket.py:346) returned hardcoded mock data.
+
+**Fix applied:**
+- Added `set_storage_references()` function to `websocket.py`
+- Handlers now write to `FleetStorage` and `SQLiteStorage` when available
+- `_get_recent_captures()` queries real storage with mock fallback
+- `dashboard/app.py` calls `set_storage_references()` during lifespan startup, passing both `sqlite_storage` and `fleet_storage`
+
+**Files changed:** `dashboard/routes/websocket.py`, `dashboard/app.py`
+
+---
+
+### R11. Issue 10 — `/live` route was redundant (was Low)
+
+**Problem:** `/live` rendered the same `dashboard.html` as `/dashboard` with no differentiation.
+
+**Fix applied:** Created dedicated `live.html` template with WebSocket integration. Updated `/live` route in `pages.py:49-64` to render `live.html` with `enable_websocket: True`. Added Live link to sidebar in `base.html`.
+
+**Files changed:** `dashboard/templates/live.html` (new), `dashboard/routes/pages.py`, `dashboard/templates/base.html`
+
+---
+
+### R12. Issue 11 — Fleet controller didn't persist keys (was Medium)
+
+**Problem:** `fleet/controller.py:78` had `# TODO: Persist keys`. RSA keys were memory-only and lost on restart.
+
+**Fix applied:**
+- Added `controller_keys` table to `storage/fleet_storage.py`
+- Added `save_controller_keys()`, `get_controller_keys()`, `delete_controller_keys()` methods
+- `FleetController._load_or_generate_keys()` loads from DB or generates + persists
+- Added `rotate_keys()` for key rotation
+
+**Files changed:** `storage/fleet_storage.py`, `fleet/controller.py`
+
+---
+
+### R13. Issue 12 — Fleet API skips command encryption (was Medium)
+
+**Resolution:** Documented as intentional. HTTPS/TLS provides transport encryption. Application-level encryption is optional. Signatures provide authentication/integrity. Commands are plain JSON over TLS, which is standard REST practice.
+
+**Files changed:** Documentation only
+
+---
+
+### R14. Issue 13 — `biometrics/matcher.py` unused (was Low)
+
+**Fix applied:** Integrated `ProfileMatcher` into `BiometricsAnalyzer` with `register_reference_profile()`, `unregister_profile()`, `authenticate()`, `get_similarity_score()`, `is_same_user()`. Added `biometrics.authentication` config section in `default_config.yaml:114-117`.
+
+**Files changed:** `biometrics/analyzer.py`, `config/default_config.yaml`
+
+---
+
+### R15. Issue 14 — EventBus and RuleRegistry unused (was Low)
+
+**Fix applied:** Initialized `EventBus` in `main.py:524`. Subscribed `rule_engine` (all events), biometrics (keystroke events), profiler (window events). Events published via `event_bus.publish()` for decoupled routing.
+
+**Files changed:** `main.py`
+
+---
+
+### R16. Issue 15 — Legacy root scripts orphaned (was Low)
+
+**Fix applied:** Moved `createfile.py` and `mailLogger.py` to `legacy/` directory. Added `legacy/README.md` documenting the archived scripts and their modern replacements.
+
+**Files changed:** `legacy/createfile.py` (moved), `legacy/mailLogger.py` (moved), `legacy/README.md` (new)
+
+---
+
+### R17. Issue 17 — FleetAgent metrics placeholder (was Low)
+
+**Fix applied:** Added `get_system_metrics()` to `utils/system_info.py:78-135`. Uses psutil if available, falls back to OS-level stats. FleetAgent heartbeats at `fleet/agent.py:177-194` now include real CPU, memory, and disk metrics.
+
+**Files changed:** `utils/system_info.py`, `fleet/agent.py`
+
+---
+
+## Round 3: Post-fix verification issues (fixed by user)
+
+### R18. `set_storage_references()` missing SQLiteStorage parameter (was Medium)
+
+**Problem:** `dashboard/app.py` called `set_storage_references()` but didn't pass SQLiteStorage. WebSocket handlers had `if _storage is not None:` guards but `_storage` was always `None`, so `_handle_capture_data()` and `_get_recent_captures()` never persisted data.
+
+**Fix applied:** `dashboard/app.py:39-49` now initializes SQLiteStorage from `storage.sqlite_path` config. Lines 77-81 pass it as `storage=sqlite_storage` to `set_storage_references()`. Lines 89-95 wire it even if fleet is disabled. Lines 106-109 close it on shutdown.
+
+**Files changed:** `dashboard/app.py`
+
+---
+
+### R19. Signature verification disabled by default (was Low)
+
+**Problem:** `fleet.security.require_signature_verification` defaulted to `false`, meaning agents could send unsigned requests.
+
+**Fix applied:** Changed to `true` in `config/default_config.yaml:227`. Added documentation comment explaining the security implications (lines 222-226).
+
+**Files changed:** `config/default_config.yaml`
+
+---
+
+### R20. Path traversal in screenshot endpoint (was High)
+
+**Problem:** `dashboard/routes/api.py:200` passed user input (`filename`) to `FileResponse` without validating the resolved path stayed within the screenshots directory. Attackers could use `../../etc/passwd` style paths.
+
+**Fix applied:** `api.py:189-216` now:
+1. Resolves `screenshots_dir` to absolute path (line 190)
+2. Resolves requested path to canonical form (line 195)
+3. Calls `requested_path.relative_to(screenshots_dir)` to reject traversal (lines 201-205)
+4. Checks file existence and type (lines 208-212)
+
+**Files changed:** `dashboard/routes/api.py`
+
+---
+
+### R21. TODO in `fleet/controller.py` for enrollment key (was Low)
+
+**Problem:** `fleet/controller.py:188` had a TODO about preserving enrollment keys from metadata tags.
+
+**Fix applied:** Enrollment key extraction implemented at `fleet/controller.py:189-195`, using convention of `enrollment_key:` prefix in `metadata.tags`.
+
+**Files changed:** `fleet/controller.py`
+
+---
+
+## Round 4: Safe fixes (fixed by code review)
+
+### R22. Unsafe dict access `self.agents[agent_id]` — KeyError risk (was Medium)
+
+**Problem:** `agent_controller.py:443-451` accessed `self.agents[agent_id]` directly on both the success and failure branches of `handle_command_response()`. If an agent was unregistered between command send and response, this would raise `KeyError`.
+
+**Fix applied:** Changed to `self.agents.get(agent_id)` with guard on both branches:
+```python
+agent = self.agents.get(agent_id)
+if agent:
+    agent.total_commands_executed += 1
+```
+
+**Files changed:** `agent_controller.py:443-451`
+
+---
+
+### R23. `pyproject.toml` missing dashboard dependencies (was Medium)
+
+**Problem:** `requirements.txt` listed `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `psutil`, `PyJWT` but `pyproject.toml` only had core deps. Installing via `pip install .` would miss dashboard dependencies.
+
+**Fix applied:** Added all 6 packages to `pyproject.toml` `[project].dependencies` to match `requirements.txt`.
+
+**Files changed:** `pyproject.toml`
+
+---
+
+### R24. Missing `transport.websocket` config section (was Medium)
+
+**Problem:** `transport/websocket_transport.py:40-63` reads `transport.websocket.reconnect_interval`, `transport.websocket.heartbeat_interval`, `transport.websocket.ssl`, `transport.websocket.verify_ssl` via `.get()` with hardcoded defaults. No matching section existed in `default_config.yaml`, making the defaults invisible to users.
+
+**Fix applied:** Added `transport.websocket` section to `config/default_config.yaml` after the `telegram` section:
+```yaml
+websocket:
+  url: ""
+  reconnect_interval: 5
+  heartbeat_interval: 30
+  ssl: false
+  verify_ssl: true
+```
+
+**Files changed:** `config/default_config.yaml`
+
+---
+
+### R25. Dead config key `profiler.store_profiles` (was Low)
+
+**Problem:** `config/default_config.yaml:158` had `store_profiles: true` under `profiler` but no code reads this key (the `biometrics.store_profiles` key at line 120 IS used, this one is not).
+
+**Fix applied:** Commented out with note: `# Unused — profiler.store_profiles is never read by code`.
+
+**Files changed:** `config/default_config.yaml`
+
+---
+
+### R26. Dead config key `service.display` (was Low)
+
+**Problem:** `config/default_config.yaml:198` had `display: ":0"` but no service manager code reads it.
+
+**Fix applied:** Commented out with note: `# Unused — not read by any service manager code`.
+
+**Files changed:** `config/default_config.yaml`
+
+---
+
+# Part 2 — Remaining Issues
+
+Issues below are still open. Grouped by category with full file references and line numbers.
+
+---
+
+## Category A: Async/Sync Safety (Critical — runtime crashes)
+
+### A1. `send_command()` calls `asyncio.create_task()` from sync context
+
+**Priority:** Critical
+**Impact:** `RuntimeError: no running event loop` when called from sync FastAPI route handlers or non-async code paths.
+
+**Root cause:** `Controller.send_command()` is a sync method that internally calls `asyncio.create_task(queue.put(...))` to enqueue commands. This only works if called from within a running async event loop.
 
 **Affected files:**
 
 | File | Lines | What happens |
 |------|-------|-------------|
-| `transport/__init__.py` | 87-96 | The import loop lists `"redis_transport"` and runs `__import__(f"{__name__}.{_module}")`. Since `transport/redis_transport.py` doesn't exist, this import fails silently. |
-| `utils/redis_queue.py` | 240-243 | `@register_transport("redis")` decorator sits on `class RedisTransport(BaseTransport)`. The decorator would register correctly if the module were ever imported, but nothing imports this file. |
-| `config/default_config.yaml` | (fleet section) | Config keys `fleet.transport.redis_enabled` and `redis_url` exist but are never read because the transport never registers. |
+| `agent_controller.py` | 362-393 | `send_command()` is `def` (sync). Lines 370-390 attempt `asyncio.create_task()` with fallbacks to `run_coroutine_threadsafe()` and `asyncio.run()`. The fallback chain is fragile — `asyncio.run()` creates a new loop which conflicts if one already exists. |
+| `fleet/controller.py` | 225-238 | `FleetController.send_command()` calls `super().send_command()`, inheriting the problem. |
+| `dashboard/routes/fleet_dashboard_api.py` | 93 | Calls `controller.send_command()` from a FastAPI route handler (which runs in an async context, so `create_task` works here — but the fallback paths are still problematic). |
 
 **What a fix requires:**
-- Either move `utils/redis_queue.py` to `transport/redis_transport.py` (adjusting internal imports), or add an explicit import of `utils.redis_queue` in `transport/__init__.py`.
-- Ensure the `@register_transport("redis")` decorator fires so the factory `create_transport("redis")` works.
+- Make `send_command()` async (`async def`) and await the queue put.
+- Or use `queue.put_nowait()` (sync, non-blocking) since `asyncio.PriorityQueue` supports it.
+- Update all callers to match the new signature.
 
 ---
 
-## Issue 2 — Base `Agent` class is never instantiated (High)
+### A2. `send_command_async()` wraps the broken sync `send_command()`
 
-**Root cause:** `agent_controller.py` defines a full `Agent` class (registration, heartbeat, command handling, encryption) but no entry point or script ever creates an instance of it. A separate `FleetAgent` (in `fleet/agent.py`) extends it and overrides key methods for REST API communication, but `FleetAgent` itself is also never instantiated by any entry point.
+**Priority:** Critical
+**Impact:** Same `RuntimeError` propagates through the async wrapper.
 
 **Affected files:**
 
-| File | Lines | What's there |
+| File | Lines | What happens |
 |------|-------|-------------|
-| `agent_controller.py` | 580-914 | `class Agent` — full implementation: `__init__`, `start()`, `stop()`, `_register()`, `_heartbeat_loop()`, `_command_listener()`, `handle_command()`, default handlers (ping, update_config, get_status, shutdown). |
-| `agent_controller.py` | 591-659 | `Agent.__init__` — hardcodes `HttpTransport` at line 653-659: `self.transport = HttpTransport({"url": self.controller_url, "method": "POST", ...})`. Ignores config-driven transport selection used elsewhere in the codebase (`main.py`). |
-| `fleet/agent.py` | 29-32 | `class FleetAgent(Agent)` — extends the base Agent with REST API registration, heartbeat, and command polling. |
-| `fleet/agent.py` | 48, 64, 102, 155, 194 | Key overridden methods: `start()`, `stop()`, `_register()`, `_heartbeat_loop()`, `_command_listener()`. |
+| `fleet/controller.py` | 260-265 | `async def send_command_async()` simply calls `self.send_command()` (sync), which internally tries `asyncio.create_task()`. The async wrapper doesn't help because the underlying sync method still has the event loop detection issues. |
 
 **What a fix requires:**
-- An entry point or CLI command that instantiates `FleetAgent` with the appropriate config.
-- Transport selection in base `Agent.__init__` should use the config-driven factory (`create_transport()`) instead of hardcoding `HttpTransport`.
+- If `send_command()` becomes async (see A1), this wrapper becomes unnecessary.
+- Or rewrite to directly `await queue.put()`.
 
 ---
 
-## Issue 3 — Agent `_command_listener()` is a stub (High)
+### A3. `_handle_shutdown()` calls `asyncio.create_task()` from sync handler
 
-**Root cause:** The base `Agent._command_listener()` method is an infinite sleep loop that never polls for or receives commands. The comment in the code acknowledges this.
+**Priority:** Critical
+**Impact:** `RuntimeError` when the shutdown command is received and dispatched.
 
 **Affected files:**
 
-| File | Lines | What's there |
+| File | Lines | What happens |
 |------|-------|-------------|
-| `agent_controller.py` | 751-764 | `async def _command_listener(self) -> None:` — body is `while self.running: await asyncio.sleep(1)` with a comment: *"Commands would be received here via transport.receive() or similar. For HTTP transport, we'd need to implement a polling mechanism or switch to a WebSocket transport for real-time communication."* |
-| `fleet/agent.py` | 194 | `FleetAgent._command_listener()` — overrides the stub with a REST polling implementation that calls `GET /api/v1/fleet/commands`. This one actually works, but is itself never run (see Issue 2). |
+| `agent_controller.py` | ~1000 | `def _handle_shutdown(self, params)` is a sync function registered as a command handler via `register_command_handler()`. It calls `asyncio.create_task(self.stop())`. Since command handlers are called from `run_in_executor()` (a thread pool), there is no running event loop in that thread. |
 
 **What a fix requires:**
-- Base `Agent._command_listener()` needs a real polling or push-receive implementation.
-- Or, the codebase should commit to using `FleetAgent` and wire it into an entry point.
+- Use `asyncio.run_coroutine_threadsafe(self.stop(), self._loop)` where `self._loop` is the main event loop stored during `start()`.
+- Or set a `self._shutdown_requested` flag and let the main loop handle it.
 
 ---
 
-## Issue 4 — WebSocket receive loop is a no-op (High)
+## Category B: Frontend ↔ Backend Mismatches (High — silent failures)
 
-**Root cause:** `WebSocketTransport._receive_loop()` receives messages and logs them, but the TODO to actually dispatch them was never implemented. Messages arrive and are silently dropped.
+### B1. WebSocket action name mismatch: `command` vs `send_to_agent`
+
+**Priority:** High
+**Impact:** Commands sent from the dashboard Live page via WebSocket will be silently ignored — the backend doesn't recognize the action type.
 
 **Affected files:**
 
-| File | Lines | What's there |
+| File | Lines | What happens |
 |------|-------|-------------|
-| `transport/websocket_transport.py` | 196-221 | `async def _receive_loop(self) -> None:` — receives via `await self._websocket.recv()`, decompresses with gzip, parses JSON, logs `"Received message: {data}"`, then hits line 212: `# TODO: Process received messages (e.g., commands from controller)`. Nothing further happens. |
+| `dashboard/static/js/ws-client.js` | 364 | Frontend sends: `this.send('command', {agent_id, action, parameters})` |
+| `dashboard/routes/websocket.py` | 246 | Backend handles: `elif action == "send_to_agent":` |
+| `dashboard/routes/websocket.py` | 232-272 | Full action dispatch: `get_status`, `broadcast`, `send_to_agent`, `get_captures`. No `command` case. |
 
 **What a fix requires:**
-- After parsing, the receive loop should call a callback (e.g., `self.on_message(data)`) or dispatch to `Agent.handle_command()`.
-- A callback/handler registration mechanism so the transport doesn't need to know about the Agent directly.
+Either:
+- Change `ws-client.js:364` from `'command'` to `'send_to_agent'`
+- Or add `elif action == "command":` as an alias in `websocket.py:246`
 
 ---
 
-## Issue 5 — No WebSocket frontend client (High)
+### B2. Frontend expects `heartbeat` WS messages, backend never sends them
 
-**Root cause:** The dashboard backend defines two WebSocket endpoints (`/ws/dashboard` and `/ws/agent/{agent_id}`) with full connection management, but no JavaScript code in any static file or template creates a WebSocket connection. The entire real-time infrastructure has no frontend consumer.
+**Priority:** Medium
+**Impact:** Dead handler code. Frontend `ws-client.js:204` registers a handler for `heartbeat` messages. The backend only sends `agent_status` (when an agent heartbeats). Not a crash, but misleading.
 
 **Affected files:**
 
-| File | Lines | What's there |
+| File | Lines | What happens |
 |------|-------|-------------|
-| `dashboard/routes/websocket.py` | 160 | `@ws_router.websocket("/ws/dashboard")` — accepts dashboard client connections. |
-| `dashboard/routes/websocket.py` | 191 | `@ws_router.websocket("/ws/agent/{agent_id}")` — accepts agent connections. |
-| `dashboard/routes/websocket.py` | 27-130 | `ConnectionManager` class — full implementation: `connect_dashboard()`, `connect_agent()`, `broadcast_dashboard()`, `send_to_agent()`. |
-| `dashboard/static/js/dashboard.js` | entire file | Uses only `fetch()` for REST API calls. Zero WebSocket code. |
-| `dashboard/static/js/*.js` | all files | Searched all JS files — none create `new WebSocket(...)`. |
+| `dashboard/static/js/ws-client.js` | 203-205 | `this.handlers.set('heartbeat', ...)` — handler registered but never triggered |
+| `dashboard/routes/websocket.py` | 289-300 | Agent heartbeats are received and rebroadcast as `{"type": "agent_status", ...}`, NOT as `{"type": "heartbeat", ...}` |
 
 **What a fix requires:**
-- JavaScript in `dashboard.js` (or a new `ws-client.js`) that opens a WebSocket to `ws://<host>/ws/dashboard`.
-- Handlers for incoming message types: `agent_status`, `new_capture`, `command_result`, `status`.
-- Live-updating UI elements that react to WebSocket events.
+Either:
+- Backend sends a `heartbeat` message type alongside `agent_status`
+- Or frontend handles `agent_status` instead (it already does at line 183, so just remove the dead `heartbeat` handler)
 
 ---
 
-## Issue 6 — Signatures are created but never verified (High)
+### B3. Backend sends `captures` WS message, no specific frontend handler
 
-**Root cause:** `SecureChannel` has a `sign()` method and signatures are included in `ProtocolMessage`, but no code on either side (controller or agent) ever calls a verify function. Messages can be tampered with undetected.
+**Priority:** Low
+**Impact:** Message is caught by generic handler, works but not type-safe.
 
 **Affected files:**
 
-| File | Lines | What's there |
+| File | Lines | What happens |
 |------|-------|-------------|
-| `agent_controller.py` | 248-252 | `SecureChannel.sign(self, data: bytes) -> bytes` — signs using RSA-PSS via `sign_with_private_key()`. |
-| `agent_controller.py` | 513 | `signature = channel.sign(command_data)` — controller signs commands before sending. |
-| `agent_controller.py` | 165-212 | `ProtocolMessage` — has a `signature` field that is set during creation and serialized to JSON. |
-| `agent_controller.py` | entire file | No call to any `verify()` or `verify_signature()` function exists. The signature is packed and sent but the receiver never checks it. |
-| `utils/crypto.py` | (verify functions) | `verify_with_public_key()` exists in the crypto module but is never called by the agent/controller code. |
+| `dashboard/routes/websocket.py` | 272 | Backend sends `{"type": "captures", "data": [...]}` in response to `get_captures` action |
+| `dashboard/static/js/ws-client.js` | — | No `this.handlers.set('captures', ...)` call. Falls through to default handler. |
 
 **What a fix requires:**
-- On the controller side: verify the agent's signature on registration, heartbeat, and command_response messages using the agent's stored public key.
-- On the agent side: verify the controller's signature on commands using the controller's public key (which first requires a key exchange — see Issue 7).
+- Add `this.handlers.set('captures', (data) => { ... })` in `ws-client.js` for explicit handling.
 
 ---
 
-## Issue 7 — Three incompatible message protocols (High)
+## Category C: Config Keys Defined But Never Read (Medium — dead config)
 
-**Root cause:** Three different parts of the codebase define their own message formats. They cannot interoperate.
+These config keys exist in `config/default_config.yaml` but no code reads them via `settings.get()` or `config.get()`. They give users the false impression that these features are configurable.
 
-**Protocol A — Base Agent/Controller (`ProtocolMessage`):**
-```
-{
-  "version": "1.0",
-  "type": "register|heartbeat|command|command_response",
-  "agent_id": "...",
-  "timestamp": 1234567890.0,
-  "payload": { ... },
-  "signature": "base64..."
-}
-```
-Defined in `agent_controller.py:165-212`. Used by `Agent._register()` (line 710) and `Controller._send_command_to_agent()` (line 513).
+| # | Config key | YAML line | Expected consumer | Status |
+|---|-----------|-----------|-------------------|--------|
+| C1 | `fleet.transport.http_enabled` | 215 | Should gate HTTP transport for agents | Never checked |
+| C2 | `fleet.transport.websocket_enabled` | 216 | Should gate WebSocket transport for agents | Never checked |
+| C3 | `fleet.transport.redis_enabled` | 217 | Should gate Redis transport | Never checked |
+| C4 | `fleet.transport.redis_url` | 218 | Should configure Redis connection | Never read |
+| C5 | `fleet.security.max_payload_size_mb` | 220 | Should limit incoming payload size | Never enforced |
+| C6 | `fleet.security.rate_limit_requests_per_minute` | 221 | Should throttle agent requests | Never enforced |
+| C7 | `fleet.auth.max_failed_attempts` | 207 | Should lock out after N failed logins | Never checked |
+| C8 | `fleet.auth.lockout_minutes` | 208 | Should define lockout duration | Never enforced |
+| C9 | `fleet.controller.command_timeout_seconds` | 212 | Should timeout pending commands | Never applied |
+| C10 | `fleet.controller.max_queue_depth` | 213 | Should limit command queue size | Never enforced |
 
-**Protocol B — FleetAgent (REST JSON):**
-```
-POST /api/v1/fleet/register  { hostname, platform, ... }
-POST /api/v1/fleet/heartbeat { agent_id, status, ... }
-GET  /api/v1/fleet/commands
-POST /api/v1/fleet/commands/{id}/response
-```
-Defined in `fleet/agent.py:102-228`. Consumed by `dashboard/routes/fleet_api.py`.
+**What a fix requires for each:**
+- Either implement the feature that reads the key, or remove the key from config with a comment explaining it's not yet supported.
 
-**Protocol C — Dashboard WebSocket:**
-```
-{
-  "type": "agent_status|command|get_status|broadcast|...",
-  "data": { ... }
-}
-```
-Defined in `dashboard/routes/websocket.py:228-333`. Expects flat `{type, data}` shape.
+---
 
-**Affected files:**
+## Category D: Code Reads Config Keys That Don't Exist (Medium — invisible defaults)
 
-| File | Lines | Protocol |
-|------|-------|----------|
-| `agent_controller.py` | 165-212 | Protocol A (`ProtocolMessage`) |
-| `agent_controller.py` | 710 | Agent sends Protocol A via `transport.send(message.to_bytes())` |
-| `fleet/agent.py` | 102-228 | Protocol B (REST JSON) |
-| `dashboard/routes/fleet_api.py` | 101-212 | Receives Protocol B |
-| `dashboard/routes/websocket.py` | 228-333 | Expects Protocol C |
-| `transport/http_transport.py` | 66 | Sends raw bytes (Protocol A) — no endpoint receives this format |
+These config keys are read by code via `.get("key", default)` but don't appear in `default_config.yaml`. The code works via hardcoded fallbacks, but users can't discover or override these settings.
+
+### D1. Agent-level config keys (agent_controller.py)
+
+| Config key read | File | Line | Hardcoded default |
+|----------------|------|------|------------------|
+| `agent_id` | `agent_controller.py` | 591 | `str(uuid4())` |
+| `controller_url` | `agent_controller.py` | 592 | `""` |
+| `hostname` | `agent_controller.py` | 593 | `socket.gethostname()` |
+| `platform` | `agent_controller.py` | 594 | `sys.platform` |
+| `version` | `agent_controller.py` | 595 | `"1.0.0"` |
+| `heartbeat_interval` | `agent_controller.py` | 627 | `60` |
+| `reconnect_interval` | `agent_controller.py` | 628 | `30` |
+| `max_retries` | `agent_controller.py` | 629 | `3` |
+| `transport_method` | `agent_controller.py` | 651 | `"http"` |
+| `command_poll_interval` | `agent_controller.py` | 774 | `5` |
+| `commands_endpoint` | `agent_controller.py` | 775 | `""` |
+
+### D2. Controller-level config keys (agent_controller.py)
+
+| Config key read | File | Line | Hardcoded default |
+|----------------|------|------|------------------|
+| `heartbeat_timeout` | `agent_controller.py` | 276 | `120` |
+| `max_command_history` | `agent_controller.py` | 277 | `1000` |
+| `cleanup_interval` | `agent_controller.py` | 278 | `300` |
+
+### D3. Fleet agent config (fleet/agent.py)
+
+| Config key read | File | Line | Hardcoded default |
+|----------------|------|------|------------------|
+| `sign_requests` | `fleet/agent.py` | 92 | `false` |
+
+### D4. Mouse capture config (capture/mouse_capture.py)
+
+| Config key read | File | Line | Hardcoded default |
+|----------------|------|------|------------------|
+| `capture.mouse.move_throttle_interval` | `capture/mouse_capture.py` | 47 | `0.1` |
 
 **What a fix requires:**
-- Decide on a single canonical wire format.
-- Either unify around `ProtocolMessage` (and update dashboard WS to parse it) or unify around the REST/JSON format (and retire `ProtocolMessage`).
-- Ensure HTTP transport has a matching server endpoint if raw `ProtocolMessage` bytes are sent.
+- Add these keys to `default_config.yaml` under appropriate sections (e.g., `fleet.agent.*`, `fleet.controller.*`, `capture.mouse.*`) so they're discoverable and overridable.
 
 ---
 
-## Issue 8 — Dashboard WebSocket handlers are log-only stubs (Medium)
+## Category E: Import Chain Issues (Medium — fragile)
 
-**Root cause:** When agent messages arrive via WebSocket, the handler functions only call `logger.info()` or `logger.debug()`. No data is persisted or forwarded.
+### E1. Circular import risk: `transport` ↔ `utils.redis_queue`
 
-**Affected files:**
+**Priority:** Medium
+**Impact:** Works currently due to import ordering, but fragile. Could break if imports are reordered.
 
-| File | Lines | Function | What it does |
-|------|-------|----------|-------------|
-| `dashboard/routes/websocket.py` | 362-366 | `_update_agent_status()` | Logs agent_id and status keys. No DB write. |
-| `dashboard/routes/websocket.py` | 368-377 | `_handle_capture_data()` | Logs agent_id, capture type, and size. No storage. |
-| `dashboard/routes/websocket.py` | 379-386 | `_handle_command_response()` | Logs command_id and status. No forwarding to controller. |
+**Import chain:**
+1. `transport/__init__.py:96` → `__import__("transport.redis_transport")`
+2. `transport/redis_transport.py:9` → `from utils.redis_queue import RedisTransport`
+3. `utils/redis_queue.py:23` → `from transport import register_transport`
+4. Back to `transport/__init__.py`
+
+**Why it works today:** `register_transport` is defined at `transport/__init__.py:29-38` before the auto-import loop at line 87. By the time step 3 runs, `register_transport` is already in `transport`'s namespace.
 
 **What a fix requires:**
-- These functions should write to `FleetStorage` (or `SQLiteStorage`) to persist agent status, capture data, and command results.
-- `_handle_command_response()` should also call `controller.handle_command_response()` to update command state.
+- Move `register_transport` to a separate `transport._registry` module to break the cycle cleanly.
+- Or document the import order dependency with a comment.
 
 ---
 
-## Issue 9 — `_get_recent_captures()` returns mock data (Medium)
+### E2. Missing `redis` and `websockets` in dependencies
 
-**Root cause:** The WebSocket `get_captures` command handler returns hardcoded fake data instead of querying the database.
+**Priority:** Medium
+**Impact:** `import redis` in `utils/redis_queue.py:21` and `import websockets` in `transport/websocket_transport.py:20` will crash if packages aren't installed. They're optional transports, so this is acceptable if documented but currently isn't.
 
 **Affected files:**
 
-| File | Lines | What's there |
-|------|-------|-------------|
-| `dashboard/routes/websocket.py` | 346-359 | `async def _get_recent_captures()` — comment says *"In production, this would query the actual storage system. For now, return mock data"*. Returns a list of `{"id": f"capture_{i}", ...}` dicts. |
-| `storage/sqlite_storage.py` | 117-134 | `get_pending()` method exists and could serve this purpose — returns real capture records from the `captures` table. |
+| Package | Required by | In requirements.txt? | In pyproject.toml? |
+|---------|------------|---------------------|-------------------|
+| `redis>=5.0.0` | `utils/redis_queue.py:21` | No | No |
+| `websockets>=11.0` | `transport/websocket_transport.py:20` | No | No |
 
 **What a fix requires:**
-- Replace the mock return with a call to `SQLiteStorage.get_pending()` or a similar query method.
-- The WebSocket handler needs access to the storage instance (via `app.state` or dependency injection).
+- Add to `[project.optional-dependencies]` in `pyproject.toml` under a `fleet` or `transports` extra:
+  ```toml
+  [project.optional-dependencies]
+  transports = ["redis>=5.0.0", "websockets>=11.0"]
+  ```
+- Or add to main dependencies if they're always needed.
 
 ---
 
-## Issue 10 — `/live` route is redundant (Low)
+## Category F: Miscellaneous (Low)
 
-**Root cause:** The `/live` route renders the exact same `dashboard.html` template as `/dashboard`, just with `page: "live"`. Since no WebSocket frontend client exists (Issue 5), there is no live functionality.
+### F1. `/health` endpoint has no frontend consumer
 
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `dashboard/routes/pages.py` | 46-60 | `live_dashboard_page()` — renders `dashboard.html` with `{"page": "live"}`. |
-| `dashboard/routes/pages.py` | 29-43 | `dashboard_page()` — renders `dashboard.html` with `{"page": "dashboard"}`. |
-| `dashboard/templates/dashboard.html` | entire file | No conditional logic for `page == "live"` — both routes render identically. |
-
-**What a fix requires:**
-- Either add WebSocket-powered live functionality differentiated by `page == "live"`, or remove the `/live` route to avoid confusion.
+**File:** `dashboard/routes/api.py:36-39`
+**Impact:** None — likely intentional for external monitoring (load balancers, uptime checks). Not a bug.
 
 ---
 
-## Issue 11 — `fleet/controller.py` doesn't persist keys (Medium)
+### F2. `APP_ENV` read via `os.environ.get()` directly
 
-**Root cause:** When an agent registers, the controller generates a `SecureChannel` with RSA keys, but these keys are stored only in memory. A restart loses all key material, breaking any encrypted communication.
-
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `fleet/controller.py` | 78 | `# TODO: Persist keys to file or DB to support key pinning.` |
-| `agent_controller.py` | 214-253 | `SecureChannel` — generates RSA keys in `initialize()`, stores them as instance attributes. No serialization. |
-| `storage/fleet_storage.py` | (schema) | Fleet storage has tables for agents and commands but no column for key material. |
-
-**What a fix requires:**
-- Serialize RSA key pairs (PEM format) and store in the agents table or a dedicated keys table.
-- On restart, reload keys for known agents so encrypted sessions resume.
+**File:** `dashboard/app.py:114`
+**Impact:** Minor inconsistency. Uses `os.environ.get("APP_ENV", "development")` directly instead of going through the `Settings` system (`KEYLOGGER_` prefix pattern). Acceptable since it's needed before settings are fully loaded.
 
 ---
 
-## Issue 12 — `fleet_api.py` command endpoint skips encryption (Medium)
+# Summary Table
 
-**Root cause:** The fleet REST API returns commands as plain JSON over HTTPS, bypassing the `SecureChannel` encryption that the base controller uses. A comment in the code acknowledges this gap.
+## Resolved
 
-**Affected files:**
+| ID | Issue | Fixed by | Round |
+|----|-------|----------|-------|
+| R1 | Missing `/analytics` route (404) | Code review | 1 |
+| R2 | `url_for('login')` Flask syntax | Code review | 1 |
+| R3 | RedisTransport wrong directory | User | 2 |
+| R4 | Base Agent never instantiated | User | 2 |
+| R5 | Agent command listener stub | User | 2 |
+| R6 | WebSocket receive loop no-op | User | 2 |
+| R7 | No WebSocket frontend client | User | 2 |
+| R8 | Signatures never verified | User | 2 |
+| R9 | Three incompatible protocols | User | 2 |
+| R10 | WS handlers log-only / mock data | User | 2 |
+| R11 | `/live` route redundant | User | 2 |
+| R12 | Controller keys not persisted | User | 2 |
+| R13 | Fleet API encryption documented | User | 2 |
+| R14 | ProfileMatcher integrated | User | 2 |
+| R15 | EventBus integrated | User | 2 |
+| R16 | Legacy scripts archived | User | 2 |
+| R17 | FleetAgent real metrics | User | 2 |
+| R18 | `set_storage_references()` missing SQLiteStorage | User | 3 |
+| R19 | Signature verification default off | User | 3 |
+| R20 | Path traversal in screenshots | User | 3 |
+| R21 | TODO enrollment key extraction | User | 3 |
+| R22 | Unsafe dict access `self.agents[agent_id]` | Code review | 4 |
+| R23 | `pyproject.toml` missing deps | Code review | 4 |
+| R24 | Missing `transport.websocket` config | Code review | 4 |
+| R25 | Dead config `profiler.store_profiles` | Code review | 4 |
+| R26 | Dead config `service.display` | Code review | 4 |
 
-| File | Lines | What's there |
-|------|-------|-------------|
-| `dashboard/routes/fleet_api.py` | 155 | `@router.get("/commands")` — fetches pending commands for an agent. |
-| `dashboard/routes/fleet_api.py` | 177-193 | Comment block: *"Encrypt command for agent. Since we are using REST, we might skip full encryption if TLS is used. But Gap 4 says 'Secure Channel'. So we should return the encrypted blob that _send_command_to_agent would produce."* |
+## Remaining
 
-**What a fix requires:**
-- If transport-level encryption is desired (beyond TLS), the endpoint should encrypt command payloads using the agent's stored public key before returning them.
-- If TLS is considered sufficient, remove the TODO and document the decision.
-
----
-
-## Issue 13 — `biometrics/matcher.py` is exported but never used (Low)
-
-**Root cause:** `ProfileMatcher` is exported in `biometrics/__init__.py` but no production code ever imports or instantiates it. Only test files reference it.
-
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `biometrics/__init__.py` | 8 | `from biometrics.matcher import ProfileMatcher` |
-| `biometrics/__init__.py` | 14 | Listed in `__all__` |
-| `biometrics/matcher.py` | entire file | `ProfileMatcher` class with `compare_profiles()`, `authenticate()`, `get_similarity_score()`. |
-| `main.py` | 479-643 | Uses `BiometricsAnalyzer` and `BiometricsCollector` but never `ProfileMatcher`. |
-
----
-
-## Issue 14 — `engine/event_bus.py` and `engine/registry.py` exported but never used (Low)
-
-**Root cause:** Both `EventBus` and `RuleRegistry` are exported from `engine/__init__.py` but never instantiated anywhere in production code. `RuleEngine` (the class that IS used) doesn't depend on either of them.
-
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `engine/__init__.py` | 6 | `from engine.event_bus import EventBus` |
-| `engine/__init__.py` | 8 | `from engine.registry import RuleRegistry` |
-| `engine/__init__.py` | 13-14 | Both listed in `__all__` |
-| `engine/event_bus.py` | entire file (~37 lines) | `EventBus` class — publish/subscribe pattern. Never instantiated. |
-| `engine/registry.py` | entire file (~84 lines) | `RuleRegistry` class — rule storage/lookup. Never instantiated in production. |
-| `main.py` | 527-593 | Uses `RuleEngine` directly. Does not use `EventBus` or `RuleRegistry`. |
-
----
-
-## Issue 15 — Legacy root-level scripts are orphaned (Low)
-
-**Root cause:** Two files at the repository root predate the modular architecture and are fully superseded by newer modules. They are never imported or referenced.
-
-**Affected files:**
-
-| File | Lines | What's there | Superseded by |
-|------|-------|-------------|---------------|
-| `createfile.py` | ~103 lines | `ScreenshotReporter` — standalone screenshot capture and email. Has `if __name__ == "__main__"`. | `capture/screenshot_capture.py` + `transport/email_transport.py` |
-| `mailLogger.py` | ~99 lines | `SendMail()` function — sends screenshots via SMTP. | `transport/email_transport.py` |
-
----
-
-## Issue 16 — Base `Controller` never receives agent HTTP messages (High)
-
-**Root cause:** The base `Agent` sends `ProtocolMessage` bytes via `HttpTransport` to `self.controller_url`, but there is no corresponding FastAPI/HTTP endpoint that parses `ProtocolMessage` payloads. The `fleet_api.py` endpoints accept REST JSON (Protocol B), not raw `ProtocolMessage` bytes (Protocol A).
-
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `agent_controller.py` | 653-659 | Agent creates `HttpTransport` pointing at `controller_url`. |
-| `agent_controller.py` | 710 | Agent sends: `self.transport.send(message.to_bytes())` — raw bytes. |
-| `transport/http_transport.py` | 66-96 | `send()` does `requests.post(url, data=data)` — sends binary payload. |
-| `dashboard/routes/fleet_api.py` | 101-212 | Endpoints expect JSON bodies with specific fields, NOT raw `ProtocolMessage` bytes. |
-| `dashboard/routes/api.py` | entire file | No endpoint for agent registration, heartbeat, or command responses. |
-
-**What a fix requires:**
-- Either add an endpoint that accepts `ProtocolMessage` bytes (e.g., `POST /api/v1/agent/message`) and routes to the correct controller method based on `message.type`.
-- Or retire the `ProtocolMessage` format and have the base `Agent` use the REST JSON format that `fleet_api.py` already handles.
-
----
-
-## Issue 17 — `FleetAgent` has a metrics TODO (Low)
-
-**Affected files:**
-
-| File | Lines | What's there |
-|------|-------|-------------|
-| `fleet/agent.py` | 149 | `# TODO: Add real metrics` — heartbeat payload sends placeholder metrics instead of actual system stats. |
-| `utils/system_info.py` | entire file | `get_system_info()` exists and collects real system metrics — but `FleetAgent` doesn't use it. |
-
----
-
-## Summary table
-
-| # | Issue | Priority | Status |
-|---|-------|----------|--------|
-| 1 | RedisTransport in wrong directory | High | ✅ FIXED — Created `transport/redis_transport.py` bridge module |
-| 2 | Base Agent never instantiated | High | ✅ FIXED — Created `fleet/run_agent.py` CLI entry point |
-| 3 | Agent _command_listener is a stub | High | ✅ FIXED — Implemented polling/receive logic in base Agent |
-| 4 | WebSocket receive loop is a no-op | High | ✅ FIXED — Added handler dispatch + receive queue in `websocket_transport.py` |
-| 5 | No WebSocket frontend client | High | ✅ FIXED — Created `dashboard/static/js/ws-client.js` |
-| 6 | Signatures never verified | High | ✅ FIXED — Added `verify_with_public_key()` + API signature verification |
-| 7 | Three incompatible protocols | High | ✅ RESOLVED — REST JSON (Protocol B) is canonical; ProtocolMessage is legacy |
-| 8 | WS handlers are log-only stubs | Medium | ✅ FIXED — Handlers now persist to storage when available |
-| 9 | _get_recent_captures returns mock data | Medium | ✅ FIXED — Queries real storage, falls back to mock |
-| 10 | /live route is redundant | Low | ✅ FIXED — Created dedicated `live.html` with WebSocket |
-| 11 | Fleet controller doesn't persist keys | Medium | ✅ FIXED — Added `controller_keys` table and persistence in FleetController |
-| 12 | Fleet API skips command encryption | Medium | DOCUMENTED — TLS provides transport encryption; signatures provide auth |
-| 13 | biometrics/matcher.py unused | Low | ✅ FIXED — Integrated ProfileMatcher into BiometricsAnalyzer with authentication support |
-| 14 | EventBus and RuleRegistry unused | Low | ✅ FIXED — EventBus integrated in main.py; events published for decoupled routing |
-| 15 | Legacy root scripts orphaned | Low | ✅ FIXED — Moved to `legacy/` directory with documentation |
-| 16 | No HTTP endpoint for ProtocolMessage | High | ✅ RESOLVED — FleetAgent uses REST JSON; base Agent is legacy fallback |
-| 17 | FleetAgent metrics placeholder | Low | ✅ FIXED — Uses `get_system_metrics()` for real stats |
-
----
-
-## Fixes Applied
-
-### Issue 1: RedisTransport
-- Created `transport/redis_transport.py` that re-exports from `utils/redis_queue.py`
-- Transport auto-registers via the existing `@register_transport("redis")` decorator
-
-### Issue 2: FleetAgent Entry Point
-- Created `fleet/run_agent.py` CLI with argparse for agent configuration
-- Updated base `Agent.start()` to use config-driven transport factory
-
-### Issue 3: Agent Command Listener
-- Implemented real polling/receive logic in `Agent._command_listener()`
-- Supports both HTTP polling and WebSocket receive modes
-
-### Issue 4: WebSocket Receive Loop
-- Added `register_handler()`, `set_default_handler()`, `receive()` to WebSocketTransport
-- Messages are dispatched to registered handlers and queued for sync consumers
-
-### Issue 5: WebSocket Frontend Client
-- Created `dashboard/static/js/ws-client.js` with `DashboardWebSocket` and `LiveDashboard` classes
-- Handles connection management, message routing, and live UI updates
-
-### Issue 6: Signature Verification
-- Added `verify_with_public_key()` to `utils/crypto.py`
-- Added `SecureChannel.verify()` method
-- Fleet API optionally verifies X-Signature header when `require_signature_verification` is enabled
-- FleetAgent signs requests when `sign_requests` config is true
-
-### Issue 7 & 16: Protocol Unification
-**Decision**: REST JSON (Protocol B) is the canonical format used by FleetAgent and fleet_api.py.
-ProtocolMessage (Protocol A) remains for potential WebSocket/custom transport use but is considered legacy.
-
-### Issue 8 & 9: WS Handlers Persistence
-- Added `set_storage_references()` to websocket.py
-- Handlers now write to FleetStorage and SQLiteStorage when available
-- `_get_recent_captures()` queries real storage with mock fallback
-
-### Issue 10: /live Route
-- Created dedicated `live.html` template with WebSocket integration
-- Added Live link to sidebar navigation
-- Live page shows real-time activity feed and agent status
-
-### Issue 12: Command Encryption Decision
-**Decision**: HTTPS/TLS provides transport encryption. Application-level encryption
-is optional (signatures can verify authenticity). Commands are transmitted as plain
-JSON over TLS, which is standard practice for REST APIs.
-
-### Issue 17: FleetAgent Metrics
-- Added `get_system_metrics()` to `utils/system_info.py`
-- Uses psutil if available, falls back to OS-level stats
-- FleetAgent heartbeats now include CPU, memory, and disk metrics
-
-### Issue 11: Controller Key Persistence
-- Added `controller_keys` table to `storage/fleet_storage.py`
-- Added `save_controller_keys()`, `get_controller_keys()`, and `delete_controller_keys()` methods
-- Updated `FleetController._load_or_generate_keys()` to load from DB or generate+persist
-- Added `rotate_keys()` method for key rotation support
-
-### Issue 13: ProfileMatcher Integration
-- Integrated `ProfileMatcher` into `BiometricsAnalyzer` class
-- Added `register_reference_profile()`, `unregister_profile()`, `authenticate()` methods
-- Added `get_similarity_score()` and `is_same_user()` comparison methods
-- Added configuration in `config/default_config.yaml` under `biometrics.authentication`
-
-### Issue 14: EventBus Integration
-- Initialized `EventBus` in `main.py`
-- Subscribed rule_engine (all events), biometrics (keystroke events), profiler (window events)
-- Events are now published through `event_bus.publish()` for decoupled routing
-- Removed duplicate direct processing calls
-
-### Issue 15: Legacy Scripts Archived
-- Moved `createfile.py` and `mailLogger.py` to `legacy/` directory
-- Added `legacy/README.md` documenting the archived scripts and their modern replacements
+| ID | Issue | Priority | Category |
+|----|-------|----------|----------|
+| A1 | `send_command()` async/sync crash | Critical | Async safety |
+| A2 | `send_command_async()` wraps broken sync | Critical | Async safety |
+| A3 | `_handle_shutdown()` create_task from sync | Critical | Async safety |
+| B1 | WS action `command` vs `send_to_agent` | High | Frontend-backend |
+| B2 | Frontend expects `heartbeat` WS, never sent | Medium | Frontend-backend |
+| B3 | No frontend handler for `captures` WS type | Low | Frontend-backend |
+| C1-C10 | 10 config keys defined but never read | Medium | Config wiring |
+| D1-D4 | 16+ config keys read but not in YAML | Medium | Config wiring |
+| E1 | Circular import risk (transport ↔ redis) | Medium | Import chain |
+| E2 | `redis` and `websockets` not in deps | Medium | Dependencies |
+| F1 | `/health` no frontend consumer | Low | Informational |
+| F2 | `APP_ENV` bypasses settings | Low | Consistency |

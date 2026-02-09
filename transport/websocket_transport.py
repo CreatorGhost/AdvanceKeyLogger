@@ -248,6 +248,7 @@ class WebSocketTransport(BaseTransport):
 
     async def _receive_loop(self) -> None:
         """Receive messages from WebSocket and dispatch to handlers."""
+        raw_message: bytes | str | None = None  # Initialize to ensure it's always defined
         while self._connected and self._websocket:
             try:
                 # Receive message
@@ -287,14 +288,16 @@ class WebSocketTransport(BaseTransport):
                 break
             except gzip.BadGzipFile:
                 # Message wasn't compressed, try parsing directly
-                # raw_message is guaranteed to be bound here since BadGzipFile
-                # can only be raised after gzip.decompress(raw_message) was called
+                # Verify raw_message is defined before using it
+                if raw_message is None:
+                    logger.error("BadGzipFile raised but raw_message is not defined")
+                    continue
                 try:
-                    uncompressed_data = json.loads(raw_message)  # type: ignore[possibly-undefined]
+                    uncompressed_data = json.loads(raw_message)
                     raw_bytes = (
-                        raw_message  # type: ignore[possibly-undefined]
-                        if isinstance(raw_message, bytes)  # type: ignore[possibly-undefined]
-                        else raw_message.encode()  # type: ignore[possibly-undefined]
+                        raw_message
+                        if isinstance(raw_message, bytes)
+                        else raw_message.encode()
                     )
                     if self._receive_queue:
                         await self._receive_queue.put(raw_bytes)
