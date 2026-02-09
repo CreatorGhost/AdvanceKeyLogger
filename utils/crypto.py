@@ -1,8 +1,9 @@
 """
-Encryption and decryption utilities using AES-256-CBC.
+Encryption and decryption utilities using AES-256-CBC and RSA.
 
 Provides symmetric encryption with proper key derivation,
 random initialization vectors, and PKCS7 padding.
+Also provides asymmetric RSA encryption for secure key exchange.
 
 Dependencies:
     pip install cryptography
@@ -21,14 +22,23 @@ Usage:
     # Save the salt! You need it to derive the same key for decryption.
     key2, _ = derive_key_from_password("my-password", salt=salt)
     plaintext = decrypt(ciphertext, key2)
+
+    # RSA key generation for asymmetric encryption
+    public_key, private_key = generate_rsa_key_pair()
+    encrypted = encrypt_with_public_key(public_key, b"secret data")
+    decrypted = decrypt_with_private_key(private_key, encrypted)
 """
+
 from __future__ import annotations
 
 import base64
 import logging
 import os
 
-from cryptography.hazmat.primitives import hashes, padding
+from typing import cast
+from cryptography.hazmat.primitives import hashes, padding, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding as asymmetric_padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
@@ -57,9 +67,7 @@ def key_from_base64(encoded: str) -> bytes:
     return base64.b64decode(encoded.encode("utf-8"))
 
 
-def derive_key_from_password(
-    password: str, salt: bytes | None = None
-) -> tuple[bytes, bytes]:
+def derive_key_from_password(password: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
     """
     Derive an encryption key from a password using PBKDF2-HMAC-SHA256.
 
@@ -150,3 +158,90 @@ def decrypt(data: bytes, key: bytes) -> bytes:
 
     logger.debug("Decrypted %d bytes -> %d bytes", len(data), len(plaintext))
     return plaintext
+
+
+def generate_rsa_key_pair(key_size: int = 2048) -> tuple[bytes, bytes]:
+    """
+    Generate an RSA key pair for asymmetric encryption.
+
+    Args:
+        key_size: Size of the RSA key in bits (default 2048).
+
+    Returns:
+        Tuple of (public_key_pem, private_key_pem) in PEM format.
+    """
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=key_size,
+    )
+
+    public_key = private_key.public_key()
+
+    # Serialize private key
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    # Serialize public key
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    logger.debug("Generated RSA key pair (%d bits)", key_size)
+    return public_pem, private_pem
+
+
+def encrypt_with_public_key(public_key_pem: bytes, data: bytes) -> bytes:
+    """
+    Encrypt data using RSA public key.
+
+    Args:
+        public_key_pem: Public key in PEM format.
+        data: Data to encrypt (must be <= 190 bytes for 2048-bit key with OAEP).
+
+    Returns:
+        Encrypted data.
+    """
+    public_key = cast(RSAPublicKey, serialization.load_pem_public_key(public_key_pem))
+
+    encrypted = public_key.encrypt(
+        data,
+        asymmetric_padding.OAEP(
+            mgf=asymmetric_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+
+    logger.debug("Encrypted %d bytes with RSA public key", len(data))
+    return encrypted
+
+
+def decrypt_with_private_key(private_key_pem: bytes, encrypted_data: bytes) -> bytes:
+    """
+    Decrypt data using RSA private key.
+
+    Args:
+        private_key_pem: Private key in PEM format.
+        encrypted_data: Data to decrypt.
+
+    Returns:
+        Decrypted data.
+    """
+    private_key = cast(
+        RSAPrivateKey, serialization.load_pem_private_key(private_key_pem, password=None)
+    )
+
+    decrypted = private_key.decrypt(
+        encrypted_data,
+        asymmetric_padding.OAEP(
+            mgf=asymmetric_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+
+    logger.debug("Decrypted %d bytes with RSA private key", len(encrypted_data))
+    return decrypted

@@ -15,6 +15,7 @@ Then load the configured transport:
     from transport import create_transport
     transport = create_transport(config_dict)
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,11 +28,13 @@ _TRANSPORT_REGISTRY: dict[str, type[BaseTransport]] = {}
 
 def register_transport(name: str):
     """Decorator to register a transport plugin by name."""
+
     def decorator(cls: type[BaseTransport]) -> type[BaseTransport]:
         if not issubclass(cls, BaseTransport):
             raise TypeError(f"{cls.__name__} must inherit from BaseTransport")
         _TRANSPORT_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -86,6 +89,8 @@ for _module in (
     "http_transport",
     "ftp_transport",
     "telegram_transport",
+    "websocket_transport",
+    "redis_transport",
 ):
     try:
         __import__(f"{__name__}.{_module}")
