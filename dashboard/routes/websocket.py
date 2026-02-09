@@ -379,4 +379,7 @@ async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> N
 async def _handle_command_response(agent_id: str, response_data: dict[str, Any]) -> None:
     """Handle command response from agent."""
     # In production, this would process the command response
-    logger.info(f"Agent {agent_id} command response: {response_data}")
+    cmd_id = response_data.get("command_id", "unknown")
+    status = response_data.get("status", "unknown")
+    logger.info("Agent %s command response (command_id=%s, status=%s)", agent_id, cmd_id, status)
+    logger.debug("Agent %s full command response: %s", agent_id, response_data)
