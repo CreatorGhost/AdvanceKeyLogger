@@ -1,4 +1,5 @@
 """Page routes — serve HTML templates."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
@@ -32,23 +33,31 @@ async def dashboard_page(request: Request) -> HTMLResponse:
     if redirect:
         return redirect
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "dashboard.html", {
-        "user": get_current_user(request),
-        "page": "dashboard",
-    })
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "user": get_current_user(request),
+            "page": "dashboard",
+        },
+    )
 
 
-@pages_router.get("/analytics", response_class=HTMLResponse)
-async def analytics_page(request: Request) -> HTMLResponse:
-    """Render analytics page."""
-    redirect = require_auth(request)
-    if redirect:
-        return redirect
+@pages_router.get("/live", response_class=HTMLResponse)
+async def live_dashboard_page(request: Request) -> HTMLResponse:
+    """Render real-time live dashboard."""
+    user = get_current_user(request)
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "analytics.html", {
-        "user": get_current_user(request),
-        "page": "analytics",
-    })
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "user": user,
+            "page": "live",
+        },
+    )
 
 
 @pages_router.get("/captures", response_class=HTMLResponse)
@@ -58,10 +67,14 @@ async def captures_page(request: Request) -> HTMLResponse:
     if redirect:
         return redirect
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "captures.html", {
-        "user": get_current_user(request),
-        "page": "captures",
-    })
+    return templates.TemplateResponse(
+        request,
+        "captures.html",
+        {
+            "user": get_current_user(request),
+            "page": "captures",
+        },
+    )
 
 
 @pages_router.get("/screenshots", response_class=HTMLResponse)
@@ -71,10 +84,14 @@ async def screenshots_page(request: Request) -> HTMLResponse:
     if redirect:
         return redirect
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "screenshots.html", {
-        "user": get_current_user(request),
-        "page": "screenshots",
-    })
+    return templates.TemplateResponse(
+        request,
+        "screenshots.html",
+        {
+            "user": get_current_user(request),
+            "page": "screenshots",
+        },
+    )
 
 
 @pages_router.get("/settings", response_class=HTMLResponse)
@@ -84,7 +101,11 @@ async def settings_page(request: Request) -> HTMLResponse:
     if redirect:
         return redirect
     templates = request.app.state.templates
-    return templates.TemplateResponse(request, "settings.html", {
-        "user": get_current_user(request),
-        "page": "settings",
-    })
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "user": get_current_user(request),
+            "page": "settings",
+        },
+    )
