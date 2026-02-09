@@ -73,17 +73,79 @@ class FleetController(Controller):
         await super().start()
 
     def _load_or_generate_keys(self) -> None:
-        """Load controller keys from storage or generate new ones."""
-        # For MVP, we'll just generate new ones.
-        # TODO: Persist keys to file or DB to support key pinning.
+        """Load controller keys from storage or generate new ones.
+
+        If keys exist in the database, they are loaded into the SecureChannel.
+        Otherwise, new keys are generated and persisted.
+        """
+        try:
+            keys_data = self.storage.get_controller_keys()
+            if keys_data:
+                # Load existing keys from storage
+                private_key_pem = keys_data.get("private_key", "")
+                public_key_pem = keys_data.get("public_key", "")
+
+                if private_key_pem and public_key_pem:
+                    self.secure_channel.private_key = private_key_pem.encode("utf-8")
+                    self.secure_channel.public_key = public_key_pem.encode("utf-8")
+                    logger.info(
+                        "Controller keys loaded from storage (created: %s)",
+                        keys_data.get("created_at"),
+                    )
+                    return
+        except Exception as e:
+            logger.warning("Failed to load controller keys from storage: %s", e)
+
+        # Generate new keys and persist them
         self.secure_channel.initialize()
-        logger.info("Controller keys initialized")
+        logger.info("Controller keys generated")
+
+        # Persist the newly generated keys
+        try:
+            private_key = self.secure_channel.private_key
+            public_key = self.secure_channel.public_key
+            if private_key and public_key:
+                self.storage.save_controller_keys(
+                    private_key=private_key.decode("utf-8"),
+                    public_key=public_key.decode("utf-8"),
+                    algorithm="RSA",
+                    key_size=2048,
+                )
+                logger.info("Controller keys persisted to storage")
+        except Exception as e:
+            logger.error("Failed to persist controller keys: %s", e)
 
     def get_public_key(self) -> str:
         """Return the controller's public key as PEM string."""
         if self.secure_channel.public_key:
             return self.secure_channel.public_key.decode("utf-8")
         return ""
+
+    def rotate_keys(self) -> bool:
+        """Generate and persist new controller keys.
+
+        Returns:
+            True if keys were rotated successfully, False otherwise.
+        """
+        try:
+            # Generate new keys
+            self.secure_channel.initialize()
+
+            # Persist to storage (will update existing record)
+            private_key = self.secure_channel.private_key
+            public_key = self.secure_channel.public_key
+            if private_key and public_key:
+                self.storage.save_controller_keys(
+                    private_key=private_key.decode("utf-8"),
+                    public_key=public_key.decode("utf-8"),
+                    algorithm="RSA",
+                    key_size=2048,
+                )
+                logger.info("Controller keys rotated successfully")
+                return True
+        except Exception as e:
+            logger.error("Failed to rotate controller keys: %s", e)
+        return False
 
     def _load_state(self) -> None:
         """Load agents and commands from persistent storage."""
@@ -123,7 +185,14 @@ class FleetController(Controller):
 
         # Persist to DB
         agent_dict = metadata.to_dict()
-        # Ensure enrollment key is preserved if passed in metadata tags or similar (TODO)
+
+        # Extract enrollment_key from tags if present
+        # Convention: enrollment key is stored as a tag with prefix "enrollment_key:"
+        enrollment_key = None
+        for tag in metadata.tags:
+            if tag.startswith("enrollment_key:"):
+                enrollment_key = tag[len("enrollment_key:") :]
+                break
 
         self.storage.register_agent(
             metadata.agent_id,
@@ -136,6 +205,7 @@ class FleetController(Controller):
                 "platform": metadata.platform,
                 "version": metadata.version,
                 "metadata": agent_dict,
+                "enrollment_key": enrollment_key,
             },
         )
         return channel

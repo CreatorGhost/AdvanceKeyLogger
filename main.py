@@ -11,6 +11,7 @@ Usage:
     python main.py --list-captures          # Show available capture plugins
     python main.py --list-transports        # Show available transport plugins
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,6 +32,7 @@ from capture import create_enabled_captures, list_captures
 from config.settings import Settings
 from pipeline import Pipeline
 from engine.rule_engine import RuleEngine
+from engine.event_bus import EventBus
 from biometrics.analyzer import BiometricsAnalyzer
 from profiler import AppCategorizer, AppUsageTracker, ProductivityScorer
 from storage.manager import StorageManager
@@ -59,8 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="AdvanceKeyLogger",
         description=(
-            "Educational input monitoring tool for learning"
-            " OS APIs and software architecture."
+            "Educational input monitoring tool for learning OS APIs and software architecture."
         ),
     )
     subparsers = parser.add_subparsers(dest="command")
@@ -71,7 +72,8 @@ def parse_args() -> argparse.Namespace:
         help="Service action to perform",
     )
     parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         type=str,
         default=None,
         help="Path to YAML config file (overrides defaults)",
@@ -312,8 +314,6 @@ def _needs_sqlite_for_routes(config: dict[str, Any]) -> bool:
     return False
 
 
-
-
 def main() -> int:
     """Main application entry point. Returns exit code."""
 
@@ -498,9 +498,7 @@ def main() -> int:
         )
         profiler_scorer = ProductivityScorer(
             focus_min_seconds=int(profiler_cfg.get("focus_min_seconds", 600)),
-            productive_categories=list(
-                profiler_cfg.get("productive_categories", ["work"])
-            ),
+            productive_categories=list(profiler_cfg.get("productive_categories", ["work"])),
             top_n=int(profiler_cfg.get("top_n", 10)),
         )
         profiler_emit_interval = int(profiler_cfg.get("emit_interval_seconds", 300))
@@ -513,8 +511,7 @@ def main() -> int:
     if not captures:
         logger.warning("No capture modules enabled in config. Nothing to do.")
         logger.info(
-            "Enable captures in your config under 'capture:' section. "
-            "Available: %s",
+            "Enable captures in your config under 'capture:' section. Available: %s",
             ", ".join(list_captures()) or "(none registered)",
         )
         if pid_lock:
@@ -523,14 +520,16 @@ def main() -> int:
 
     logger.info("Enabled captures: %s", ", ".join(str(c) for c in captures))
 
+    # --- Event Bus for decoupled event routing ---
+    event_bus = EventBus()
+    logger.debug("Event bus initialized")
+
     # --- Rule engine (optional) ---
     rules_enabled = bool(settings.get("rules.enabled", False))
     rule_engine = None
 
     # --- Wire mouse clicks to screenshot capture (on-demand screenshots) ---
-    screenshot_capture = next(
-        (cap for cap in captures if hasattr(cap, "take_screenshot")), None
-    )
+    screenshot_capture = next((cap for cap in captures if hasattr(cap, "take_screenshot")), None)
     if screenshot_capture:
         for cap in captures:
             if hasattr(cap, "set_click_callback"):
@@ -591,6 +590,47 @@ def main() -> int:
     if rules_enabled:
         rule_engine = RuleEngine(config, captures, _set_report_interval)
         logger.info("Rule engine enabled (rules: %s)", settings.get("rules.path"))
+
+    # --- Subscribe components to EventBus ---
+    # Rule engine handles all event types
+    if rule_engine is not None:
+
+        def _rule_engine_handler(event: dict[str, Any]) -> None:
+            try:
+                rule_engine.process_events([event])
+            except Exception as exc:
+                logger.error("Rule engine handler failed: %s", exc)
+
+        event_bus.subscribe("*", _rule_engine_handler)
+        logger.debug("Rule engine subscribed to all events")
+
+    # Biometrics only needs keystroke events
+    # Use a mutable container so the closure captures the reference to the container,
+    # not the list itself. This prevents the bug where reassigning biometrics_buffer
+    # would leave the closure appending to the old list.
+    biometrics_buffer_ref = {"buffer": biometrics_buffer}
+    if biometrics_enabled:
+
+        def _biometrics_handler(event: dict[str, Any]) -> None:
+            if event.get("type") == "keystroke_timing":
+                biometrics_buffer_ref["buffer"].append(event)
+
+        event_bus.subscribe("keystroke", _biometrics_handler)
+        event_bus.subscribe("keystroke_timing", _biometrics_handler)
+        logger.debug("Biometrics subscribed to keystroke events")
+
+    # Profiler tracks window/app events
+    if profiler_tracker is not None:
+
+        def _profiler_handler(event: dict[str, Any]) -> None:
+            try:
+                profiler_tracker.process_batch([event])
+            except Exception as exc:
+                logger.error("Profiler handler failed: %s", exc)
+
+        event_bus.subscribe("window", _profiler_handler)
+        event_bus.subscribe("app_focus", _profiler_handler)
+        logger.debug("Profiler subscribed to window events")
     logger.info("Entering main loop (report interval: %ds)", report_interval)
 
     if args.dry_run:
@@ -616,42 +656,46 @@ def main() -> int:
             if pipeline is not None and collected:
                 collected = pipeline.process_batch(collected)
 
-            if rule_engine is not None and collected:
-                rule_engine.process_events(collected)
+            # Publish events through EventBus for decoupled routing to subscribers
+            # (rule_engine, biometrics, profiler are already subscribed above)
+            if collected:
+                for event in collected:
+                    event_type = event.get("type", "unknown")
+                    event_bus.publish(event_type, event)
 
+            # Biometrics profile generation (triggered when buffer reaches sample_size)
+            # Note: keystroke events are routed to biometrics_buffer via EventBus subscriber
             if biometrics_enabled:
-                timing_events = [e for e in collected if e.get("type") == "keystroke_timing"]
-                if timing_events:
-                    biometrics_buffer.extend(timing_events)
-                    if len(biometrics_buffer) >= biometrics_sample_size:
-                        sample = biometrics_buffer[:biometrics_sample_size]
-                        biometrics_buffer = biometrics_buffer[biometrics_sample_size:]
-                        try:
-                            profile = biometrics_analyzer.generate_profile(sample)
-                            if biometrics_store and sqlite_store is not None:
-                                try:
-                                    sqlite_store.insert_profile(profile.to_dict())
-                                except Exception as exc:
-                                    logger.error("Failed to store biometrics profile: %s", exc)
-                            profile_event = {
-                                "type": "biometrics_profile",
-                                "data": profile.to_dict(),
-                                "timestamp": time.time(),
-                            }
-                            if biometrics_store:
-                                collected.append(profile_event)
-                        except Exception as exc:
-                            logger.error("Biometrics analysis failed: %s", exc)
-
-            if profiler_tracker is not None and collected:
-                profiler_tracker.process_batch(collected)
+                current_buffer = biometrics_buffer_ref["buffer"]
+                if len(current_buffer) >= biometrics_sample_size:
+                    sample = current_buffer[:biometrics_sample_size]
+                    # Mutate the container's buffer reference instead of reassigning
+                    # the outer variable, so the closure continues using the same list
+                    biometrics_buffer_ref["buffer"] = current_buffer[biometrics_sample_size:]
+                    try:
+                        profile = biometrics_analyzer.generate_profile(sample)
+                        if biometrics_store and sqlite_store is not None:
+                            try:
+                                sqlite_store.insert_profile(profile.to_dict())
+                            except Exception as exc:
+                                logger.error("Failed to store biometrics profile: %s", exc)
+                        profile_event = {
+                            "type": "biometrics_profile",
+                            "data": profile.to_dict(),
+                            "timestamp": time.time(),
+                        }
+                        if biometrics_store:
+                            collected.append(profile_event)
+                    except Exception as exc:
+                        logger.error("Biometrics analysis failed: %s", exc)
 
             if profiler_tracker is not None and profiler_scorer is not None:
-                if profiler_emit_interval is not None and now - profiler_last_emit >= profiler_emit_interval:
+                if (
+                    profiler_emit_interval is not None
+                    and now - profiler_last_emit >= profiler_emit_interval
+                ):
                     try:
-                        profile = profiler_scorer.build_daily_profile(
-                            profiler_tracker, now_ts=now
-                        )
+                        profile = profiler_scorer.build_daily_profile(profiler_tracker, now_ts=now)
                         if profile is not None:
                             if profiler_store and sqlite_store is not None:
                                 try:

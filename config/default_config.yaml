@@ -111,6 +111,10 @@ biometrics:
   sample_size: 500
   profile_id_prefix: "usr"
   store_profiles: true
+  authentication:
+    enabled: false           # Enable user authentication via typing patterns
+    match_threshold: 50.0    # Distance threshold for profile matching (lower = stricter)
+    min_samples: 100         # Minimum keystrokes needed for reliable authentication
 
 profiler:
   enabled: false
@@ -215,6 +219,11 @@ fleet:
   security:
     max_payload_size_mb: 10
     rate_limit_requests_per_minute: 60
+    # Signature verification: when enabled, agents must sign requests with their
+    # private key and include the signature in the X-Signature header (base64).
+    # The controller verifies using the agent's stored public key.
+    # SECURITY NOTE: Set to true in production to prevent request forgery.
+    # TLS provides transport encryption; signatures provide authentication/integrity.
     require_signature_verification: true
 
 self_destruct:

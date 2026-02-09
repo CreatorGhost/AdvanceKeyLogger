@@ -77,7 +77,7 @@ class FleetAgent(Agent):
         logger.info(f"FleetAgent {self.agent_id} stopped")
 
     async def _request(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
-        """Perform async HTTP request."""
+        """Perform async HTTP request with optional signing."""
         url = f"{self.controller_url}{endpoint}"
 
         headers = kwargs.pop("headers", {})
@@ -87,6 +87,14 @@ class FleetAgent(Agent):
         # Add default timeout
         if "timeout" not in kwargs:
             kwargs["timeout"] = 10
+
+        # Sign request body if we have a private key and signing is enabled
+        sign_requests = self.config.get("sign_requests", False)
+        json_body = kwargs.get("json")
+        if sign_requests and json_body and self.private_key:
+            body_bytes = json.dumps(json_body).encode("utf-8")
+            signature = self.secure_channel.sign(body_bytes)
+            headers["X-Signature"] = base64.b64encode(signature).decode("ascii")
 
         loop = asyncio.get_running_loop()
 
@@ -165,12 +173,23 @@ class FleetAgent(Agent):
 
                 self.uptime = time.time() - self.start_time
 
+                # Get real system metrics
+                try:
+                    from utils.system_info import get_system_metrics
+
+                    metrics = get_system_metrics()
+                except ImportError:
+                    metrics = {"cpu_percent": 0, "memory_percent": 0}
+
                 payload = {
                     "status": "ONLINE",
                     "uptime": self.uptime,
                     "metrics": {
-                        "cpu": 0,  # TODO: Add real metrics
-                        "memory": 0,
+                        "cpu": metrics.get("cpu_percent", 0),
+                        "memory": metrics.get("memory_percent", 0),
+                        "memory_mb": metrics.get("memory_mb", 0),
+                        "disk_percent": metrics.get("disk_percent", 0),
+                        "disk_free_gb": metrics.get("disk_free_gb", 0),
                     },
                 }
 

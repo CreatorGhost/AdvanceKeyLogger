@@ -116,9 +116,7 @@ class ConnectionManager:
         """Get agent client information."""
         return {
             agent_id: {
-                "connected": (
-                    ws.client_state == WebSocketState.CONNECTED if ws else False
-                ),
+                "connected": (ws.client_state == WebSocketState.CONNECTED if ws else False),
                 "last_seen": self.agent_last_seen.get(agent_id, 0.0),
             }
             for agent_id, ws in self.agent_connections.items()
@@ -343,10 +341,41 @@ async def _broadcast_to_agents(message: str) -> None:
                 continue
 
 
+# Storage reference for handlers (set by app initialization)
+_storage = None
+_fleet_storage = None
+_fleet_controller = None
+
+
+def set_storage_references(storage=None, fleet_storage=None, fleet_controller=None):
+    """Set storage references for WebSocket handlers."""
+    global _storage, _fleet_storage, _fleet_controller
+    _storage = storage
+    _fleet_storage = fleet_storage
+    _fleet_controller = fleet_controller
+
+
 async def _get_recent_captures() -> list[dict[str, Any]]:
-    """Get recent captures from storage (mock implementation)."""
-    # In production, this would query the actual storage system
-    # For now, return mock data
+    """Get recent captures from storage."""
+    # Try to use real storage if available
+    if _storage is not None:
+        try:
+            pending = _storage.get_pending(limit=10)
+            return [
+                {
+                    "id": item.get("id", f"capture_{i}"),
+                    "type": item.get("capture_type", "unknown"),
+                    "data": item.get("data", "")[:100],  # Truncate for preview
+                    "timestamp": item.get("timestamp", time.time()),
+                    "agent_id": item.get("agent_id", "local"),
+                    "status": item.get("status", "pending"),
+                }
+                for i, item in enumerate(pending)
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to get captures from storage: {e}")
+
+    # Fallback to mock data
     return [
         {
             "id": f"capture_{i}",
@@ -361,25 +390,60 @@ async def _get_recent_captures() -> list[dict[str, Any]]:
 
 async def _update_agent_status(agent_id: str, status_data: dict[str, Any]) -> None:
     """Update agent status in storage."""
-    # In production, this would update the actual agent status in database
-    logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
+    # Update in fleet storage if available
+    if _fleet_storage is not None:
+        try:
+            status = status_data.get("status", "ONLINE")
+            _fleet_storage.update_agent_status(agent_id, status)
+            logger.debug(f"Agent {agent_id} status updated to {status} in DB")
+        except Exception as e:
+            logger.warning(f"Failed to update agent status in DB: {e}")
+    else:
+        logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
 
 
 async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> None:
-    """Handle capture data from agent."""
-    # In production, this would store the capture data
-    logger.debug(
-        "Agent %s sent capture (type=%s, size=%d)",
-        agent_id,
-        capture_data.get("type", "unknown"),
-        len(str(capture_data)),
-    )
+    """Handle capture data from agent and persist to storage."""
+    capture_type = capture_data.get("type", "unknown")
+    data = capture_data.get("data", "")
+
+    # Persist to storage if available
+    if _storage is not None:
+        try:
+            _storage.store(
+                {
+                    "capture_type": capture_type,
+                    "data": data,
+                    "timestamp": time.time(),
+                    "metadata": {"agent_id": agent_id, **capture_data.get("metadata", {})},
+                }
+            )
+            logger.debug(f"Agent {agent_id} capture stored (type={capture_type})")
+        except Exception as e:
+            logger.warning(f"Failed to store capture data: {e}")
+    else:
+        logger.debug(
+            "Agent %s sent capture (type=%s, size=%d)",
+            agent_id,
+            capture_type,
+            len(str(capture_data)),
+        )
 
 
 async def _handle_command_response(agent_id: str, response_data: dict[str, Any]) -> None:
-    """Handle command response from agent."""
-    # In production, this would process the command response
+    """Handle command response from agent and update in controller."""
     cmd_id = response_data.get("command_id", "unknown")
     status = response_data.get("status", "unknown")
+    result = response_data.get("result", {})
+
     logger.info("Agent %s command response (command_id=%s, status=%s)", agent_id, cmd_id, status)
-    logger.debug("Agent %s full command response: %s", agent_id, response_data)
+
+    # Forward to fleet controller if available
+    if _fleet_controller is not None:
+        try:
+            await _fleet_controller.handle_command_response(agent_id, cmd_id, response_data)
+            logger.debug(f"Command response forwarded to controller")
+        except Exception as e:
+            logger.warning(f"Failed to forward command response to controller: {e}")
+    else:
+        logger.debug("Agent %s full command response: %s", agent_id, response_data)

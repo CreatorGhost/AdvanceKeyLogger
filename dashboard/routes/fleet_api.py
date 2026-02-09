@@ -4,6 +4,8 @@ Fleet management API endpoints for agents.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 from fleet.auth import FleetAuth
 from fleet.controller import FleetController
 from agent_controller import AgentMetadata, AgentCapabilities, AgentStatus
+from utils.crypto import verify_with_public_key
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,64 @@ async def verify_agent_token(
     return agent_id
 
 
+async def verify_signature(
+    request: Request,
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+    agent_id: str = Depends(verify_agent_token),
+    controller: FleetController = Depends(get_controller),
+) -> str:
+    """Verify message signature if required by config.
+
+    Returns the agent_id if verification passes.
+    """
+    # Check if signature verification is required
+    config = getattr(request.app.state, "config", {})
+    require_sig = (
+        config.get("fleet", {}).get("security", {}).get("require_signature_verification", False)
+    )
+
+    if not require_sig:
+        return agent_id
+
+    if not x_signature:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing X-Signature header (signature verification enabled)",
+        )
+
+    # Get agent's public key from storage
+    agent_data = controller.storage.get_agent(agent_id)
+    if not agent_data or not agent_data.get("public_key"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent public key not found",
+        )
+
+    public_key_pem = agent_data["public_key"].encode("utf-8")
+
+    # Get request body (already consumed, need to cache it)
+    body = await request.body()
+
+    # Decode signature (base64)
+    try:
+        signature = base64.b64decode(x_signature)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid signature encoding (expected base64)",
+        )
+
+    # Verify signature
+    if not verify_with_public_key(public_key_pem, body, signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Signature verification failed",
+        )
+
+    logger.debug(f"Signature verified for agent {agent_id}")
+    return agent_id
+
+
 # Pydantic Models
 
 
@@ -73,6 +134,7 @@ class RegisterRequest(BaseModel):
     public_key: str
     capabilities: Dict[str, bool] = {}
     metadata: Dict[str, Any] = {}
+    enrollment_key: Optional[str] = None  # Optional pre-shared key for enrollment validation
 
 
 class TokenResponse(BaseModel):
@@ -111,6 +173,11 @@ async def register_agent(
         # Get IP from request if behind proxy?
         ip = request.client.host if request.client else "0.0.0.0"
 
+        # Build tags set, including enrollment key if provided
+        tags: set[str] = set()
+        if req.enrollment_key:
+            tags.add(f"enrollment_key:{req.enrollment_key}")
+
         metadata = AgentMetadata(
             agent_id=req.agent_id,
             hostname=req.hostname,
@@ -122,6 +189,7 @@ async def register_agent(
             status=AgentStatus.ONLINE,
             first_seen=time.time(),
             last_seen=time.time(),
+            tags=tags,
         )
 
         # Register with controller (persists to DB)
@@ -144,10 +212,32 @@ async def register_agent(
 @router.post("/heartbeat")
 async def heartbeat(
     req: HeartbeatRequest,
+    request: Request,
     agent_id: str = Depends(verify_agent_token),
     controller: FleetController = Depends(get_controller),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
-    """Receive heartbeat from agent."""
+    """Receive heartbeat from agent (optionally with signature verification)."""
+    # Verify signature if required
+    config = getattr(request.app.state, "config", {})
+    require_sig = (
+        config.get("fleet", {}).get("security", {}).get("require_signature_verification", False)
+    )
+
+    if require_sig and x_signature:
+        agent_data = controller.storage.get_agent(agent_id)
+        if agent_data and agent_data.get("public_key"):
+            body = await request.body()
+            try:
+                signature = base64.b64decode(x_signature)
+                public_key_pem = agent_data["public_key"].encode("utf-8")
+                if not verify_with_public_key(public_key_pem, body, signature):
+                    raise HTTPException(status_code=401, detail="Invalid signature")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Signature verification error: {e}")
+
     await controller.handle_heartbeat(agent_id, req.model_dump())
     return {"status": "ok"}
 
@@ -194,7 +284,6 @@ async def get_commands(
                 commands.append(cmd.to_dict())
 
                 # Update status to SENT
-                cmd.status = controller.commands[cmd.command_id].status
                 from agent_controller import CommandStatus
 
                 controller.commands[cmd.command_id].status = CommandStatus.SENT
@@ -213,9 +302,31 @@ async def get_commands(
 async def command_response(
     cmd_id: str,
     req: CommandResponseRequest,
+    request: Request,
     agent_id: str = Depends(verify_agent_token),
     controller: FleetController = Depends(get_controller),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
-    """Submit command execution result."""
+    """Submit command execution result (optionally with signature verification)."""
+    # Verify signature if required
+    config = getattr(request.app.state, "config", {})
+    require_sig = (
+        config.get("fleet", {}).get("security", {}).get("require_signature_verification", False)
+    )
+
+    if require_sig and x_signature:
+        agent_data = controller.storage.get_agent(agent_id)
+        if agent_data and agent_data.get("public_key"):
+            body = await request.body()
+            try:
+                signature = base64.b64decode(x_signature)
+                public_key_pem = agent_data["public_key"].encode("utf-8")
+                if not verify_with_public_key(public_key_pem, body, signature):
+                    raise HTTPException(status_code=401, detail="Invalid signature")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Signature verification error: {e}")
+
     await controller.handle_command_response(agent_id, cmd_id, req.model_dump())
     return {"status": "received"}

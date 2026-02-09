@@ -101,6 +101,16 @@ class FleetStorage:
                 ip_address TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS controller_keys (
+                id TEXT PRIMARY KEY DEFAULT 'default',
+                private_key TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                algorithm TEXT DEFAULT 'RSA',
+                key_size INTEGER DEFAULT 2048,
+                created_at REAL,
+                rotated_at REAL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_heartbeats_agent_time 
                 ON heartbeats(agent_id, timestamp DESC);
                 
@@ -383,3 +393,72 @@ class FleetStorage:
             "SELECT revoked_at FROM agent_tokens WHERE token_jti = ?", (jti,)
         ).fetchone()
         return row and row[0] is not None
+
+    # --- Controller Keys Methods ---
+
+    def save_controller_keys(
+        self,
+        private_key: str,
+        public_key: str,
+        key_id: str = "default",
+        algorithm: str = "RSA",
+        key_size: int = 2048,
+    ) -> None:
+        """Save or update controller RSA keys.
+
+        Args:
+            private_key: PEM-encoded private key string
+            public_key: PEM-encoded public key string
+            key_id: Key identifier (default: 'default')
+            algorithm: Key algorithm (default: 'RSA')
+            key_size: Key size in bits (default: 2048)
+        """
+        now = time.time()
+        exists = self._conn.execute(
+            "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+
+        if exists:
+            self._conn.execute(
+                """
+                UPDATE controller_keys SET 
+                    private_key = ?, public_key = ?, algorithm = ?, 
+                    key_size = ?, rotated_at = ?
+                WHERE id = ?
+            """,
+                (private_key, public_key, algorithm, key_size, now, key_id),
+            )
+            logger.info("Controller keys rotated for key_id: %s", key_id)
+        else:
+            self._conn.execute(
+                """
+                INSERT INTO controller_keys 
+                    (id, private_key, public_key, algorithm, key_size, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """,
+                (key_id, private_key, public_key, algorithm, key_size, now),
+            )
+            logger.info("Controller keys saved for key_id: %s", key_id)
+        self._conn.commit()
+
+    def get_controller_keys(self, key_id: str = "default") -> Optional[Dict[str, Any]]:
+        """Retrieve controller keys by key_id.
+
+        Returns:
+            Dict with private_key, public_key, algorithm, key_size, created_at, rotated_at
+            or None if no keys found.
+        """
+        row = self._conn.execute("SELECT * FROM controller_keys WHERE id = ?", (key_id,)).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def delete_controller_keys(self, key_id: str = "default") -> bool:
+        """Delete controller keys by key_id.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        cursor = self._conn.execute("DELETE FROM controller_keys WHERE id = ?", (key_id,))
+        self._conn.commit()
+        return cursor.rowcount > 0

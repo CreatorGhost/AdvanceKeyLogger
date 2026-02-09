@@ -24,6 +24,12 @@ from transport.base import BaseTransport
 logger = logging.getLogger(__name__)
 
 
+from typing import Callable
+
+# Type alias for message handlers
+MessageHandler = Callable[[Dict[str, Any]], None]
+
+
 @register_transport("websocket")
 class WebSocketTransport(BaseTransport):
     """WebSocket transport for real-time data streaming."""
@@ -44,6 +50,13 @@ class WebSocketTransport(BaseTransport):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
 
+        # Message handlers for received messages
+        self._message_handlers: Dict[str, MessageHandler] = {}
+        self._default_handler: Optional[MessageHandler] = None
+
+        # Message queue for receive() method (created lazily when event loop exists)
+        self._receive_queue: Optional[asyncio.Queue[bytes]] = None
+
         # SSL configuration
         if config.get("ssl", False):
             self._ssl_context = ssl.create_default_context()
@@ -53,6 +66,31 @@ class WebSocketTransport(BaseTransport):
             else:
                 self._ssl_context.check_hostname = False
                 self._ssl_context.verify_mode = ssl.CERT_NONE
+
+    def register_handler(self, message_type: str, handler: MessageHandler) -> None:
+        """Register a handler for a specific message type."""
+        self._message_handlers[message_type] = handler
+        logger.debug(f"Registered handler for message type: {message_type}")
+
+    def set_default_handler(self, handler: MessageHandler) -> None:
+        """Set a default handler for unhandled message types."""
+        self._default_handler = handler
+
+    def receive(self, timeout: float = 5.0) -> Optional[bytes]:
+        """Receive a message from the queue (blocking, for sync callers)."""
+        if not self._loop or not self._receive_queue:
+            return None
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                asyncio.wait_for(self._receive_queue.get(), timeout=timeout),
+                self._loop,
+            )
+            return future.result(timeout=timeout + 1)
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+        except Exception as e:
+            logger.debug(f"Receive failed: {e}")
+            return None
 
     def connect(self) -> None:
         """Establish WebSocket connection."""
@@ -81,28 +119,39 @@ class WebSocketTransport(BaseTransport):
 
     def _run_async_loop(self) -> None:
         """Run async event loop in separate thread."""
-        asyncio.set_event_loop(self._loop)
+        loop = self._loop
+        if loop is None:
+            logger.error("Event loop not initialized")
+            return
+        asyncio.set_event_loop(loop)
         try:
-            self._loop.run_until_complete(self._async_connect())
-            self._loop.run_forever()
+            loop.run_until_complete(self._async_connect())
+            loop.run_forever()
         except Exception as e:
             logger.error(f"Async loop failed: {e}")
             self._connected = False
         finally:
             try:
-                self._loop.stop()
-                self._loop.close()
+                loop.stop()
+                loop.close()
             except Exception:
                 pass
 
     async def _async_connect(self) -> None:
         """Async connection handler."""
         try:
-            logger.info(f"Connecting to WebSocket: {self._url}")
+            url = self._url
+            if not url:
+                raise ValueError("WebSocket URL not configured")
+            logger.info(f"Connecting to WebSocket: {url}")
+
+            # Create message queue now that event loop is running
+            if self._receive_queue is None:
+                self._receive_queue = asyncio.Queue()
 
             # Create connection
             self._websocket = await websockets.connect(
-                self._url,
+                url,
                 ssl=self._ssl_context,
                 max_queue=2**16,
                 compression=self._compression,
@@ -178,7 +227,11 @@ class WebSocketTransport(BaseTransport):
             serialized = gzip.compress(serialized)
 
             # Send message using event loop
-            future = asyncio.run_coroutine_threadsafe(self._websocket.send(serialized), self._loop)
+            loop = self._loop
+            ws = self._websocket
+            if loop is None or ws is None:
+                raise ConnectionError("WebSocket not connected")
+            future = asyncio.run_coroutine_threadsafe(ws.send(serialized), loop)
             future.result(timeout=10.0)
 
             logger.debug(f"Sent {len(serialized)} bytes via WebSocket")
@@ -194,27 +247,68 @@ class WebSocketTransport(BaseTransport):
             return False
 
     async def _receive_loop(self) -> None:
-        """Receive messages from WebSocket."""
+        """Receive messages from WebSocket and dispatch to handlers."""
         while self._connected and self._websocket:
             try:
                 # Receive message
-                message = await self._websocket.recv()
+                raw_message = await self._websocket.recv()
 
                 # Decompress (manual gzip matching send path)
-                message = gzip.decompress(message)
+                decompressed = gzip.decompress(raw_message)
 
                 # Parse JSON
-                data = json.loads(message)
+                data = json.loads(decompressed)
 
-                # Handle received message
-                self.logger.debug(f"Received message: {data}")
+                logger.debug(f"Received message: {data}")
 
-                # TODO: Process received messages (e.g., commands from controller)
+                # Put raw bytes in queue for receive() method
+                if self._receive_queue:
+                    await self._receive_queue.put(decompressed)
+
+                # Dispatch to registered handlers
+                msg_type = data.get("type") if isinstance(data, dict) else None
+
+                if msg_type and msg_type in self._message_handlers:
+                    try:
+                        self._message_handlers[msg_type](data)
+                    except Exception as e:
+                        logger.error(f"Handler error for {msg_type}: {e}")
+                elif self._default_handler:
+                    try:
+                        self._default_handler(data)
+                    except Exception as e:
+                        logger.error(f"Default handler error: {e}")
+                else:
+                    logger.debug(f"No handler for message type: {msg_type}")
 
             except websockets.ConnectionClosed:
                 logger.warning("WebSocket connection closed during receive")
                 self._connected = False
                 break
+            except gzip.BadGzipFile:
+                # Message wasn't compressed, try parsing directly
+                # raw_message is guaranteed to be bound here since BadGzipFile
+                # can only be raised after gzip.decompress(raw_message) was called
+                try:
+                    uncompressed_data = json.loads(raw_message)  # type: ignore[possibly-undefined]
+                    raw_bytes = (
+                        raw_message  # type: ignore[possibly-undefined]
+                        if isinstance(raw_message, bytes)  # type: ignore[possibly-undefined]
+                        else raw_message.encode()  # type: ignore[possibly-undefined]
+                    )
+                    if self._receive_queue:
+                        await self._receive_queue.put(raw_bytes)
+                    uc_msg_type = (
+                        uncompressed_data.get("type")
+                        if isinstance(uncompressed_data, dict)
+                        else None
+                    )
+                    if uc_msg_type and uc_msg_type in self._message_handlers:
+                        self._message_handlers[uc_msg_type](uncompressed_data)
+                    elif self._default_handler:
+                        self._default_handler(uncompressed_data)
+                except Exception as e:
+                    logger.error(f"Failed to parse uncompressed message: {e}")
             except Exception as e:
                 logger.error(f"Receive error: {e}")
                 await asyncio.sleep(1)

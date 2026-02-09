@@ -19,7 +19,7 @@ from dashboard.routes.fleet_api import router as fleet_api_router
 from dashboard.routes.fleet_dashboard_api import router as fleet_dashboard_router
 from dashboard.routes.fleet_ui import router as fleet_ui_router
 from dashboard.routes.pages import pages_router
-from dashboard.routes.websocket import ws_router
+from dashboard.routes.websocket import ws_router, set_storage_references
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,22 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan events."""
     settings = Settings()
 
+    # Store config in app.state for access by route handlers
+    # This is used by fleet_api.py for signature verification settings
+    app.state.config = settings._config if hasattr(settings, "_config") else {}
+
+    # Initialize SQLiteStorage for captures (used by WebSocket handlers)
+    sqlite_storage = None
+    try:
+        from storage.sqlite_storage import SQLiteStorage
+
+        sqlite_path = settings.get("storage.sqlite_path", "./data/captures.db")
+        sqlite_storage = SQLiteStorage(sqlite_path)
+        app.state.sqlite_storage = sqlite_storage
+        logger.info("SQLite storage initialized: %s", sqlite_path)
+    except Exception as e:
+        logger.warning("Failed to initialize SQLite storage: %s", e)
+
     # Initialize fleet controller if enabled
     if settings.get("fleet.enabled"):
         try:
@@ -40,7 +56,7 @@ async def lifespan(app: FastAPI):
             from fleet.auth import FleetAuth
 
             db_path = settings.get("fleet.database_path", "./data/fleet.db")
-            storage = FleetStorage(db_path)
+            fleet_storage = FleetStorage(db_path)
 
             # Auth config
             jwt_secret = settings.get("fleet.auth.jwt_secret", "change-me-in-production")
@@ -50,18 +66,33 @@ async def lifespan(app: FastAPI):
             controller_config = settings.get("fleet.controller", {})
             controller_config.update(settings.get("fleet.auth", {}))
 
-            controller = FleetController(controller_config, storage)
+            controller = FleetController(controller_config, fleet_storage)
             await controller.start()
 
-            app.state.fleet_storage = storage
+            app.state.fleet_storage = fleet_storage
             app.state.fleet_controller = controller
             app.state.fleet_auth = auth_service
+
+            # Set storage references for WebSocket handlers
+            set_storage_references(
+                storage=sqlite_storage,
+                fleet_storage=fleet_storage,
+                fleet_controller=controller,
+            )
+
             logger.info("Fleet controller started")
 
         except Exception as e:
             logger.error(f"Failed to start fleet controller: {e}")
             # Don't crash app if fleet fails
             app.state.fleet_controller = None
+            # Still set SQLite storage for WebSocket handlers even if fleet fails
+            if sqlite_storage:
+                set_storage_references(storage=sqlite_storage)
+    else:
+        # Fleet disabled, but still set SQLite storage for WebSocket handlers
+        if sqlite_storage:
+            set_storage_references(storage=sqlite_storage)
 
     yield
 
@@ -71,6 +102,11 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, "fleet_storage"):
             app.state.fleet_storage.close()
         logger.info("Fleet controller stopped")
+
+    # Close SQLite storage
+    if sqlite_storage:
+        sqlite_storage.close()
+        logger.info("SQLite storage closed")
 
 
 def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:

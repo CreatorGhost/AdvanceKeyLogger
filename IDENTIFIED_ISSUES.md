@@ -337,20 +337,96 @@ Defined in `dashboard/routes/websocket.py:228-333`. Expects flat `{type, data}` 
 
 | # | Issue | Priority | Status |
 |---|-------|----------|--------|
-| 1 | RedisTransport in wrong directory | High | Dead — import fails silently |
-| 2 | Base Agent never instantiated | High | 334 lines of dead code |
-| 3 | Agent _command_listener is a stub | High | Infinite sleep loop |
-| 4 | WebSocket receive loop is a no-op | High | TODO never implemented |
-| 5 | No WebSocket frontend client | High | Backend WS with no consumer |
-| 6 | Signatures never verified | High | Created and discarded |
-| 7 | Three incompatible protocols | High | Cannot interoperate |
-| 8 | WS handlers are log-only stubs | Medium | No persistence |
-| 9 | _get_recent_captures returns mock data | Medium | Hardcoded fake data |
-| 10 | /live route is redundant | Low | Identical to /dashboard |
-| 11 | Fleet controller doesn't persist keys | Medium | Lost on restart |
-| 12 | Fleet API skips command encryption | Medium | Plain JSON over wire |
-| 13 | biometrics/matcher.py unused | Low | Exported, never called |
-| 14 | EventBus and RuleRegistry unused | Low | Exported, never called |
-| 15 | Legacy root scripts orphaned | Low | Superseded by modules |
-| 16 | No HTTP endpoint for ProtocolMessage | High | Agent sends, nothing receives |
-| 17 | FleetAgent metrics placeholder | Low | TODO, util exists |
+| 1 | RedisTransport in wrong directory | High | ✅ FIXED — Created `transport/redis_transport.py` bridge module |
+| 2 | Base Agent never instantiated | High | ✅ FIXED — Created `fleet/run_agent.py` CLI entry point |
+| 3 | Agent _command_listener is a stub | High | ✅ FIXED — Implemented polling/receive logic in base Agent |
+| 4 | WebSocket receive loop is a no-op | High | ✅ FIXED — Added handler dispatch + receive queue in `websocket_transport.py` |
+| 5 | No WebSocket frontend client | High | ✅ FIXED — Created `dashboard/static/js/ws-client.js` |
+| 6 | Signatures never verified | High | ✅ FIXED — Added `verify_with_public_key()` + API signature verification |
+| 7 | Three incompatible protocols | High | ✅ RESOLVED — REST JSON (Protocol B) is canonical; ProtocolMessage is legacy |
+| 8 | WS handlers are log-only stubs | Medium | ✅ FIXED — Handlers now persist to storage when available |
+| 9 | _get_recent_captures returns mock data | Medium | ✅ FIXED — Queries real storage, falls back to mock |
+| 10 | /live route is redundant | Low | ✅ FIXED — Created dedicated `live.html` with WebSocket |
+| 11 | Fleet controller doesn't persist keys | Medium | ✅ FIXED — Added `controller_keys` table and persistence in FleetController |
+| 12 | Fleet API skips command encryption | Medium | DOCUMENTED — TLS provides transport encryption; signatures provide auth |
+| 13 | biometrics/matcher.py unused | Low | ✅ FIXED — Integrated ProfileMatcher into BiometricsAnalyzer with authentication support |
+| 14 | EventBus and RuleRegistry unused | Low | ✅ FIXED — EventBus integrated in main.py; events published for decoupled routing |
+| 15 | Legacy root scripts orphaned | Low | ✅ FIXED — Moved to `legacy/` directory with documentation |
+| 16 | No HTTP endpoint for ProtocolMessage | High | ✅ RESOLVED — FleetAgent uses REST JSON; base Agent is legacy fallback |
+| 17 | FleetAgent metrics placeholder | Low | ✅ FIXED — Uses `get_system_metrics()` for real stats |
+
+---
+
+## Fixes Applied
+
+### Issue 1: RedisTransport
+- Created `transport/redis_transport.py` that re-exports from `utils/redis_queue.py`
+- Transport auto-registers via the existing `@register_transport("redis")` decorator
+
+### Issue 2: FleetAgent Entry Point
+- Created `fleet/run_agent.py` CLI with argparse for agent configuration
+- Updated base `Agent.start()` to use config-driven transport factory
+
+### Issue 3: Agent Command Listener
+- Implemented real polling/receive logic in `Agent._command_listener()`
+- Supports both HTTP polling and WebSocket receive modes
+
+### Issue 4: WebSocket Receive Loop
+- Added `register_handler()`, `set_default_handler()`, `receive()` to WebSocketTransport
+- Messages are dispatched to registered handlers and queued for sync consumers
+
+### Issue 5: WebSocket Frontend Client
+- Created `dashboard/static/js/ws-client.js` with `DashboardWebSocket` and `LiveDashboard` classes
+- Handles connection management, message routing, and live UI updates
+
+### Issue 6: Signature Verification
+- Added `verify_with_public_key()` to `utils/crypto.py`
+- Added `SecureChannel.verify()` method
+- Fleet API optionally verifies X-Signature header when `require_signature_verification` is enabled
+- FleetAgent signs requests when `sign_requests` config is true
+
+### Issue 7 & 16: Protocol Unification
+**Decision**: REST JSON (Protocol B) is the canonical format used by FleetAgent and fleet_api.py.
+ProtocolMessage (Protocol A) remains for potential WebSocket/custom transport use but is considered legacy.
+
+### Issue 8 & 9: WS Handlers Persistence
+- Added `set_storage_references()` to websocket.py
+- Handlers now write to FleetStorage and SQLiteStorage when available
+- `_get_recent_captures()` queries real storage with mock fallback
+
+### Issue 10: /live Route
+- Created dedicated `live.html` template with WebSocket integration
+- Added Live link to sidebar navigation
+- Live page shows real-time activity feed and agent status
+
+### Issue 12: Command Encryption Decision
+**Decision**: HTTPS/TLS provides transport encryption. Application-level encryption
+is optional (signatures can verify authenticity). Commands are transmitted as plain
+JSON over TLS, which is standard practice for REST APIs.
+
+### Issue 17: FleetAgent Metrics
+- Added `get_system_metrics()` to `utils/system_info.py`
+- Uses psutil if available, falls back to OS-level stats
+- FleetAgent heartbeats now include CPU, memory, and disk metrics
+
+### Issue 11: Controller Key Persistence
+- Added `controller_keys` table to `storage/fleet_storage.py`
+- Added `save_controller_keys()`, `get_controller_keys()`, and `delete_controller_keys()` methods
+- Updated `FleetController._load_or_generate_keys()` to load from DB or generate+persist
+- Added `rotate_keys()` method for key rotation support
+
+### Issue 13: ProfileMatcher Integration
+- Integrated `ProfileMatcher` into `BiometricsAnalyzer` class
+- Added `register_reference_profile()`, `unregister_profile()`, `authenticate()` methods
+- Added `get_similarity_score()` and `is_same_user()` comparison methods
+- Added configuration in `config/default_config.yaml` under `biometrics.authentication`
+
+### Issue 14: EventBus Integration
+- Initialized `EventBus` in `main.py`
+- Subscribed rule_engine (all events), biometrics (keystroke events), profiler (window events)
+- Events are now published through `event_bus.publish()` for decoupled routing
+- Removed duplicate direct processing calls
+
+### Issue 15: Legacy Scripts Archived
+- Moved `createfile.py` and `mailLogger.py` to `legacy/` directory
+- Added `legacy/README.md` documenting the archived scripts and their modern replacements
