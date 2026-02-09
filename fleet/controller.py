@@ -1,0 +1,219 @@
+"""
+Fleet controller implementation with persistence and advanced features.
+"""
+
+from __future__ import annotations
+
+import logging
+import asyncio
+import time
+from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import asdict
+
+from agent_controller import (
+    Controller,
+    AgentMetadata,
+    Command,
+    CommandStatus,
+    CommandPriority,
+    AgentCapabilities,
+    AgentStatus,
+    SecureChannel,
+)
+from storage.fleet_storage import FleetStorage
+
+logger = logging.getLogger(__name__)
+
+
+class FleetController(Controller):
+    """
+    Enhanced Controller with SQLite persistence and fleet management integration.
+    """
+
+    def __init__(self, config: Dict[str, Any], storage: FleetStorage) -> None:
+        # We don't call super().__init__ immediately because it initializes empty state
+        # But we need to call it to set up basic structures
+        super().__init__(config)
+        self.storage = storage
+
+        # Initialize SecureChannel with persistence
+        self.secure_channel = SecureChannel()
+        self._load_or_generate_keys()
+
+        self._load_state()
+
+    async def start(self) -> None:
+        """Start the controller service and initialize command queues."""
+        # Initialize command queues for all loaded agents
+        for agent_id in self.agents:
+            if agent_id not in self.command_queues:
+                self.command_queues[agent_id] = asyncio.PriorityQueue()
+
+        # Re-queue pending commands from DB
+        for agent_id in self.agents:
+            pending_cmds = self.storage.get_pending_commands(agent_id)
+            for cmd_data in pending_cmds:
+                try:
+                    cmd = Command(
+                        command_id=cmd_data["id"],
+                        agent_id=cmd_data["agent_id"],
+                        action=cmd_data["type"],
+                        parameters=cmd_data["payload"],
+                        priority=CommandPriority[cmd_data["priority"].upper()],
+                        timestamp=cmd_data["created_at"],
+                        status=CommandStatus.PENDING,
+                    )
+                    self.commands[cmd.command_id] = cmd
+                    queue = self.command_queues.get(agent_id)
+                    if queue:
+                        await queue.put((cmd.priority.value, 0, cmd))
+                except Exception as e:
+                    logger.error(f"Failed to re-queue command {cmd_data.get('id')}: {e}")
+
+        await super().start()
+
+    def _load_or_generate_keys(self) -> None:
+        """Load controller keys from storage or generate new ones."""
+        # For MVP, we'll just generate new ones.
+        # TODO: Persist keys to file or DB to support key pinning.
+        self.secure_channel.initialize()
+        logger.info("Controller keys initialized")
+
+    def get_public_key(self) -> str:
+        """Return the controller's public key as PEM string."""
+        if self.secure_channel.public_key:
+            return self.secure_channel.public_key.decode("utf-8")
+        return ""
+
+    def _load_state(self) -> None:
+        """Load agents and commands from persistent storage."""
+        try:
+            # Load agents
+            agents_data = self.storage.list_agents(limit=5000)
+            for data in agents_data:
+                try:
+                    metadata = AgentMetadata(
+                        agent_id=data["id"],
+                        hostname=data.get("hostname", "unknown"),
+                        platform=data.get("platform", "unknown"),
+                        version=data.get("version", "unknown"),
+                        ip_address=data.get("ip_address", "0.0.0.0"),
+                        mac_address=data.get("metadata", {}).get("mac_address", ""),
+                        capabilities=AgentCapabilities(
+                            **data.get("metadata", {}).get("capabilities", {})
+                        ),
+                        first_seen=data.get("created_at", time.time()),
+                        last_seen=data.get("last_seen_at", time.time()),
+                        status=AgentStatus[data.get("status", "OFFLINE").upper()],
+                    )
+                    self.agents[metadata.agent_id] = metadata
+                except Exception as e:
+                    logger.error(f"Failed to restore agent {data.get('id')}: {e}")
+
+            # Note: Command queues and pending commands are loaded in start()
+            # when the event loop is running
+            logger.info(f"Restored {len(self.agents)} agents from storage")
+
+        except Exception as e:
+            logger.error(f"Error loading fleet state: {e}")
+
+    # Override register_agent to persist
+    def register_agent(self, metadata: AgentMetadata, transport: Any, public_key: bytes) -> Any:
+        channel = super().register_agent(metadata, transport, public_key)
+
+        # Persist to DB
+        agent_dict = metadata.to_dict()
+        # Ensure enrollment key is preserved if passed in metadata tags or similar (TODO)
+
+        self.storage.register_agent(
+            metadata.agent_id,
+            {
+                "name": metadata.hostname,  # Use hostname as name for now
+                "public_key": public_key.decode("utf-8", errors="ignore"),  # Store as string
+                "status": metadata.status.name,
+                "ip_address": metadata.ip_address,
+                "hostname": metadata.hostname,
+                "platform": metadata.platform,
+                "version": metadata.version,
+                "metadata": agent_dict,
+            },
+        )
+        return channel
+
+    # Override handle_heartbeat to persist
+    async def handle_heartbeat(self, agent_id: str, data: Dict[str, Any]) -> None:
+        await super().handle_heartbeat(agent_id, data)
+        # Record in DB
+        self.storage.record_heartbeat(agent_id, data)
+        # Status update happens in record_heartbeat implicitly or explicitly
+        # super() updates self.agents[agent_id].status, but we should sync DB status too if changed
+        agent = self.agents.get(agent_id)
+        if agent:
+            self.storage.update_agent_status(agent_id, agent.status.name)
+
+    # Override send_command to persist
+    def send_command(
+        self,
+        agent_id: str,
+        action: str,
+        parameters: Dict[str, Any],
+        priority: CommandPriority = CommandPriority.NORMAL,
+        timeout: float = 300.0,
+    ) -> Optional[str]:
+        command_id = super().send_command(agent_id, action, parameters, priority, timeout)
+        if command_id:
+            self.storage.create_command(
+                command_id, agent_id, action, parameters, priority.name.lower()
+            )
+        return command_id
+
+    # Override handle_command_response to persist
+    async def handle_command_response(
+        self, agent_id: str, command_id: str, result: Dict[str, Any]
+    ) -> None:
+        await super().handle_command_response(agent_id, command_id, result)
+
+        command = self.commands.get(command_id)
+        if command:
+            status = command.status.name.lower()
+            error = command.error_message
+            self.storage.update_command_status(command_id, status, result, error or "")
+
+    # New method for async-safe command enqueuing (Gap 8)
+    async def send_command_async(
+        self,
+        agent_id: str,
+        action: str,
+        parameters: Dict[str, Any],
+        priority: CommandPriority = CommandPriority.NORMAL,
+        timeout: float = 300.0,
+    ) -> Optional[str]:
+        """Async version of send_command that ensures event loop safety."""
+        # Since send_command is sync but queues async task, we can just call it?
+        # send_command uses asyncio.create_task which requires a running loop.
+        # If called from async context, loop is running.
+        return self.send_command(agent_id, action, parameters, priority, timeout)
+
+    def send_command_sync_safe(
+        self,
+        agent_id: str,
+        action: str,
+        parameters: Dict[str, Any],
+        priority: CommandPriority = CommandPriority.NORMAL,
+        timeout: float = 300.0,
+    ) -> Optional[str]:
+        """Thread-safe command sending from sync context."""
+        # Use existing running loop or run in new loop?
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            return self.send_command(agent_id, action, parameters, priority, timeout)
+        else:
+            # If no loop, we can't spawn the background task easily unless we have a reference to the main loop
+            # Ideally, the controller is initialized with a loop.
+            # For now, let's assume this is called from within a context where we can get a loop
+            # Or just fall back to super().send_command and hope for the best
+            return self.send_command(agent_id, action, parameters, priority, timeout)

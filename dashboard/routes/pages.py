@@ -94,6 +94,23 @@ async def screenshots_page(request: Request) -> HTMLResponse:
     )
 
 
+@pages_router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request) -> HTMLResponse:
+    """Render analytics page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "analytics.html",
+        {
+            "user": get_current_user(request),
+            "page": "analytics",
+        },
+    )
+
+
 @pages_router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> HTMLResponse:
     """Render settings page."""

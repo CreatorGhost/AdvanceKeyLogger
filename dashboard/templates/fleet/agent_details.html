@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}Agent Details{% endblock %}
+
+{% block page_title %}Agent Details{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h2>Agent Info</h2>
+            </div>
+            <div class="card-body" id="agent-info">
+                Loading...
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h2>Send Command</h2>
+            </div>
+            <div class="card-body">
+                <div class="form-group mb-3">
+                    <label class="form-label">Action</label>
+                    <select id="cmd-action" class="form-select">
+                        <option value="ping">Ping</option>
+                        <option value="get_status">Get Status</option>
+                        <option value="update_config">Update Config</option>
+                        <option value="shutdown">Shutdown</option>
+                    </select>
+                </div>
+                <div class="form-group mb-3">
+                    <label class="form-label">Parameters (JSON)</label>
+                    <textarea id="cmd-params" class="form-control" rows="3">{}</textarea>
+                </div>
+                <button class="btn btn-primary w-100" onclick="sendCommand()">Send Command</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h2>Command History</h2>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadCommands()">Refresh</button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table" id="commands-table">
+                        <thead>
+                            <tr>
+                                <th>Action</th>
+                                <th>Status</th>
+                                <th>Time</th>
+                                <th>Result/Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="4">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const agentId = "{{ agent_id }}";
+
+async function loadAgent() {
+    try {
+        const res = await fetch(`/api/dashboard/fleet/agents/${agentId}`);
+        if (res.ok) {
+            const agent = await res.json();
+            const statusClass = agent.status.toLowerCase() === 'online' ? 'success' : 'secondary';
+            
+            document.getElementById('agent-info').innerHTML = `
+                <div class="mb-2"><strong>Hostname:</strong> ${agent.hostname}</div>
+                <div class="mb-2"><strong>ID:</strong> <span class="text-muted small">${agent.agent_id}</span></div>
+                <div class="mb-2"><strong>Status:</strong> <span class="badge bg-${statusClass}">${agent.status}</span></div>
+                <div class="mb-2"><strong>Platform:</strong> ${agent.platform} ${agent.version}</div>
+                <div class="mb-2"><strong>IP:</strong> ${agent.ip_address}</div>
+                <div class="mb-2"><strong>Last Seen:</strong> ${new Date(agent.last_seen * 1000).toLocaleString()}</div>
+                
+                <hr>
+                <h5>Capabilities</h5>
+                <ul class="small ps-3">
+                    ${Object.entries(agent.capabilities || {}).filter(([k,v]) => v).map(([k,v]) => `<li>${k}</li>`).join('')}
+                </ul>
+            `;
+        }
+    } catch (e) {
+        document.getElementById('agent-info').innerHTML = `<div class="text-danger">Failed to load agent info</div>`;
+    }
+}
+
+async function loadCommands() {
+    try {
+        const res = await fetch(`/api/dashboard/fleet/agents/${agentId}/commands`);
+        if (res.ok) {
+            const data = await res.json();
+            const tbody = document.querySelector('#commands-table tbody');
+            tbody.innerHTML = '';
+            
+            if (data.commands.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center">No commands found</td></tr>';
+                return;
+            }
+            
+            data.commands.forEach(cmd => {
+                const tr = document.createElement('tr');
+                let resultDisplay = '';
+                
+                if (cmd.status === 'COMPLETED' && cmd.result) {
+                    resultDisplay = `<pre class="mb-0 small" style="max-height: 100px; overflow: auto;">${JSON.stringify(cmd.result, null, 2)}</pre>`;
+                } else if (cmd.status === 'FAILED') {
+                    resultDisplay = `<span class="text-danger">${cmd.error_message || 'Unknown error'}</span>`;
+                }
+                
+                let statusBadge = 'secondary';
+                if (cmd.status === 'COMPLETED') statusBadge = 'success';
+                else if (cmd.status === 'FAILED') statusBadge = 'danger';
+                else if (cmd.status === 'SENT') statusBadge = 'info';
+                else if (cmd.status === 'PENDING') statusBadge = 'warning';
+                
+                tr.innerHTML = `
+                    <td>${cmd.action}</td>
+                    <td><span class="badge bg-${statusBadge}">${cmd.status}</span></td>
+                    <td>${new Date(cmd.timestamp * 1000).toLocaleString()}</td>
+                    <td>${resultDisplay}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    } catch (e) {
+        console.error("Load commands failed", e);
+    }
+}
+
+async function sendCommand() {
+    const action = document.getElementById('cmd-action').value;
+    let params = {};
+    try {
+        params = JSON.parse(document.getElementById('cmd-params').value);
+    } catch (e) {
+        alert('Invalid JSON parameters');
+        return;
+    }
+    
+    try {
+        const res = await fetch(`/api/dashboard/fleet/agents/${agentId}/command`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: action, parameters: params})
+        });
+        
+        if (res.ok) {
+            // alert('Command queued successfully');
+            loadCommands();
+        } else {
+            const err = await res.json();
+            alert('Failed: ' + (err.detail || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Error sending command: ' + e.message);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAgent();
+    loadCommands();
+    // Auto refresh commands every 5s
+    setInterval(loadCommands, 5000);
+});
+</script>
+{% endblock %}

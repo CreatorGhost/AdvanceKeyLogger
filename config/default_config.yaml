@@ -193,6 +193,30 @@ service:
   start_limit_interval: 60
   display: ":0"
 
+fleet:
+  enabled: false
+  database_path: "./data/fleet.db"
+  auth:
+    jwt_secret: "CHANGE_ME_IN_PRODUCTION"  # 32+ char secret
+    access_token_ttl_minutes: 15
+    refresh_token_ttl_days: 7
+    max_failed_attempts: 5
+    lockout_minutes: 30
+  controller:
+    max_agents: 1000
+    heartbeat_timeout_seconds: 300
+    command_timeout_seconds: 60
+    max_queue_depth: 1000
+  transport:
+    http_enabled: true
+    websocket_enabled: true
+    redis_enabled: false
+    redis_url: "redis://localhost:6379"
+  security:
+    max_payload_size_mb: 10
+    rate_limit_requests_per_minute: 60
+    require_signature_verification: true
+
 self_destruct:
   secure_wipe: false
   remove_program: false
