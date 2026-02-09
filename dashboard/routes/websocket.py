@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -28,9 +28,10 @@ class ConnectionManager:
     """Manage WebSocket connections for dashboard."""
 
     def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
-        self.agent_connections: Dict[str, WebSocket] = {}
-        self.dashboard_connections: Set[WebSocket] = set()
+        self.active_connections: set[WebSocket] = set()
+        self.agent_connections: dict[str, WebSocket] = {}
+        self.dashboard_connections: set[WebSocket] = set()
+        self.agent_last_seen: dict[str, float] = {}
 
     async def connect_dashboard(self, websocket: WebSocket) -> None:
         """Connect dashboard client."""
@@ -54,6 +55,7 @@ class ConnectionManager:
         await websocket.accept()
         self.active_connections.add(websocket)
         self.agent_connections[agent_id] = websocket
+        self.agent_last_seen[agent_id] = time.time()
         logger.info(f"Agent {agent_id} connected")
 
     def disconnect(self, websocket: WebSocket) -> None:
@@ -68,6 +70,7 @@ class ConnectionManager:
         for agent_id, ws in list(self.agent_connections.items()):
             if ws == websocket:
                 del self.agent_connections[agent_id]
+                self.agent_last_seen[agent_id] = time.time()
                 logger.info(f"Agent {agent_id} disconnected")
                 break
 
@@ -109,15 +112,21 @@ class ConnectionManager:
         """Get count of dashboard clients."""
         return len(self.dashboard_connections)
 
-    async def get_agent_clients(self) -> Dict[str, Any]:
+    async def get_agent_clients(self) -> dict[str, Any]:
         """Get agent client information."""
         return {
             agent_id: {
-                "connected": (ws.client_state == WebSocketState.CONNECTED if ws else False),
-                "last_seen": time.time(),
+                "connected": (
+                    ws.client_state == WebSocketState.CONNECTED if ws else False
+                ),
+                "last_seen": self.agent_last_seen.get(agent_id, 0.0),
             }
             for agent_id, ws in self.agent_connections.items()
         }
+
+    def update_agent_last_seen(self, agent_id: str) -> None:
+        """Update the last_seen timestamp for an agent."""
+        self.agent_last_seen[agent_id] = time.time()
 
 
 # Global connection manager
@@ -182,16 +191,21 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
 @ws_router.websocket("/ws/agent/{agent_id}")
 async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
     """WebSocket endpoint for agent clients (authenticated)."""
-    # Authenticate the agent before accepting
+    # Extract token before accepting so we can reject early
     token = _extract_ws_token(websocket)
+
+    # Must accept before sending close with reason (WebSocket protocol)
     if not token:
+        await websocket.accept()
         await websocket.close(code=4001, reason="Missing authentication token")
+        manager.disconnect(websocket)
         return
 
-    # Validate that the token belongs to the requested agent_id
     agent_user = _validate_session_token(token)
     if not agent_user:
+        await websocket.accept()
         await websocket.close(code=4003, reason="Invalid or expired token")
+        manager.disconnect(websocket)
         return
 
     await manager.connect_agent(websocket, agent_id)
@@ -232,8 +246,17 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
             await _broadcast_to_agents(message)
 
         elif action == "send_to_agent":
-            # Send message to specific agent
+            # Validate agent_id before sending
             agent_id = command.get("agent_id")
+            if not agent_id:
+                response = {
+                    "type": "command_result",
+                    "success": False,
+                    "error": "missing agent_id",
+                }
+                await websocket.send_text(json.dumps(response))
+                return
+
             message = command.get("message", "")
             success = await manager.send_to_agent(agent_id, message)
             response = {
@@ -266,8 +289,9 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         message_type = message.get("type")
 
         if message_type == "heartbeat":
-            # Update agent status
+            # Update agent status and last_seen
             status_data = message.get("data", {})
+            manager.update_agent_last_seen(agent_id)
             await _update_agent_status(agent_id, status_data)
 
             # Broadcast to dashboard
@@ -282,6 +306,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         elif message_type == "capture":
             # Handle capture data
             capture_data = message.get("data", {})
+            manager.update_agent_last_seen(agent_id)
             await _handle_capture_data(agent_id, capture_data)
 
             # Broadcast to dashboard
@@ -296,6 +321,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         elif message_type == "command_response":
             # Handle command response from agent
             response_data = message.get("data", {})
+            manager.update_agent_last_seen(agent_id)
             await _handle_command_response(agent_id, response_data)
 
         else:
@@ -317,7 +343,7 @@ async def _broadcast_to_agents(message: str) -> None:
                 continue
 
 
-async def _get_recent_captures() -> List[Dict[str, Any]]:
+async def _get_recent_captures() -> list[dict[str, Any]]:
     """Get recent captures from storage (mock implementation)."""
     # In production, this would query the actual storage system
     # For now, return mock data
@@ -333,13 +359,13 @@ async def _get_recent_captures() -> List[Dict[str, Any]]:
     ]
 
 
-async def _update_agent_status(agent_id: str, status_data: Dict[str, Any]) -> None:
+async def _update_agent_status(agent_id: str, status_data: dict[str, Any]) -> None:
     """Update agent status in storage."""
     # In production, this would update the actual agent status in database
     logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
 
 
-async def _handle_capture_data(agent_id: str, capture_data: Dict[str, Any]) -> None:
+async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> None:
     """Handle capture data from agent."""
     # In production, this would store the capture data
     logger.debug(
@@ -350,7 +376,10 @@ async def _handle_capture_data(agent_id: str, capture_data: Dict[str, Any]) -> N
     )
 
 
-async def _handle_command_response(agent_id: str, response_data: Dict[str, Any]) -> None:
+async def _handle_command_response(agent_id: str, response_data: dict[str, Any]) -> None:
     """Handle command response from agent."""
     # In production, this would process the command response
-    logger.info(f"Agent {agent_id} command response: {response_data}")
+    cmd_id = response_data.get("command_id", "unknown")
+    status = response_data.get("status", "unknown")
+    logger.info("Agent %s command response (command_id=%s, status=%s)", agent_id, cmd_id, status)
+    logger.debug("Agent %s full command response: %s", agent_id, response_data)

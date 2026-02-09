@@ -8,6 +8,7 @@ queues for offline message storage. Supports priority-based message handling.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import secrets
@@ -15,7 +16,7 @@ import threading
 import time
 from collections import deque
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Union
 
 import redis
 from redis.asyncio import Redis
@@ -39,10 +40,10 @@ class Message:
     def __init__(
         self,
         message_id: str,
-        data: Union[str, bytes, Dict[str, Any]],
+        data: Union[str, bytes, dict[str, Any]],
         priority: MessagePriority = MessagePriority.NORMAL,
         ttl: int = 3600,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self.message_id = message_id
         self.data = data
@@ -53,7 +54,7 @@ class Message:
         self.attempts = 0
         self.max_attempts = 3
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert message to dictionary for storage."""
         return {
             "message_id": self.message_id,
@@ -67,7 +68,7 @@ class Message:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Message":
+    def from_dict(cls, data: dict[str, Any]) -> Message:
         """Create message from dictionary."""
         msg = cls(
             message_id=data["message_id"],
@@ -94,7 +95,7 @@ class RedisQueue:
         self.redis_url = redis_url
         self.queue_prefix = queue_prefix
         self.default_ttl = default_ttl
-        self._redis: Optional[Redis] = None
+        self._redis: Redis | None = None
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -161,7 +162,7 @@ class RedisQueue:
             logger.error(f"Failed to subscribe to {channel}: {e}")
             raise
 
-    async def get_pending(self, channel: str, limit: int = 100) -> List[Message]:
+    async def get_pending(self, channel: str, limit: int = 100) -> list[Message]:
         """Get pending messages from queue."""
         if not self._initialized:
             await self.initialize()
@@ -169,15 +170,20 @@ class RedisQueue:
         try:
             queue_key = f"{self.queue_prefix}:queue:{channel}"
 
-            # Get messages with scores (timestamps)
+            # Prune expired entries before fetching
+            now = time.time()
+            await self._redis.zremrangebyscore(queue_key, "-inf", now)
+
+            # Get messages with scores (expiry timestamps)
             messages = await self._redis.zrange(queue_key, 0, limit - 1, withscores=True)
 
             result = []
-            for msg_data, timestamp in messages:
+            for msg_data, expiry_score in messages:
                 try:
                     message_dict = json.loads(msg_data)
                     message = Message.from_dict(message_dict["message"])
-                    message.timestamp = timestamp
+                    # Do NOT overwrite message.timestamp with the expiry score;
+                    # from_dict already restores the original timestamp.
                     result.append(message)
                 except Exception as e:
                     logger.error(f"Failed to parse message: {e}")
@@ -245,11 +251,11 @@ class RedisTransport(BaseTransport):
             default_ttl=config.get("default_ttl", 3600),
         )
         self._connected = False
-        self._pubsub: Optional[Any] = None
+        self._pubsub: Any | None = None
 
         # Event loop for async operations
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
 
     def connect(self) -> None:
         """Connect to Redis and subscribe to channel."""
@@ -277,6 +283,10 @@ class RedisTransport(BaseTransport):
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._async_connect())
+            # Only enter run_forever if connection succeeded
+            if not self._connected:
+                logger.warning("Redis _async_connect failed; skipping run_forever")
+                return
             self._loop.run_forever()
         except Exception as e:
             logger.error(f"Redis async loop failed: {e}")
@@ -299,6 +309,7 @@ class RedisTransport(BaseTransport):
         except Exception as e:
             logger.error(f"Failed to connect Redis transport: {e}")
             self._connected = False
+            raise
 
     def disconnect(self) -> None:
         """Disconnect from Redis."""
@@ -335,10 +346,24 @@ class RedisTransport(BaseTransport):
             return False
 
         try:
+            if metadata is None:
+                metadata = {}
+
             message_id = f"msg_{int(time.time() * 1000)}_{secrets.token_hex(8)}"
+
+            # Handle binary data safely
+            if isinstance(data, bytes):
+                try:
+                    data_str = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    data_str = base64.b64encode(data).decode("ascii")
+                    metadata["encoding"] = "base64"
+            else:
+                data_str = data
+
             message = Message(
                 message_id=message_id,
-                data=data.decode() if isinstance(data, bytes) else data,
+                data=data_str,
                 priority=MessagePriority.NORMAL,
                 ttl=3600,  # 1 hour
                 metadata=metadata,
@@ -359,7 +384,7 @@ class RedisTransport(BaseTransport):
             logger.error(f"Failed to send message via Redis: {e}")
             return False
 
-    def get_pending_messages(self, limit: int = 100) -> List[Tuple[bytes, Dict[str, Any]]]:
+    def get_pending_messages(self, limit: int = 100) -> list[tuple[bytes, dict[str, Any]]]:
         """Get pending messages from Redis queue."""
         if not self._connected or not self._loop:
             self.connect()
@@ -372,9 +397,14 @@ class RedisTransport(BaseTransport):
 
             result = []
             for msg in messages:
-                result.append(
-                    (msg.data.encode() if isinstance(msg.data, str) else msg.data, msg.metadata)
-                )
+                # Reverse base64 encoding if applied during send
+                if isinstance(msg.data, str) and msg.metadata.get("encoding") == "base64":
+                    raw = base64.b64decode(msg.data)
+                elif isinstance(msg.data, str):
+                    raw = msg.data.encode()
+                else:
+                    raw = msg.data
+                result.append((raw, msg.metadata))
 
             return result
 

