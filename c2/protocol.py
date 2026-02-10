@@ -137,7 +137,7 @@ class C2Protocol:
             ciphertext = aes.encrypt(nonce, plaintext, None)
             return nonce + ciphertext
         except ImportError:
-            # Fallback: XOR with key (weak, but works without cryptography lib)
+            # No-op passthrough when cryptography package is missing
             return plaintext
 
     def _decrypt(self, data: bytes) -> bytes | None:
@@ -149,8 +149,9 @@ class C2Protocol:
             ciphertext = data[12:]
             aes = AESGCM(self._key)
             return aes.decrypt(nonce, ciphertext, None)
-        except Exception:
-            return None
+        except ImportError:
+            # No-op passthrough when cryptography package is missing
+            return data
 
     # ── Chunking for size-limited channels ───────────────────────────
 

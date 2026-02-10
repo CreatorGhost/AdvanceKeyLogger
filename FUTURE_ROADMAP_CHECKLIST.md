@@ -38,11 +38,13 @@ Track implementation status for roadmap features (25 total).
 - [ ] 26. Network Reconnaissance (host discovery, WiFi, ARP, port scanning)
 - [ ] 27. Geofencing & Location Tracking (IP geolocation, WiFi BSSID mapping)
 
-### Retired / Merged
+### Restored (Python + C hybrid)
+- [x] 16. Obfuscation Techniques (build-time Nuitka compilation + AST string encryption)
+- [x] 19. Rootkit Integration (Python orchestrator + C kernel modules per platform)
+
+### Retired
 - ~~15. Cell / Mobile Access~~ — *Removed: requires native Android/iOS SDKs, outside Python scope*
-- ~~16. Obfuscation Techniques~~ — *Merged into #13 Stealth Mode (string encryption, network obfuscation, memory cloak)*
-- ~~17. Anti-Forensic Measures~~ — *Merged into #13 Stealth Mode (memory-only ops, anti-debug, VM detection, timestamp mgmt, secure delete)*
-- ~~19. Rootkit Integration~~ — *Removed: requires kernel C/Rust development, outside Python scope*
+- ~~17. Anti-Forensic Measures~~ — *Merged into #13 Stealth Mode v2 (memory-only ops, anti-debug, VM detection, timestamp mgmt, secure delete)*
 
 ---
 

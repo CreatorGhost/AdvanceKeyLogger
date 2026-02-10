@@ -119,9 +119,9 @@ class CrashGuard:
                 frame.filename = sanitized
                 new_lineno = _sanitize_lineno(original)
                 if new_lineno >= 0:
-                    pass  # keep original line number
-                else:
-                    frame.lineno = 0
+                    # _sanitize_lineno returns 0 for scrubbed files → apply it
+                    frame.lineno = new_lineno
+                # else: returns -1 meaning "keep original" → leave frame.lineno alone
 
             formatted = "".join(te.format())
 

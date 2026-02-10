@@ -31,6 +31,14 @@ jinja2>=3.1.0
 python-multipart>=0.0.6
 psutil>=5.9.0
 
+# Optional: stealth mode
+setproctitle>=1.3.0
+fake-useragent>=2.0.0
+
+# Optional: build pipeline (compile to native binary)
+nuitka>=2.0.0
+# cffi>=1.16.0  # for rootkit ioctl bridge (only needed if using rootkit)
+
 # Development
 pytest>=7.4.0
 pytest-cov>=4.1.0

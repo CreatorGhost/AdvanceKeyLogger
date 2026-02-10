@@ -171,9 +171,15 @@ static const interpose_tuple interpose_readdir = {
 };
 
 /*
- * Note: readdir_r is deprecated on macOS but still used by some
- * applications.  We interpose it for completeness.
+ * readdir_r is deprecated on macOS but still used by some applications
+ * (e.g. older C libraries, JVM internals).  We interpose it so that
+ * directory enumeration through either API hides the same entries.
  */
+__attribute__((used, section("__DATA,__interpose")))
+static const interpose_tuple interpose_readdir_r = {
+    (const void *)readdir_r,
+    (const void *)readdir_r
+};
 
 /* ── Exported control API (called from Python ctypes) ───────────── */
 

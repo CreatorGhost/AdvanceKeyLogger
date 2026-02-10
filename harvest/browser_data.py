@@ -213,8 +213,10 @@ class BrowserDataHarvester:
             for row in rows:
                 row["browser"] = browser
                 row["data_type"] = "autofill"
+                # Note: autofill.date_last_used is stored as Unix epoch seconds
+                # (NOT Chrome microsecond timestamp), so no conversion needed.
                 if row.get("date_last_used"):
-                    row["date_last_used"] = _chrome_time_to_epoch(row["date_last_used"])
+                    row["date_last_used"] = int(row["date_last_used"])
                 results.append(row)
         return results
 

@@ -323,6 +323,8 @@ class KeyHarvester:
     @staticmethod
     def _wifi_macos() -> list[dict[str, Any]]:
         """Extract WiFi passwords from macOS Keychain."""
+        import subprocess
+
         results: list[dict[str, Any]] = []
         try:
             # List all WiFi network names
@@ -333,7 +335,6 @@ class KeyHarvester:
             if proc.returncode != 0:
                 return results
 
-            import subprocess
             for line in proc.stdout.splitlines()[1:]:
                 ssid = line.strip()
                 if not ssid:

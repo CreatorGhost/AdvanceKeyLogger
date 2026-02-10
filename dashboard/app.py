@@ -64,6 +64,8 @@ async def lifespan(app: FastAPI):
         session_db = settings.get("recording.database_path", "./data/sessions.db")
         session_store = SessionStore(session_db)
         app.state.session_store = session_store
+        frames_dir = settings.get("recording.frames_dir", "./data/sessions/frames")
+        app.state.frames_dir = Path(frames_dir).resolve()
         logger.info("Session store initialized: %s", session_db)
     except Exception as e:
         logger.warning("Failed to initialize session store: %s", e)

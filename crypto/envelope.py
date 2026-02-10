@@ -265,13 +265,13 @@ def _b64_decode(value: str) -> bytes:
 
 def _payload_aad(sender_pub: bytes, legacy: bool = False) -> bytes:
     if legacy:
-        return b"PAYLOAD-V1"
+        return b"AKL-PAYLOAD"  # original AAD required for legacy decryption
     return b"PAYLOAD-V1|" + sender_pub
 
 
 def _wrap_aad(sender_pub: bytes, legacy: bool = False) -> bytes:
     if legacy:
-        return b"WRAP-V1"
+        return b"AKL-WRAP"  # original AAD required for legacy decryption
     return b"WRAP-V1|" + sender_pub
 
 

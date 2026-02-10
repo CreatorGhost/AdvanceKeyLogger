@@ -131,9 +131,13 @@ async def get_frame(request: Request, session_id: str, frame_id: int) -> FileRes
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Frame file not found on disk")
 
-    # Path traversal protection
+    # Path traversal protection: validate against the configured frames directory
+    # (not cwd, which would wrongly block frames stored outside the working dir)
+    frames_dir = getattr(request.app.state, "frames_dir", None)
+    if frames_dir is None:
+        frames_dir = Path.cwd().resolve()
     try:
-        file_path.resolve().relative_to(Path.cwd().resolve())
+        file_path.resolve().relative_to(Path(frames_dir).resolve())
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="Access denied") from exc
 

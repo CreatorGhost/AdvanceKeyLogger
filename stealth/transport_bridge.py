@@ -81,6 +81,9 @@ class TransportBridge:
         self._decoy_interval_max: float = float(cfg.get("decoy_interval_max", 120))
         self._decoy_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        # Queue for payloads deferred outside the send window
+        self._send_queue: list[tuple[bytes, dict[str, str] | None]] = []
+        self._queue_lock = threading.Lock()
 
     # ── Transport patching ───────────────────────────────────────────
 
@@ -99,11 +102,29 @@ class TransportBridge:
         original_send = transport.send
 
         def stealth_send(payload: bytes, metadata: dict[str, str] | None = None) -> bool:
-            # Check send window
+            # Check send window — queue for later if outside window
             if not self._normalizer.is_in_send_window():
-                logger.debug("Outside send window, buffering")
-                return False
+                with self._queue_lock:
+                    self._send_queue.append((payload, metadata))
+                logger.debug("Outside send window, queued (%d pending)",
+                             len(self._send_queue))
+                return True  # queued, not lost
 
+            # Drain any previously queued payloads first
+            queued: list[tuple[bytes, dict[str, str] | None]] = []
+            with self._queue_lock:
+                queued = list(self._send_queue)
+                self._send_queue.clear()
+            for q_payload, q_meta in queued:
+                _stealth_send_inner(q_payload, q_meta, original_send)
+
+            return _stealth_send_inner(payload, metadata, original_send)
+
+        def _stealth_send_inner(
+            payload: bytes,
+            metadata: dict[str, str] | None,
+            orig_fn: Any,
+        ) -> bool:
             # Apply stealth headers to the transport's session
             session = getattr(transport, "_session", None)
             if session is not None:
@@ -119,7 +140,7 @@ class TransportBridge:
             if payload:
                 self._normalizer.throttle_wait(len(payload))
 
-            return original_send(payload, metadata)
+            return orig_fn(payload, metadata)
 
         transport.send = stealth_send
         logger.debug("Transport patched with stealth bridge")

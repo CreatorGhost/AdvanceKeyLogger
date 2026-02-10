@@ -178,6 +178,10 @@ FLT_POSTOP_CALLBACK_STATUS PostDirectoryControl(
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
 
+    /* Guard: do not touch I/O structures while the instance is draining */
+    if (Flags & FLTFL_POST_OPERATION_DRAINING)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
     if (!NT_SUCCESS(Data->IoStatus.Status))
         return FLT_POSTOP_FINISHED_PROCESSING;
 
@@ -192,7 +196,7 @@ FLT_POSTOP_CALLBACK_STATUS PostDirectoryControl(
         return FLT_POSTOP_FINISHED_PROCESSING;
 
     buffer = params->DirectoryControl.QueryDirectory.DirectoryBuffer;
-    bufferLength = Data->IoStatus.Information;
+    bufferLength = (ULONG)Data->IoStatus.Information;
 
     if (!buffer || bufferLength == 0)
         return FLT_POSTOP_FINISHED_PROCESSING;
@@ -223,6 +227,12 @@ FLT_POSTOP_CALLBACK_STATUS PostDirectoryControl(
                         (PUCHAR)buffer + offset,
                         bufferLength - offset);
                     Data->IoStatus.Information -= offset;
+                    /* Keep bufferLength in sync so subsequent
+                     * iterations use the correct buffer size   */
+                    bufferLength = (ULONG)Data->IoStatus.Information;
+                    /* Reset to start of buffer for re-check */
+                    dirInfo = (PFILE_BOTH_DIR_INFORMATION)buffer;
+                    prevInfo = NULL;
                     continue;  /* re-check at same position */
                 } else {
                     /* Only entry and it's hidden — return empty */
