@@ -335,17 +335,19 @@ class Controller:
         logger.info(f"Agent registered: {agent_id} ({metadata.hostname})")
         return channel
 
-    def unregister_agent(self, agent_id: str) -> None:
+    async def unregister_agent(self, agent_id: str) -> None:
         """Unregister an agent."""
-        agent = self.agents.pop(agent_id, None)
-        if agent is None:
-            return
+        async with self._lock:
+            agent = self.agents.pop(agent_id, None)
+            if agent is None:
+                return
 
-        agent.status = AgentStatus.UNREGISTERED
-        self.agent_channels.pop(agent_id, None)
-        self.command_queues.pop(agent_id, None)
+            agent.status = AgentStatus.UNREGISTERED
+            self.agent_channels.pop(agent_id, None)
+            self.command_queues.pop(agent_id, None)
+            transport = self.agent_transports.pop(agent_id, None)
 
-        transport = self.agent_transports.pop(agent_id, None)
+        # Disconnect transport outside the lock (may block)
         if transport:
             try:
                 transport.disconnect()
@@ -363,7 +365,10 @@ class Controller:
         timeout: float = 300.0,
     ) -> Optional[str]:
         """Send a command to a specific agent."""
-        if agent_id not in self.agents:
+        # Snapshot queue reference first — if agent was unregistered concurrently
+        # the queue will be None and we bail out without creating an orphan command.
+        queue = self.command_queues.get(agent_id)
+        if agent_id not in self.agents or queue is None:
             logger.error(f"Cannot send command: agent {agent_id} not found")
             return None
 
@@ -379,7 +384,6 @@ class Controller:
         self.commands[command.command_id] = command
 
         # Add to agent's command queue with monotonic counter as tiebreaker
-        queue = self.command_queues.get(agent_id)
         if queue:
             seq = next(self._command_counter)
             # Use put_nowait() for sync-safe, non-blocking enqueue

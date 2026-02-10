@@ -136,7 +136,9 @@ async def get_frame(request: Request, session_id: str, frame_id: int) -> FileRes
     if recorder is not None:
         frames_dir = recorder.frames_dir
     else:
-        frames_dir = Path.cwd()
+        # Fallback: read frames_dir from app config (same default as SessionRecorder)
+        cfg = getattr(request.app.state, "config", {})
+        frames_dir = Path(cfg.get("recording", {}).get("frames_dir", "./data/sessions/frames"))
     try:
         file_path.resolve().relative_to(frames_dir.resolve())
     except ValueError as exc:

@@ -92,6 +92,11 @@ class Settings:
         """Return the full config as a dictionary."""
         return self._config.copy()
 
+    def replace_config(self, config: dict) -> None:
+        """Replace the entire config (used by HotSwitch for atomic config replacement)."""
+        import copy
+        self._config = copy.deepcopy(config)
+
     @classmethod
     def reset(cls) -> None:
         """Reset the singleton (useful for testing)."""

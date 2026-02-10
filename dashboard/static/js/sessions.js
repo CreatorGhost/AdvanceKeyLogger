@@ -84,10 +84,11 @@ function renderSessions(data) {
 
         const sizeSpan = document.createElement('span');
         sizeSpan.className = 'screenshot-size';
-        const statusBadge = s.status === 'recording'
-            ? '<span style="color:var(--accent-green)">● REC</span>'
-            : `${s.frame_count || 0} frames · ${s.event_count || 0} events`;
-        sizeSpan.innerHTML = statusBadge;
+        if (s.status === 'recording') {
+            sizeSpan.innerHTML = '<span style="color:var(--accent-green)">● REC</span>';
+        } else {
+            sizeSpan.textContent = `${Number(s.frame_count) || 0} frames · ${Number(s.event_count) || 0} events`;
+        }
 
         const dateSpan = document.createElement('span');
         dateSpan.className = 'screenshot-size';

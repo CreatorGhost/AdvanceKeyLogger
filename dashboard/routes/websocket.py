@@ -142,24 +142,28 @@ class ConnectionManager:
         """Send message to specific agent."""
         async with self._lock:
             websocket = self.agent_connections.get(agent_id)
-        if websocket and websocket.client_state == WebSocketState.CONNECTED:
+            if not websocket or websocket.client_state != WebSocketState.CONNECTED:
+                return False
+            # Send under lock to prevent using a stale reference
             try:
                 await websocket.send_text(message)
                 return True
             except (WebSocketDisconnect, Exception) as exc:
                 logger.warning("send_to_agent(%s) failed: %s", agent_id, exc)
-                # Clean up stale connection
-                async with self._lock:
-                    if self.agent_connections.get(agent_id) is websocket:
-                        del self.agent_connections[agent_id]
-                    self.active_connections.discard(websocket)
+                if self.agent_connections.get(agent_id) is websocket:
+                    del self.agent_connections[agent_id]
+                self.active_connections.discard(websocket)
                 return False
-        return False
 
     async def get_dashboard_clients(self) -> int:
         """Get count of dashboard clients."""
         async with self._lock:
             return len(self.dashboard_connections)
+
+    async def get_agent_snapshot(self) -> list[tuple[str, Any]]:
+        """Return a snapshot of agent connections under lock."""
+        async with self._lock:
+            return list(self.agent_connections.items())
 
     async def get_agent_clients(self) -> dict[str, Any]:
         """Get agent client information."""
@@ -532,9 +536,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
 async def _broadcast_to_agents(message: str) -> None:
     """Broadcast message to all connected agents."""
-    # Snapshot under lock to avoid RuntimeError if dict mutates during iteration
-    async with manager._lock:
-        agents = list(manager.agent_connections.items())
+    agents = await manager.get_agent_snapshot()
     for _agent_id, websocket in agents:
         if websocket and websocket.client_state == WebSocketState.CONNECTED:
             try:

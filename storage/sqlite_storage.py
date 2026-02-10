@@ -33,6 +33,7 @@ class SQLiteStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
         self._create_tables()
         logger.info("SQLite storage initialized: %s", self.db_path)
@@ -89,6 +90,11 @@ class SQLiteStorage:
         """)
         self._conn.commit()
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return the underlying connection for shared-connection sub-components."""
+        return self._conn
+
     def insert(
         self,
         capture_type: str,
@@ -134,8 +140,7 @@ class SQLiteStorage:
                 "ORDER BY timestamp ASC LIMIT ?",
                 (limit,),
             )
-            columns = ["id", "type", "data", "file_path", "file_size", "timestamp"]
-            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+            return [dict(row) for row in cursor.fetchall()]
 
     def mark_sent(self, ids: list[int]) -> None:
         """Mark captures as successfully sent."""

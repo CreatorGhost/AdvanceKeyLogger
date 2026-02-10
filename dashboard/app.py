@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize SessionStore for session recordings
     session_store = None
+    session_recorder = None
     try:
         from recording.session_store import SessionStore
 
@@ -67,6 +68,18 @@ async def lifespan(app: FastAPI):
         logger.info("Session store initialized: %s", session_db)
     except Exception as e:
         logger.warning("Failed to initialize session store: %s", e)
+
+    # Initialize SessionRecorder for recording control (start/stop via API)
+    if session_store is not None:
+        try:
+            from recording.session_recorder import SessionRecorder
+
+            app_config = app.state.config if hasattr(app.state, "config") else {}
+            session_recorder = SessionRecorder(app_config, session_store)
+            app.state.session_recorder = session_recorder
+            logger.info("Session recorder initialized (enabled=%s)", session_recorder._enabled)
+        except Exception as e:
+            logger.warning("Failed to initialize session recorder: %s", e)
 
     # Initialize fleet controller if enabled
     fleet_storage = None  # Track for cleanup on failure
@@ -143,6 +156,12 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, "fleet_storage"):
             app.state.fleet_storage.close()
         logger.info("Fleet controller stopped")
+
+    # Stop any active recording before closing the store
+    if session_recorder and session_recorder.is_recording:
+        with contextlib.suppress(Exception):
+            session_recorder.stop_session()
+        logger.info("Session recorder stopped")
 
     # Close session store
     if session_store:

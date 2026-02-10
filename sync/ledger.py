@@ -146,6 +146,23 @@ class SyncLedger:
     # Registration
     # ------------------------------------------------------------------
 
+    def reset_to_pending(self, record_ids: list[int]) -> None:
+        """Reset IN_FLIGHT or QUEUED records back to PENDING (used for crash recovery)."""
+        if not record_ids:
+            return
+        with self._lock:
+            for rid in record_ids:
+                try:
+                    self._conn.execute(
+                        "UPDATE sync_ledger SET sync_state = ?, batch_id = NULL "
+                        "WHERE id = ? AND sync_state IN (?, ?)",
+                        (SyncState.PENDING.value, rid,
+                         SyncState.IN_FLIGHT.value, SyncState.QUEUED.value),
+                    )
+                except Exception:
+                    pass
+            self._conn.commit()
+
     def register(self, capture_id: int, data: str, capture_type: str = "") -> int:
         """Register a new capture in the ledger.
 
