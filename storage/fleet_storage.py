@@ -25,7 +25,7 @@ class FleetStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(
-            str(self.db_path), check_same_thread=False, isolation_level=None
+            str(self.db_path), check_same_thread=False
         )
         self._conn.row_factory = sqlite3.Row  # Return dict-like rows
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -153,7 +153,6 @@ class FleetStorage:
 
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 # Check if exists to preserve created_at if updating
                 exists = self._conn.execute(
                     "SELECT 1 FROM agents WHERE id = ?", (agent_id,)
@@ -204,9 +203,9 @@ class FleetStorage:
                             data.get("enrollment_key"),
                         ),
                     )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -245,7 +244,6 @@ class FleetStorage:
         now = time.time()
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 if ip:
                     self._conn.execute(
                         "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
@@ -256,9 +254,9 @@ class FleetStorage:
                         "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
                         (status, now, agent_id),
                     )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     # --- Heartbeat Methods ---
@@ -274,7 +272,6 @@ class FleetStorage:
         metrics_json = json.dumps(metrics)
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 self._conn.execute(
                     "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
                     (agent_id, now, metrics_json, ip),
@@ -290,9 +287,9 @@ class FleetStorage:
                         "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
                         (status, now, agent_id),
                     )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def get_latest_heartbeat(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -325,7 +322,6 @@ class FleetStorage:
         payload_json = json.dumps(payload)
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 self._conn.execute(
                     """
                     INSERT INTO commands (id, agent_id, type, payload, status, priority, created_at)
@@ -333,9 +329,9 @@ class FleetStorage:
                 """,
                     (cmd_id, agent_id, type_, payload_json, priority, now),
                 )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def get_pending_commands(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -407,11 +403,10 @@ class FleetStorage:
         sql = f"UPDATE commands SET {', '.join(update_fields)} WHERE id = ?"
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 self._conn.execute(sql, params)
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def get_command(self, cmd_id: str) -> Optional[Dict[str, Any]]:
@@ -476,7 +471,6 @@ class FleetStorage:
         now = time.time()
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 cursor = self._conn.execute(
                     """
                     INSERT INTO agent_tokens (agent_id, token_hash, token_jti, issued_at, expires_at)
@@ -484,10 +478,10 @@ class FleetStorage:
                 """,
                     (agent_id, token_hash, jti, now, expires_at),
                 )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
                 return cursor.lastrowid
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def create_tokens_batch(
@@ -499,34 +493,33 @@ class FleetStorage:
         Either all rows are inserted or none are.
         """
         now = time.time()
+        params = [
+            (agent_id, token_hash, jti, now, expires_at)
+            for agent_id, token_hash, jti, expires_at in entries
+        ]
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
-                for agent_id, token_hash, jti, expires_at in entries:
-                    self._conn.execute(
-                        """
-                        INSERT INTO agent_tokens
-                            (agent_id, token_hash, token_jti, issued_at, expires_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (agent_id, token_hash, jti, now, expires_at),
-                    )
-                self._conn.execute("COMMIT")
+                self._conn.executemany(
+                    "INSERT INTO agent_tokens "
+                    "(agent_id, token_hash, token_jti, issued_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    params,
+                )
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def revoke_token(self, jti: str) -> None:
         now = time.time()
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 self._conn.execute(
                     "UPDATE agent_tokens SET revoked_at = ? WHERE token_jti = ?", (now, jti)
                 )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def is_token_revoked(self, jti: str) -> bool:
@@ -637,7 +630,6 @@ class FleetStorage:
 
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 exists = self._conn.execute(
                     "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
                 ).fetchone()
@@ -663,9 +655,9 @@ class FleetStorage:
                         (key_id, stored_private_key, public_key, algorithm, key_size, now),
                     )
                     logger.info("Controller keys saved for key_id: %s", key_id)
-                self._conn.execute("COMMIT")
+                self._conn.commit()
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise
 
     def get_controller_keys(self, key_id: str = "default") -> Optional[Dict[str, Any]]:
@@ -695,12 +687,11 @@ class FleetStorage:
         """
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
                 cursor = self._conn.execute(
                     "DELETE FROM controller_keys WHERE id = ?", (key_id,)
                 )
-                self._conn.execute("COMMIT")
+                self._conn.commit()
                 return cursor.rowcount > 0
             except Exception:
-                self._conn.execute("ROLLBACK")
+                self._conn.rollback()
                 raise

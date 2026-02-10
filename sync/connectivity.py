@@ -177,7 +177,8 @@ class ConnectivityMonitor:
 
     def on_connectivity_change(self, callback: Callable[[ConnectionStatus], None]) -> None:
         """Register a callback fired on online/offline transitions."""
-        self._callbacks.append(callback)
+        with self._lock:
+            self._callbacks.append(callback)
 
     # ------------------------------------------------------------------
     # Public queries
@@ -264,15 +265,20 @@ class ConnectivityMonitor:
 
         with self._lock:
             self._status = new_status
+            # Check transition and snapshot callbacks under lock
+            transition = online != self._was_online
+            if transition:
+                self._was_online = online
+                callbacks = list(self._callbacks)
+            else:
+                callbacks = []
 
-        # Fire callbacks on transition
-        if online != self._was_online:
-            self._was_online = online
-            for cb in self._callbacks:
-                try:
-                    cb(new_status)
-                except Exception as exc:
-                    logger.warning("Connectivity callback failed: %s", exc)
+        # Fire callbacks outside the lock to avoid deadlocks
+        for cb in callbacks:
+            try:
+                cb(new_status)
+            except Exception as exc:
+                logger.warning("Connectivity callback failed: %s", exc)
 
     def _measure_latency(self) -> float:
         """TCP connect to probe target.  Returns RTT in ms, or -1 if unreachable."""

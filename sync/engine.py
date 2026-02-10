@@ -144,7 +144,7 @@ class SyncEngine:
         self._e2e_protocol = e2e_protocol
 
         # Sub-components (initialised against the same DB connection)
-        conn = sqlite_store._conn  # share the connection
+        conn = sqlite_store.connection
         self._ledger = SyncLedger(conn, config)
         self._checkpoint = CheckpointManager(conn, config)
         self._conflict = ConflictResolver(conn, config)
@@ -188,17 +188,7 @@ class SyncEngine:
                     cp["batch_id"], len(cp["record_ids"]),
                 )
                 # Reset ledger entries to PENDING
-                for rid in cp["record_ids"]:
-                    try:
-                        self._ledger._conn.execute(
-                            "UPDATE sync_ledger SET sync_state = ?, batch_id = NULL "
-                            "WHERE id = ? AND sync_state IN (?, ?)",
-                            (SyncState.PENDING.value, rid,
-                             SyncState.IN_FLIGHT.value, SyncState.QUEUED.value),
-                        )
-                    except Exception:
-                        pass
-                self._ledger._conn.commit()
+                self._ledger.reset_to_pending(cp["record_ids"])
 
         logger.info("SyncEngine started (mode=%s)", self._mode)
 

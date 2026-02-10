@@ -183,8 +183,8 @@ class HotSwitch:
 
     def _replace_config(self, config: dict[str, Any]) -> None:
         """Write *config* into the Settings singleton."""
-        if hasattr(self._settings, "_config"):
-            self._settings._config = copy.deepcopy(config)
+        if hasattr(self._settings, "replace_config"):
+            self._settings.replace_config(config)
         else:
             # Fallback: set keys one by one (flat)
             for key, value in _flatten(config):

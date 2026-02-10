@@ -249,7 +249,7 @@ async def register_agent(
                 # Roll back the registration so the agent can retry cleanly.
                 logger.error("Token JTI persistence failed, rolling back registration: %s", tok_exc)
                 try:
-                    await asyncio.to_thread(controller.unregister_agent, req.agent_id)
+                    await controller.unregister_agent(req.agent_id)
                 except Exception:
                     pass
                 raise HTTPException(

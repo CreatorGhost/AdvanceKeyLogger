@@ -90,7 +90,7 @@ async function loadAgent() {
                 <div class="mb-2"><strong>Status:</strong> <span class="badge bg-${statusClass}">${esc(agent.status)}</span></div>
                 <div class="mb-2"><strong>Platform:</strong> ${esc(agent.platform)} ${esc(agent.version)}</div>
                 <div class="mb-2"><strong>IP:</strong> ${esc(agent.ip_address)}</div>
-                <div class="mb-2"><strong>Last Seen:</strong> ${new Date(agent.last_seen * 1000).toLocaleString()}</div>
+                <div class="mb-2"><strong>Last Seen:</strong> ${esc(new Date(agent.last_seen * 1000).toLocaleString())}</div>
 
                 <hr>
                 <h5>Capabilities</h5>

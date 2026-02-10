@@ -12,7 +12,7 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 - [x] 6. Distributed Fleet Management (Agent-Controller Architecture)
 - [x] 7. Adaptive Capture Intelligence
 - [x] 8. Offline-First Sync Engine with Conflict Resolution
-- [ ] 9. Session Recording & Visual Replay
+- [x] 9. Session Recording & Visual Replay
 - [ ] 10. Natural Language Search
 - [x] 11. Configuration Profiles & Hot-Switching
 - [x] 12. Data Anonymization Pipeline
@@ -28,7 +28,7 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Completed Features (1-8, 11-12, Plugin System)
+## Completed Features (1-9, 11-12, Plugin System)
 
 ### 1. Event-Driven Rule Engine with Custom DSL
 - **Status**: Completed
@@ -289,36 +289,80 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Planned Features (9-10, 13-20) — Not Yet Implemented
+### 9. Session Recording & Visual Replay
+- **Status**: Completed
+- **Location**: `recording/` package, `dashboard/routes/session_api.py`, `dashboard/templates/sessions.html`, `dashboard/templates/session_replay.html`, `dashboard/static/js/session-replay.js`
+- **Description**: Records user sessions as coordinated screenshot + input event streams with event-driven capture. Full web-based timeline replay player in the dashboard.
+
+#### Implemented Components:
+
+**Session Store (`recording/session_store.py`)**:
+- SQLite persistence with 3 tables: sessions, session_frames, session_events
+- All timestamps stored as offsets from session start for replay seeking
+- Session lifecycle: create, stop (auto-computes duration/counts), delete with file cleanup
+- Timeline query: returns session + frames + events in one call for the replay player
+- Batch event insertion for performance
+- Auto-purge old stopped sessions by retention period
+- Stats aggregation for dashboard display
+
+**Session Recorder (`recording/session_recorder.py`)**:
+- Event-driven screenshot triggers: mouse click, window focus change, keyboard idle timeout
+- Coordinates with existing ScreenshotCapture module (native macOS Quartz + PIL fallback)
+- Buffered event collection with periodic flush to SQLite
+- Auto-stop after configurable max duration (default 1 hour)
+- Frame limit per session (default 500) to bound storage
+- JPEG compression for frames (configurable quality)
+- Status reporting for dashboard/heartbeat integration
+
+**Session API (`dashboard/routes/session_api.py`)**:
+- `GET /api/sessions` — list sessions with thumbnails, filterable by status
+- `GET /api/sessions/stats` — aggregate statistics
+- `GET /api/sessions/{id}` — session metadata
+- `GET /api/sessions/{id}/timeline` — full timeline data (session + frames + events)
+- `GET /api/sessions/{id}/frames/{frame_id}` — serve frame images via FileResponse
+- `GET /api/sessions/{id}/events` — events with optional type filter
+- `POST /api/sessions/start` — start recording
+- `POST /api/sessions/stop` — stop recording
+- `DELETE /api/sessions/{id}` — delete session and files
+- Path traversal protection on frame serving
+
+**Sessions List Page (`dashboard/templates/sessions.html`)**:
+- Session card grid with thumbnails, duration, frame/event counts
+- Stats bar: total sessions, currently recording, total frames, total events
+- Filter by status (all/recording/stopped) and result limit
+- Click-through to replay page
+
+**Timeline Replay Player (`dashboard/templates/session_replay.html` + `dashboard/static/js/session-replay.js`)**:
+- `SessionReplayPlayer` class — full playback engine in vanilla JS
+- Scrub bar with drag-to-seek (input range element)
+- Play/pause/stop controls with keyboard shortcuts (Space, Arrow keys, Home/End)
+- Variable speed playback: 0.25x, 0.5x, 1x, 2x, 4x
+- Frame-stepping: previous/next frame buttons
+- Mouse cursor overlay — red dot positioned on screen proportional to capture resolution
+- Click ripple animation — expanding ring at click position
+- Keystroke overlay — rolling text buffer at bottom of screen, auto-clears after 3s idle
+- Window title overlay — shows active application name at top
+- Binary search for frame/event lookup (O(log n) seeking)
+- requestAnimationFrame-based tick loop for smooth playback
+- Event log table with clickable timestamps to seek
+- Responsive layout matching the existing Vercel dark theme
+
+**Dashboard Integration**:
+- "Sessions" nav link in sidebar (with play icon) under Data section
+- "Sessions" entry in Cmd+K command palette
+- SessionStore initialized in app lifespan with graceful shutdown
+- session_api_router registered on the FastAPI app
+
+**Configuration (`config/default_config.yaml`)**:
+- Full `recording:` section: enabled, database_path, frames_dir, idle timeout, max frames, quality, max duration, auto_start, retention_days
+
+---
+
+## Planned Features (10, 13-20) — Not Yet Implemented
 
 > **Note**: The following features are planned for future development. None of the
 > listed files or directories exist yet. Each section describes the intended design
 > and the files that will need to be created.
-
-### 9. Session Recording & Visual Replay
-- **Status**: Planned
-- **Description**: Record user sessions with screen capture and input events for later replay and analysis.
-
-#### Planned Components:
-**Recording Engine (`recording/session_capture.py`)** — to be created:
-- [ ] Screen capture with configurable quality/frame rate
-- [ ] Input event recording (keyboard, mouse) with timestamps
-- [ ] Application-focused recording (only capture active window)
-- [ ] Event-driven recording triggers (start/stop on conditions)
-- [ ] Storage-aware compression and retention
-
-**Replay System (`recording/replay.py`)** — to be created:
-- [ ] Timeline-based playback with seeking
-- [ ] Input event overlay on screen captures
-- [ ] Annotation and bookmarking system
-- [ ] Export to standard video formats
-- [ ] Web-based replay viewer in dashboard
-
-**Storage Backend (`recording/storage.py`)** — to be created:
-- [ ] Chunked storage with per-session encryption
-- [ ] Automatic cleanup based on retention policy
-- [ ] Metadata indexing for fast session lookup
-- [ ] Compression ratio monitoring and optimization
 
 ### 10. Natural Language Search
 - **Status**: Planned

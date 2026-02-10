@@ -67,7 +67,7 @@ async function refreshAgents() {
                     <td><span class="badge bg-${statusClass}">${esc(agent.status)}</span></td>
                     <td>${esc(agent.platform)} <span class="text-muted small">${esc(agent.version)}</span></td>
                     <td>${esc(agent.ip_address)}</td>
-                    <td>${lastSeen}</td>
+                    <td>${esc(lastSeen)}</td>
                     <td>
                         <a href="/fleet/agents/${encodeURIComponent(agent.agent_id)}" class="btn btn-sm btn-outline-primary">Details</a>
                     </td>

@@ -24,6 +24,7 @@ from dashboard.routes.fleet_api import router as fleet_api_router
 from dashboard.routes.fleet_dashboard_api import router as fleet_dashboard_router
 from dashboard.routes.fleet_ui import router as fleet_ui_router
 from dashboard.routes.pages import pages_router
+from dashboard.routes.session_api import session_api_router
 from dashboard.routes.websocket import ws_router, set_storage_references
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,31 @@ async def lifespan(app: FastAPI):
         logger.info("SQLite storage initialized: %s", sqlite_path)
     except Exception as e:
         logger.warning("Failed to initialize SQLite storage: %s", e)
+
+    # Initialize SessionStore for session recordings
+    session_store = None
+    session_recorder = None
+    try:
+        from recording.session_store import SessionStore
+
+        session_db = settings.get("recording.database_path", "./data/sessions.db")
+        session_store = SessionStore(session_db)
+        app.state.session_store = session_store
+        logger.info("Session store initialized: %s", session_db)
+    except Exception as e:
+        logger.warning("Failed to initialize session store: %s", e)
+
+    # Initialize SessionRecorder for recording control (start/stop via API)
+    if session_store is not None:
+        try:
+            from recording.session_recorder import SessionRecorder
+
+            app_config = app.state.config if hasattr(app.state, "config") else {}
+            session_recorder = SessionRecorder(app_config, session_store)
+            app.state.session_recorder = session_recorder
+            logger.info("Session recorder initialized (enabled=%s)", session_recorder._enabled)
+        except Exception as e:
+            logger.warning("Failed to initialize session recorder: %s", e)
 
     # Initialize fleet controller if enabled
     fleet_storage = None  # Track for cleanup on failure
@@ -130,6 +156,17 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, "fleet_storage"):
             app.state.fleet_storage.close()
         logger.info("Fleet controller stopped")
+
+    # Stop any active recording before closing the store
+    if session_recorder and session_recorder.is_recording:
+        with contextlib.suppress(Exception):
+            session_recorder.stop_session()
+        logger.info("Session recorder stopped")
+
+    # Close session store
+    if session_store:
+        session_store.close()
+        logger.info("Session store closed")
 
     # Close SQLite storage
     if sqlite_storage:
@@ -215,6 +252,7 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
     app.include_router(fleet_api_router, prefix="/api/v1/fleet")
     app.include_router(fleet_dashboard_router, prefix="/api/dashboard/fleet")
     app.include_router(fleet_ui_router)
+    app.include_router(session_api_router)
     app.include_router(ws_router)
 
     return app
