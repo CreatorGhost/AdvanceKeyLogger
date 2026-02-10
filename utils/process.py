@@ -37,7 +37,9 @@ class PIDLock:
     if another instance is already running.
     """
 
-    def __init__(self, pid_file: str = "/tmp/advancekeylogger.pid") -> None:
+    def __init__(self, pid_file: str | None = None) -> None:
+        if pid_file is None:
+            pid_file = "/tmp/advancekeylogger.pid"
         self.pid_file = Path(pid_file)
 
     def acquire(self) -> bool:

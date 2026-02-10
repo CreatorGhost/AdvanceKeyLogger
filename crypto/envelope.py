@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from crypto.signer import sign_message, verify_message
 
-_HKDF_SALT = b"AdvanceKeyLogger-E2E-v1"
+_HKDF_SALT = b"x25519-e2e-hkdf-v1"
 
 
 @dataclass
@@ -201,7 +201,7 @@ def _derive_wrap_key(shared_secret: bytes, legacy: bool) -> bytes:
         algorithm=hashes.SHA256(),
         length=32,
         salt=None if legacy else _HKDF_SALT,
-        info=b"AKL-E2E-WRAP",
+        info=b"E2E-WRAP-V1",
     )
     return hkdf.derive(shared_secret)
 
@@ -265,14 +265,14 @@ def _b64_decode(value: str) -> bytes:
 
 def _payload_aad(sender_pub: bytes, legacy: bool = False) -> bytes:
     if legacy:
-        return b"AKL-PAYLOAD"
-    return b"AKL-PAYLOAD|" + sender_pub
+        return b"PAYLOAD-V1"
+    return b"PAYLOAD-V1|" + sender_pub
 
 
 def _wrap_aad(sender_pub: bytes, legacy: bool = False) -> bytes:
     if legacy:
-        return b"AKL-WRAP"
-    return b"AKL-WRAP|" + sender_pub
+        return b"WRAP-V1"
+    return b"WRAP-V1|" + sender_pub
 
 
 def _decrypt_wrapped_key(envelope: Envelope, wrap_key: bytes) -> bytes | None:

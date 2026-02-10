@@ -172,7 +172,7 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
         )
 
     app = FastAPI(
-        title="AdvanceKeyLogger Dashboard",
+        title="System Dashboard",
         version="1.0.0",
         docs_url="/api/docs",
         redoc_url=None,

