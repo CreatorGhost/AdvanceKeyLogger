@@ -164,9 +164,9 @@ def _validate_session_token(token: str) -> str | None:
 
         # Try to get the app's fleet_auth instance via the global fleet_controller reference
         if _fleet_controller and hasattr(_fleet_controller, "config"):
-            jwt_secret = _fleet_controller.config.get(
-                "jwt_secret", "CHANGE_ME_IN_PRODUCTION"
-            )
+            jwt_secret = _fleet_controller.config.get("jwt_secret")
+            if not jwt_secret:
+                return None
             auth = FleetAuth(jwt_secret)
             agent_id = auth.verify_token(token, expected_type="access")
             if agent_id:

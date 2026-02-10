@@ -279,8 +279,10 @@ async def get_commands(
 
             commands.append(cmd.to_dict())
 
-            # Update status to SENT
-            controller.commands[cmd.command_id].status = CommandStatus.SENT
+            # Update status to SENT (use .get() to guard against concurrent cleanup)
+            tracked_cmd = controller.commands.get(cmd.command_id)
+            if tracked_cmd is not None:
+                tracked_cmd.status = CommandStatus.SENT
             controller.storage.update_command_status(cmd.command_id, "sent")
 
     # Also check DB for any pending commands that might have been loaded but not in queue?

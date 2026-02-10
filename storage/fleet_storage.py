@@ -247,7 +247,11 @@ class FleetStorage:
     # --- Heartbeat Methods ---
 
     def record_heartbeat(
-        self, agent_id: str, metrics: Dict[str, Any], ip: Optional[str] = None
+        self,
+        agent_id: str,
+        metrics: Dict[str, Any],
+        ip: Optional[str] = None,
+        status: str = "ONLINE",
     ) -> None:
         now = time.time()
         metrics_json = json.dumps(metrics)
@@ -256,16 +260,16 @@ class FleetStorage:
                 "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
                 (agent_id, now, metrics_json, ip),
             )
-            # Also update agent last seen (inline to reuse the lock)
+            # Also update agent last seen and status (inline to reuse the lock)
             if ip:
                 self._conn.execute(
                     "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
-                    ("online", now, ip, agent_id),
+                    (status, now, ip, agent_id),
                 )
             else:
                 self._conn.execute(
                     "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
-                    ("online", now, agent_id),
+                    (status, now, agent_id),
                 )
             self._conn.commit()
 
@@ -445,33 +449,40 @@ class FleetStorage:
     # --- Controller Keys Methods ---
 
     def _encrypt_private_key(self, private_key: str) -> str:
-        """Encrypt a private key string if a passphrase is configured."""
+        """Encrypt a private key string if a passphrase is configured.
+
+        Uses a random 16-byte salt prepended to the ciphertext (base64-encoded
+        as ``<b64salt>$<fernet_token>``) so that each encryption produces unique
+        output even for the same passphrase.
+        """
         if not self._key_passphrase:
             return private_key
         try:
-            import hashlib
+            import base64 as _b64
             from cryptography.fernet import Fernet
             from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
             from cryptography.hazmat.primitives import hashes
 
-            # Use a deterministic salt derived from the passphrase so we don't
-            # need a separate salt column (the passphrase is the secret).
-            salt = hashlib.sha256(self._key_passphrase.encode()).digest()[:16]
+            salt = os.urandom(16)
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480_000
             )
             key = Fernet(
-                __import__("base64").urlsafe_b64encode(
-                    kdf.derive(self._key_passphrase.encode())
-                )
+                _b64.urlsafe_b64encode(kdf.derive(self._key_passphrase.encode()))
             )
-            return key.encrypt(private_key.encode()).decode("ascii")
+            token = key.encrypt(private_key.encode()).decode("ascii")
+            salt_b64 = _b64.b64encode(salt).decode("ascii")
+            return f"{salt_b64}${token}"
         except ImportError:
             logger.warning("cryptography package not available; storing key in plaintext")
             return private_key
 
     def _decrypt_private_key(self, encrypted_key: str) -> str:
-        """Decrypt a private key string if a passphrase is configured."""
+        """Decrypt a private key string if a passphrase is configured.
+
+        Supports both the new ``<b64salt>$<fernet_token>`` format and the
+        legacy deterministic-salt format for backward compatibility.
+        """
         if not self._key_passphrase:
             return encrypted_key
         # If the key looks like a PEM key already, it was stored before encryption
@@ -479,21 +490,28 @@ class FleetStorage:
         if encrypted_key.startswith("-----BEGIN"):
             return encrypted_key
         try:
+            import base64 as _b64
             import hashlib
             from cryptography.fernet import Fernet, InvalidToken
             from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
             from cryptography.hazmat.primitives import hashes
 
-            salt = hashlib.sha256(self._key_passphrase.encode()).digest()[:16]
+            # New format: "<b64salt>$<fernet_token>"
+            if "$" in encrypted_key:
+                salt_b64, token = encrypted_key.split("$", 1)
+                salt = _b64.b64decode(salt_b64)
+            else:
+                # Legacy deterministic salt for keys encrypted before this fix
+                salt = hashlib.sha256(self._key_passphrase.encode()).digest()[:16]
+                token = encrypted_key
+
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480_000
             )
             key = Fernet(
-                __import__("base64").urlsafe_b64encode(
-                    kdf.derive(self._key_passphrase.encode())
-                )
+                _b64.urlsafe_b64encode(kdf.derive(self._key_passphrase.encode()))
             )
-            return key.decrypt(encrypted_key.encode()).decode("utf-8")
+            return key.decrypt(token.encode()).decode("utf-8")
         except (ImportError, Exception) as exc:
             logger.warning("Failed to decrypt private key: %s — returning raw value", exc)
             return encrypted_key

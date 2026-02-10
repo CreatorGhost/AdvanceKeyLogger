@@ -471,14 +471,14 @@ class Controller:
                 # Snapshot to avoid RuntimeError if dict mutates during iteration
                 items = list(self.command_queues.items())
                 for agent_id, queue in items:
-                    if queue.empty():
-                        continue
-
                     # Verify agent still registered before sending
                     if agent_id not in self.agents:
                         continue
 
-                    _, _seq, command = await queue.get()
+                    try:
+                        _, _seq, command = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        continue
                     await self._send_command_to_agent(agent_id, command)
 
                 await asyncio.sleep(0.1)  # Prevent CPU spinning

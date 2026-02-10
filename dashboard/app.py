@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to initialize SQLite storage: %s", e)
 
     # Initialize fleet controller if enabled
+    fleet_storage = None  # Track for cleanup on failure
     if settings.get("fleet.enabled"):
         try:
             from storage.fleet_storage import FleetStorage
@@ -87,10 +88,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start fleet controller: {e}")
             # Don't crash app if fleet fails — close FleetStorage to prevent leak
-            try:
-                fleet_storage.close()
-            except Exception:
-                pass
+            if fleet_storage is not None:
+                try:
+                    fleet_storage.close()
+                except Exception:
+                    pass
+                fleet_storage = None
             app.state.fleet_controller = None
             # Still set SQLite storage for WebSocket handlers even if fleet fails
             if sqlite_storage:

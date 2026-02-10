@@ -218,13 +218,11 @@ class FleetController(Controller):
     # Override handle_heartbeat to persist
     async def handle_heartbeat(self, agent_id: str, data: Dict[str, Any]) -> None:
         await super().handle_heartbeat(agent_id, data)
-        # Record in DB
-        self.storage.record_heartbeat(agent_id, data)
-        # Status update happens in record_heartbeat implicitly or explicitly
-        # super() updates self.agents[agent_id].status, but we should sync DB status too if changed
+        # Record in DB — pass the actual status from the in-memory agent
+        # to avoid hardcoding "online" and eliminate the redundant second DB write
         agent = self.agents.get(agent_id)
-        if agent:
-            self.storage.update_agent_status(agent_id, agent.status.name)
+        agent_status = agent.status.name if agent else "ONLINE"
+        self.storage.record_heartbeat(agent_id, data, status=agent_status)
 
     # Override send_command to persist
     def send_command(
