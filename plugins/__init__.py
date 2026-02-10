@@ -101,7 +101,10 @@ class PluginManager:
                 else []
             )
             for ep in group:
-                self._register(ep.name, ep.value, "entrypoint")
+                # ep.value may contain "module:Attr"; split to get the module
+                # portion so import_module in _load_one doesn't choke.
+                module_path = ep.value.split(":")[0] if ":" in ep.value else ep.value
+                self._register(ep.name, module_path, "entrypoint")
         except Exception as exc:
             logger.debug("Entry-point discovery failed: %s", exc)
 

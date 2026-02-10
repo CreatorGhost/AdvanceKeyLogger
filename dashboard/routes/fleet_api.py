@@ -218,11 +218,8 @@ async def register_agent(
             tags=tags,
         )
 
-        # Register with controller (persists to DB).
-        # Wrapped in to_thread because the storage call blocks.
-        await asyncio.to_thread(
-            controller.register_agent, metadata, None, req.public_key.encode()
-        )
+        # Register with controller (async — handles storage I/O internally).
+        await controller.register_agent(metadata, None, req.public_key.encode())
 
         # Generate tokens
         tokens = auth_service.create_tokens(req.agent_id)
@@ -252,7 +249,7 @@ async def register_agent(
                 # Roll back the registration so the agent can retry cleanly.
                 logger.error("Token JTI persistence failed, rolling back registration: %s", tok_exc)
                 try:
-                    controller.unregister_agent(req.agent_id)
+                    await asyncio.to_thread(controller.unregister_agent, req.agent_id)
                 except Exception:
                     pass
                 raise HTTPException(

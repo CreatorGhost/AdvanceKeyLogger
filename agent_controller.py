@@ -310,26 +310,35 @@ class Controller:
 
         logger.info("Controller stopped")
 
-    def register_agent(
+    async def register_agent(
         self, metadata: AgentMetadata, transport: BaseTransport, public_key: bytes
     ) -> SecureChannel:
         """Register a new agent with the controller.
 
-        Note: This method mutates shared dicts. In pure-async usage callers
-        should hold ``self._lock`` around the call.  The method itself cannot
-        acquire an asyncio.Lock because it is synchronous.
+        Acquires ``self._lock`` to safely mutate shared dicts and offloads
+        the blocking storage call (if a storage backend is attached) via
+        ``asyncio.to_thread``.
         """
         agent_id = metadata.agent_id
+
+        # Offload blocking storage I/O before acquiring the async lock
+        if hasattr(self, "storage") and self.storage is not None:
+            await asyncio.to_thread(
+                self.storage.register_agent,
+                agent_id,
+                metadata.to_dict(),
+            )
 
         # Create secure channel
         channel = SecureChannel()
         channel.initialize()
         channel.set_remote_key(public_key)
 
-        self.agents[agent_id] = metadata
-        self.agent_channels[agent_id] = channel
-        self.agent_transports[agent_id] = transport
-        self.command_queues[agent_id] = asyncio.PriorityQueue()
+        async with self._lock:
+            self.agents[agent_id] = metadata
+            self.agent_channels[agent_id] = channel
+            self.agent_transports[agent_id] = transport
+            self.command_queues[agent_id] = asyncio.PriorityQueue()
 
         logger.info(f"Agent registered: {agent_id} ({metadata.hostname})")
         return channel

@@ -14,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
+import contextlib
 from contextlib import asynccontextmanager
 
 from config.settings import Settings
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize fleet controller if enabled
     fleet_storage = None  # Track for cleanup on failure
+    controller = None  # Pre-initialize to avoid UnboundLocalError
     if settings.get("fleet.enabled"):
         try:
             from storage.fleet_storage import FleetStorage
@@ -103,21 +105,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Failed to start fleet controller: {e}")
             # Stop controller if it was started (background tasks may be running)
-            try:
-                _ctrl = controller  # noqa: F841 — may not be bound yet
-            except UnboundLocalError:
-                _ctrl = None
-            if _ctrl is not None:
-                try:
-                    await _ctrl.stop()
-                except Exception:
-                    pass
+            if controller is not None:
+                with contextlib.suppress(Exception):
+                    await controller.stop()
             # Don't crash app if fleet fails — close FleetStorage to prevent leak
             if fleet_storage is not None:
-                try:
+                with contextlib.suppress(Exception):
                     fleet_storage.close()
-                except Exception:
-                    pass
                 fleet_storage = None
             app.state.fleet_controller = None
             # Still set SQLite storage for WebSocket handlers even if fleet fails

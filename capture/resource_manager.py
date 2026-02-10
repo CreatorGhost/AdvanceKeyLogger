@@ -70,6 +70,7 @@ class ResourceManager:
         self._mem_limit = float(cfg.get("memory_limit_mb", 300))
         self._disk_limit = float(cfg.get("disk_limit_mb", 1000))
         self._check_interval = float(cfg.get("check_interval", 5))
+        self._data_dir = cfg.get("data_dir", "data")
 
         self._budgets: dict[str, ResourceBudget] = {}
         self._usage = ResourceUsage()
@@ -124,8 +125,9 @@ class ResourceManager:
     def refresh(self) -> ResourceUsage:
         """Refresh resource usage (rate-limited by ``check_interval``)."""
         now = time.time()
-        if now - self._last_check < self._check_interval:
-            return self._usage
+        with self._lock:
+            if now - self._last_check < self._check_interval:
+                return self._usage
 
         usage = ResourceUsage(timestamp=now)
         try:
@@ -139,11 +141,11 @@ class ResourceManager:
         except Exception as exc:
             logger.debug("Resource check failed: %s", exc)
 
-        # Disk usage for data directory
+        # Disk usage for data directory (read from config)
         try:
             from pathlib import Path
 
-            data_dir = Path("data")
+            data_dir = Path(self._data_dir)
             if data_dir.exists():
                 total = sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
                 usage.disk_mb = total / (1024 * 1024)
@@ -153,8 +155,7 @@ class ResourceManager:
         with self._lock:
             self._usage = usage
             self._last_check = now
-
-        self._enforce_budgets(usage)
+            self._enforce_budgets(usage)
         return usage
 
     def _enforce_budgets(self, usage: ResourceUsage) -> None:
@@ -205,10 +206,11 @@ class ResourceManager:
     def can_proceed(self, name: str) -> bool:
         """Check if a component is allowed to proceed."""
         self.refresh()
-        budget = self._budgets.get(name)
-        if budget is None:
-            return True  # unregistered components are unconstrained
-        return not budget.paused
+        with self._lock:
+            budget = self._budgets.get(name)
+            if budget is None:
+                return True  # unregistered components are unconstrained
+            return not budget.paused
 
     @contextmanager
     def budget(self, name: str) -> Generator[ResourceBudget | None, None, None]:
@@ -222,9 +224,12 @@ class ResourceManager:
                 take_screenshot(quality=...)
         """
         self.refresh()
-        b = self._budgets.get(name)
-        if b is not None and b.paused:
-            logger.debug("Component '%s' paused: %s", name, b.pause_reason)
+        with self._lock:
+            b = self._budgets.get(name)
+            paused = b is not None and b.paused
+            reason = b.pause_reason if b else ""
+        if paused:
+            logger.debug("Component '%s' paused: %s", name, reason)
             yield None
         else:
             yield b
@@ -235,23 +240,26 @@ class ResourceManager:
 
     def get_status(self) -> dict[str, Any]:
         """Return a status dict suitable for dashboards / heartbeats."""
-        return {
-            "usage": {
+        with self._lock:
+            usage_snapshot = {
                 "cpu_percent": self._usage.cpu_percent,
                 "memory_mb": round(self._usage.memory_mb, 1),
                 "disk_mb": round(self._usage.disk_mb, 1),
-            },
-            "limits": {
-                "cpu_limit": self._cpu_limit,
-                "memory_limit_mb": self._mem_limit,
-                "disk_limit_mb": self._disk_limit,
-            },
-            "budgets": {
+            }
+            budgets_snapshot = {
                 name: {
                     "priority": b.priority,
                     "paused": b.paused,
                     "pause_reason": b.pause_reason,
                 }
                 for name, b in self._budgets.items()
+            }
+        return {
+            "usage": usage_snapshot,
+            "limits": {
+                "cpu_limit": self._cpu_limit,
+                "memory_limit_mb": self._mem_limit,
+                "disk_limit_mb": self._disk_limit,
             },
+            "budgets": budgets_snapshot,
         }

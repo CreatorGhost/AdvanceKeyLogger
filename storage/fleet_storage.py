@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,9 @@ class FleetStorage:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._conn = sqlite3.connect(
+            str(self.db_path), check_same_thread=False, isolation_level=None
+        )
         self._conn.row_factory = sqlite3.Row  # Return dict-like rows
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -128,10 +130,9 @@ class FleetStorage:
             CREATE INDEX IF NOT EXISTS idx_commands_agent_status 
                 ON commands(agent_id, status);
                 
-            CREATE INDEX IF NOT EXISTS idx_audit_timestamp 
+            CREATE INDEX IF NOT EXISTS idx_audit_timestamp
                 ON audit_logs(timestamp DESC);
         """)
-        self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
@@ -151,57 +152,62 @@ class FleetStorage:
         metadata = json.dumps(data.get("metadata", {}))
 
         with self._lock:
-            # Check if exists to preserve created_at if updating
-            exists = self._conn.execute(
-                "SELECT 1 FROM agents WHERE id = ?", (agent_id,)
-            ).fetchone()
+            try:
+                self._conn.execute("BEGIN")
+                # Check if exists to preserve created_at if updating
+                exists = self._conn.execute(
+                    "SELECT 1 FROM agents WHERE id = ?", (agent_id,)
+                ).fetchone()
 
-            if exists:
-                self._conn.execute(
-                    """
-                    UPDATE agents SET
-                        name = ?, public_key = ?, status = ?, ip_address = ?,
-                        hostname = ?, platform = ?, version = ?, metadata = ?,
-                        last_seen_at = ?
-                    WHERE id = ?
-                """,
-                    (
-                        data.get("name"),
-                        data.get("public_key"),
-                        data.get("status", "online"),
-                        data.get("ip_address"),
-                        data.get("hostname"),
-                        data.get("platform"),
-                        data.get("version"),
-                        metadata,
-                        now,
-                        agent_id,
-                    ),
-                )
-            else:
-                self._conn.execute(
-                    """
-                    INSERT INTO agents (
-                        id, name, public_key, status, ip_address, hostname,
-                        platform, version, metadata, created_at, last_seen_at, enrollment_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        agent_id,
-                        data.get("name"),
-                        data.get("public_key"),
-                        data.get("status", "online"),
-                        data.get("ip_address"),
-                        data.get("hostname"),
-                        data.get("platform"),
-                        data.get("version"),
-                        metadata,
-                        now,
-                        now,
-                        data.get("enrollment_key"),
-                    ),
-                )
-            self._conn.commit()
+                if exists:
+                    self._conn.execute(
+                        """
+                        UPDATE agents SET
+                            name = ?, public_key = ?, status = ?, ip_address = ?,
+                            hostname = ?, platform = ?, version = ?, metadata = ?,
+                            last_seen_at = ?
+                        WHERE id = ?
+                    """,
+                        (
+                            data.get("name"),
+                            data.get("public_key"),
+                            data.get("status", "online"),
+                            data.get("ip_address"),
+                            data.get("hostname"),
+                            data.get("platform"),
+                            data.get("version"),
+                            metadata,
+                            now,
+                            agent_id,
+                        ),
+                    )
+                else:
+                    self._conn.execute(
+                        """
+                        INSERT INTO agents (
+                            id, name, public_key, status, ip_address, hostname,
+                            platform, version, metadata, created_at, last_seen_at, enrollment_key
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            agent_id,
+                            data.get("name"),
+                            data.get("public_key"),
+                            data.get("status", "online"),
+                            data.get("ip_address"),
+                            data.get("hostname"),
+                            data.get("platform"),
+                            data.get("version"),
+                            metadata,
+                            now,
+                            now,
+                            data.get("enrollment_key"),
+                        ),
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -238,17 +244,22 @@ class FleetStorage:
     def update_agent_status(self, agent_id: str, status: str, ip: Optional[str] = None) -> None:
         now = time.time()
         with self._lock:
-            if ip:
-                self._conn.execute(
-                    "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
-                    (status, now, ip, agent_id),
-                )
-            else:
-                self._conn.execute(
-                    "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
-                    (status, now, agent_id),
-                )
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                if ip:
+                    self._conn.execute(
+                        "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
+                        (status, now, ip, agent_id),
+                    )
+                else:
+                    self._conn.execute(
+                        "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
+                        (status, now, agent_id),
+                    )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     # --- Heartbeat Methods ---
 
@@ -279,9 +290,9 @@ class FleetStorage:
                         "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
                         (status, now, agent_id),
                     )
-                self._conn.commit()
+                self._conn.execute("COMMIT")
             except Exception:
-                self._conn.rollback()
+                self._conn.execute("ROLLBACK")
                 raise
 
     def get_latest_heartbeat(self, agent_id: str) -> Optional[Dict[str, Any]]:
@@ -313,14 +324,19 @@ class FleetStorage:
         now = time.time()
         payload_json = json.dumps(payload)
         with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO commands (id, agent_id, type, payload, status, priority, created_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?)
-            """,
-                (cmd_id, agent_id, type_, payload_json, priority, now),
-            )
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    """
+                    INSERT INTO commands (id, agent_id, type, payload, status, priority, created_at)
+                    VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                    (cmd_id, agent_id, type_, payload_json, priority, now),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def get_pending_commands(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get pending commands for an agent, ordered by priority and time.
@@ -390,8 +406,13 @@ class FleetStorage:
 
         sql = f"UPDATE commands SET {', '.join(update_fields)} WHERE id = ?"
         with self._lock:
-            self._conn.execute(sql, params)
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(sql, params)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def get_command(self, cmd_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -454,18 +475,23 @@ class FleetStorage:
     ) -> Optional[int]:
         now = time.time()
         with self._lock:
-            cursor = self._conn.execute(
-                """
-                INSERT INTO agent_tokens (agent_id, token_hash, token_jti, issued_at, expires_at)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (agent_id, token_hash, jti, now, expires_at),
-            )
-            self._conn.commit()
-            return cursor.lastrowid
+            try:
+                self._conn.execute("BEGIN")
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO agent_tokens (agent_id, token_hash, token_jti, issued_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (agent_id, token_hash, jti, now, expires_at),
+                )
+                self._conn.execute("COMMIT")
+                return cursor.lastrowid
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def create_tokens_batch(
-        self, entries: list[tuple[str, str, str, float]]
+        self, entries: List[Tuple[str, str, str, float]]
     ) -> None:
         """Persist multiple token JTIs atomically in a single transaction.
 
@@ -485,18 +511,23 @@ class FleetStorage:
                         """,
                         (agent_id, token_hash, jti, now, expires_at),
                     )
-                self._conn.commit()
+                self._conn.execute("COMMIT")
             except Exception:
-                self._conn.rollback()
+                self._conn.execute("ROLLBACK")
                 raise
 
     def revoke_token(self, jti: str) -> None:
         now = time.time()
         with self._lock:
-            self._conn.execute(
-                "UPDATE agent_tokens SET revoked_at = ? WHERE token_jti = ?", (now, jti)
-            )
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "UPDATE agent_tokens SET revoked_at = ? WHERE token_jti = ?", (now, jti)
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def is_token_revoked(self, jti: str) -> bool:
         """Check if a token JTI is revoked.
@@ -605,32 +636,37 @@ class FleetStorage:
         stored_private_key = self._encrypt_private_key(private_key)
 
         with self._lock:
-            exists = self._conn.execute(
-                "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
-            ).fetchone()
+            try:
+                self._conn.execute("BEGIN")
+                exists = self._conn.execute(
+                    "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
+                ).fetchone()
 
-            if exists:
-                self._conn.execute(
-                    """
-                    UPDATE controller_keys SET
-                        private_key = ?, public_key = ?, algorithm = ?,
-                        key_size = ?, rotated_at = ?
-                    WHERE id = ?
-                """,
-                    (stored_private_key, public_key, algorithm, key_size, now, key_id),
-                )
-                logger.info("Controller keys rotated for key_id: %s", key_id)
-            else:
-                self._conn.execute(
-                    """
-                    INSERT INTO controller_keys
-                        (id, private_key, public_key, algorithm, key_size, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                    (key_id, stored_private_key, public_key, algorithm, key_size, now),
-                )
-                logger.info("Controller keys saved for key_id: %s", key_id)
-            self._conn.commit()
+                if exists:
+                    self._conn.execute(
+                        """
+                        UPDATE controller_keys SET
+                            private_key = ?, public_key = ?, algorithm = ?,
+                            key_size = ?, rotated_at = ?
+                        WHERE id = ?
+                    """,
+                        (stored_private_key, public_key, algorithm, key_size, now, key_id),
+                    )
+                    logger.info("Controller keys rotated for key_id: %s", key_id)
+                else:
+                    self._conn.execute(
+                        """
+                        INSERT INTO controller_keys
+                            (id, private_key, public_key, algorithm, key_size, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                        (key_id, stored_private_key, public_key, algorithm, key_size, now),
+                    )
+                    logger.info("Controller keys saved for key_id: %s", key_id)
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def get_controller_keys(self, key_id: str = "default") -> Optional[Dict[str, Any]]:
         """Retrieve controller keys by key_id.
@@ -658,8 +694,13 @@ class FleetStorage:
             True if deleted, False if not found.
         """
         with self._lock:
-            cursor = self._conn.execute(
-                "DELETE FROM controller_keys WHERE id = ?", (key_id,)
-            )
-            self._conn.commit()
-            return cursor.rowcount > 0
+            try:
+                self._conn.execute("BEGIN")
+                cursor = self._conn.execute(
+                    "DELETE FROM controller_keys WHERE id = ?", (key_id,)
+                )
+                self._conn.execute("COMMIT")
+                return cursor.rowcount > 0
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise

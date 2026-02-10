@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -44,7 +45,8 @@ def create_app(config: dict[str, Any]) -> FastAPI:
     )
     max_payload = int(config.get("max_payload_bytes", 10 * 1024 * 1024))
     _MAX_TRACKED_SENDERS = int(config.get("max_tracked_senders", 10000))
-    last_sequences: dict[str, int] = {}
+    # Use OrderedDict for LRU eviction so active senders are preserved.
+    last_sequences: OrderedDict[str, int] = OrderedDict()
     seq_lock = asyncio.Lock()
 
     @app.get("/health")
@@ -135,12 +137,12 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                         last,
                         envelope.sequence,
                     )
+                # Update and move to end (most-recently-used)
                 last_sequences[sender_key_b64] = envelope.sequence
-                # Evict oldest entries if the tracking dict grows too large
-                if len(last_sequences) > _MAX_TRACKED_SENDERS:
-                    excess = len(last_sequences) - _MAX_TRACKED_SENDERS
-                    for _key in list(last_sequences)[:excess]:
-                        del last_sequences[_key]
+                last_sequences.move_to_end(sender_key_b64)
+                # LRU eviction: remove least-recently-used entries
+                while len(last_sequences) > _MAX_TRACKED_SENDERS:
+                    last_sequences.popitem(last=False)
 
         payload = None
         decrypt_error: str | Exception = "no server keys configured"
