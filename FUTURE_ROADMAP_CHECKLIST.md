@@ -2,7 +2,7 @@
 
 Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
-## Updated Implementation Guide
+## Status Overview
 
 - [x] 1. Event-Driven Rule Engine with Custom DSL
 - [x] 2. Keystroke Biometrics & Typing Dynamics Engine
@@ -10,72 +10,80 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 - [x] 4. Application Usage Profiler & Productivity Scoring
 - [x] 5. End-to-End Encrypted Transport with Asymmetric Key Exchange
 - [x] 6. Distributed Fleet Management (Agent-Controller Architecture)
-- [ ] 7. Adaptive Capture Intelligence
+- [x] 7. Adaptive Capture Intelligence
 - [ ] 8. Offline-First Sync Engine with Conflict Resolution
 - [ ] 9. Session Recording & Visual Replay
 - [ ] 10. Natural Language Search
-- [ ] 11. Configuration Profiles & Hot-Switching
-- [ ] 12. Data Anonymization Pipeline
+- [x] 11. Configuration Profiles & Hot-Switching
+- [x] 12. Data Anonymization Pipeline
 - [ ] 13. Stealth Mode
 - [ ] 14. Remote File Upload and Execution
-- [ ] 15. Cell Access
+- [ ] 15. Cell / Mobile Access
 - [ ] 16. Obfuscation Techniques
 - [ ] 17. Anti-Forensic Measures
 - [ ] 18. Advanced Persistent Threat (APT) Capabilities
 - [ ] 19. Rootkit Integration
 - [ ] 20. Exfiltration Techniques
+- [x] **Bonus**: Plugin Architecture (extensibility system)
 
-## Implementation Guide
+---
+
+## Completed Features (1-7, 11-12, Plugin System)
 
 ### 1. Event-Driven Rule Engine with Custom DSL
 - **Status**: Completed
-- **Description**: Ensure the rule engine can handle complex event-driven scenarios, including undetectable operations and remote file management.
+- **Location**: `engine/`
+- **Description**: Rule engine handling complex event-driven scenarios with a custom DSL for defining capture rules, triggers, and actions.
 
 ### 2. Keystroke Biometrics & Typing Dynamics Engine
 - **Status**: Completed
-- **Description**: Use this for user authentication and behavior analysis, but ensure it doesn't interfere with the undetectable nature of the platform.
+- **Location**: `biometrics/`
+- **Description**: Typing dynamics analysis for user authentication and behavior profiling. Tracks dwell time, flight time, and typing cadence patterns.
 
 ### 3. Cross-Platform Service / Daemon Mode
 - **Status**: Completed
-- **Description**: Ensure the service can run in the background on all major operating systems without being detected. This includes Windows, macOS, Linux, and mobile platforms (iOS and Android).
+- **Location**: `service/`
+- **Description**: Background service/daemon support for Windows, macOS, and Linux with automatic startup and process management.
 
 ### 4. Application Usage Profiler & Productivity Scoring
 - **Status**: Completed
-- **Description**: Use this for monitoring and profiling, but ensure it doesn't leave any traceable logs that could reveal the platform's presence.
+- **Location**: `profiler/`
+- **Description**: Application usage monitoring and productivity scoring with per-app time tracking, category classification, and scoring algorithms.
 
 ### 5. End-to-End Encrypted Transport with Asymmetric Key Exchange
 - **Status**: Completed
-- **Description**: Implement robust encryption to secure data in transit, especially for remote file uploads and executions. Use asymmetric key exchange to ensure secure communication channels.
+- **Location**: `crypto/`, `server/`, `transport/`
+- **Description**: Hybrid encryption (RSA + AES-GCM) for data in transit. Asymmetric key exchange for establishing secure channels. Envelope-based transport with signature verification.
 
 ### 6. Distributed Fleet Management (Agent-Controller Architecture)
 - **Status**: Completed
-- **Description**: Implemented a complete distributed fleet management system with REST API, JWT authentication, SQLite persistence, and dashboard UI.
+- **Description**: Complete distributed fleet management system with REST API, JWT authentication, SQLite persistence, WebSocket support, and dashboard UI.
 
 #### Implemented Components:
 
 **Fleet Controller (`fleet/controller.py`)**:
-- ✅ `FleetController` extending base `Controller` with DB persistence
-- ✅ Agent registration with capability tracking
-- ✅ Command distribution with async priority queuing
-- ✅ Fleet-wide operations (broadcast commands)
-- ✅ Status monitoring and health checks
-- ✅ Secure channel with public key exchange
+- FleetController extending base Controller with DB persistence
+- Agent registration with capability tracking
+- Command distribution with async priority queuing
+- Fleet-wide operations (broadcast commands)
+- Status monitoring and health checks
+- Secure channel with public key exchange
 
 **Fleet Authentication (`fleet/auth.py`)**:
-- ✅ JWT-based per-agent authentication (separate from dashboard sessions)
-- ✅ Access tokens + refresh tokens
-- ✅ Token validation and expiry tracking
-- ✅ Per-agent isolation (token compromise doesn't affect others)
+- JWT-based per-agent authentication (separate from dashboard sessions)
+- Access tokens + refresh tokens with JTI tracking
+- Token validation, expiry, and revocation support
+- Per-agent isolation (token compromise doesn't affect others)
 
 **Fleet Agent (`fleet/agent.py`)**:
-- ✅ REST API client for agents
-- ✅ Automatic registration on start
-- ✅ Command polling with configurable interval
-- ✅ Command execution via `handle_command()` method
-- ✅ Heartbeat sending for health monitoring
+- REST API client for agents
+- Automatic registration on start
+- Command polling with configurable interval
+- Command execution with retry logic
+- Heartbeat sending for health monitoring
 
 **Fleet Storage (`storage/fleet_storage.py`)**:
-- ✅ SQLite persistence layer with 6 tables:
+- SQLite persistence layer with 6 tables:
   - `agents` - identity, metadata, capabilities, last_seen
   - `heartbeats` - time series health data
   - `commands` - queue with status tracking
@@ -84,425 +92,370 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
   - `audit_logs` - command issuance audit trail
 
 **Fleet REST API (`dashboard/routes/fleet_api.py`)**:
-- ✅ `POST /api/v1/fleet/register` - Agent registration
-- ✅ `POST /api/v1/fleet/heartbeat` - Accept heartbeats
-- ✅ `GET /api/v1/fleet/commands` - Poll for pending commands
-- ✅ `POST /api/v1/fleet/commands/{id}/response` - Command responses
-- ✅ Pydantic models for request validation
+- `POST /api/v1/fleet/register` - Agent registration with input validation
+- `POST /api/v1/fleet/heartbeat` - Accept heartbeats
+- `GET /api/v1/fleet/commands` - Poll for pending commands
+- `POST /api/v1/fleet/commands/{id}/response` - Command responses
+- Pydantic models with field validation (agent_id format, metadata size limits)
 
 **Dashboard Fleet API (`dashboard/routes/fleet_dashboard_api.py`)**:
-- ✅ `GET /api/v1/fleet/dashboard/agents` - List all agents
-- ✅ `GET /api/v1/fleet/dashboard/agents/{id}` - Agent details
-- ✅ `POST /api/v1/fleet/dashboard/agents/{id}/commands` - Send commands
-- ✅ `GET /api/v1/fleet/dashboard/agents/{id}/commands` - Command history
+- `GET /api/v1/fleet/dashboard/agents` - List all agents
+- `GET /api/v1/fleet/dashboard/agents/{id}` - Agent details
+- `POST /api/v1/fleet/dashboard/agents/{id}/commands` - Send commands
+- `GET /api/v1/fleet/dashboard/agents/{id}/commands` - Command history
 
 **Fleet UI (`dashboard/routes/fleet_ui.py`, `dashboard/templates/fleet/`)**:
-- ✅ `/fleet` - Agent list page with status table
-- ✅ `/fleet/agents/{id}` - Agent details with command history
-- ✅ Send command form with type selection
-- ✅ "Fleet" link in sidebar navigation
+- `/fleet` - Agent list page with status table
+- `/fleet/agents/{id}` - Agent details with command history
+- Send command form with type selection
+- "Fleet" link in sidebar navigation
 
 **Configuration (`config/default_config.yaml`)**:
-- ✅ `fleet.enabled` - Enable/disable fleet mode
-- ✅ `fleet.database_path` - SQLite database location
-- ✅ `fleet.auth.jwt_secret` - JWT signing secret
-- ✅ `fleet.auth.token_expiry_hours` - Token lifetime
-- ✅ `fleet.controller.heartbeat_timeout_seconds` - Agent timeout
+- `fleet.enabled` - Enable/disable fleet mode
+- `fleet.database_path` - SQLite database location
+- `fleet.auth.jwt_secret` - JWT signing secret (enforced non-default in production)
+- `fleet.auth.token_expiry_hours` - Token lifetime
+- `fleet.controller.heartbeat_timeout_seconds` - Agent timeout
 
 **CLI Integration (`dashboard/run.py`)**:
-- ✅ `--enable-fleet` flag to enable fleet management
-- ✅ `--fleet-db` flag to override database path
+- `--enable-fleet` flag to enable fleet management
+- `--fleet-db` flag to override database path
+- `--admin-pass` required in production (auto-generated in dev)
 
 **Tests (`tests/test_fleet_comprehensive.py`)**:
-- ✅ 12 comprehensive tests covering all functionality
-- ✅ Registration, authentication, command flow, persistence
-
-#### Capabilities:
-- **REST-Based Communication**: HTTP polling for broad compatibility
-- **JWT Authentication**: Secure per-agent tokens
-- **SQLite Persistence**: All data survives restarts
-- **Dashboard Integration**: Full UI for fleet management
-- **Command Lifecycle**: PENDING → SENT → COMPLETED/FAILED tracking
-- **Audit Trail**: All commands logged with user identity
+- 12 comprehensive tests covering all functionality
+- Registration, authentication, command flow, persistence
 
 #### Additional Transports (Available):
 
 **WebSocket Transport (`transport/websocket_transport.py`)**:
-- ✅ Persistent bidirectional WebSocket connections
-- ✅ Automatic reconnection with exponential backoff
-- ✅ SSL/TLS support for secure connections
+- Persistent bidirectional WebSocket connections
+- Automatic reconnection with resource cleanup
+- SSL/TLS support for secure connections
 
 **Redis Message Queue (`utils/redis_queue.py`)**:
-- ✅ Redis pub/sub for real-time message distribution
-- ✅ Persistent message queues with TTL
-- ✅ Priority-based message handling
+- Redis pub/sub for real-time message distribution
+- Persistent message queues with TTL
+- Priority-based message handling
 
+---
 
 ### 7. Adaptive Capture Intelligence
-- **Status**: In Progress
-- **Description**: Enhance the intelligence to adapt to different environments and avoid detection.
+- **Status**: Completed
+- **Location**: `capture/adaptive_engine.py`, `capture/resource_manager.py`
+- **Description**: Dynamically adjusts capture frequency and strategy based on system load, user activity patterns, battery state, and configurable resource budgets.
 
-### Implementation Components:
+#### Implemented Components:
+
 **Adaptive Engine (`capture/adaptive_engine.py`)**:
-- ✅ Environment detection module with system fingerprinting
-- ✅ Dynamic capture frequency adjustment based on user activity patterns
-- ✅ Resource utilization monitoring and throttling
-- ✅ Anti-detection behavior simulation (mimicking legitimate processes)
-- ✅ Context-aware capture prioritization (focus on sensitive applications)
+- `AdaptiveEngine` class evaluating system + activity state into an `AdaptivePolicy`
+- Battery saver mode (disables heavy captures below configurable threshold)
+- CPU-aware throttling (high / critical tiers with progressive feature disable)
+- Memory pressure detection
+- Idle detection with extended capture intervals
+- Typing burst detection with reduced intervals for focused capture
+- Rolling history with trend analysis (`get_trend()`)
+- Environment fingerprinting (`detect_environment()`)
+- System snapshots via `psutil` with graceful fallback
 
-**Pattern Evasion (`capture/pattern_evasion.py`)**:
-- ✅ Randomization of capture intervals and data sizes
-- ✅ Process name and signature rotation
-- ✅ Network traffic mimicking to blend with normal activity
-- ✅ Timing obfuscation to avoid behavioral analysis detection
-- ✅ Memory footprint minimization with dynamic loading
+**Resource Manager (`capture/resource_manager.py`)**:
+- Per-component resource budgets with named registration
+- CPU, memory, and disk limit enforcement
+- Priority-based pause/resume (lowest priority paused first)
+- Context manager API: `with rm.budget("screenshot") as b:`
+- Guard API: `rm.can_proceed("audio")`
+- Automatic refresh with configurable check interval
+- Status introspection for dashboard / heartbeat integration
 
-**Threat Response (`capture/threat_response.py`)**:
-- ✅ Security software detection and evasion tactics
-- ✅ Virtual machine and sandbox detection
-- ✅ Debugger analysis resistance
-- ✅ Automatic operation suspension when analysis detected
-- ✅ Covert operation resumption after threat passes
+### Bonus: Plugin Architecture
+- **Status**: Completed
+- **Location**: `plugins/__init__.py`
+- **Description**: Extensibility system allowing third-party capture, transport, and middleware plugins.
 
-### 8. Offline-First Sync Engine with Conflict Resolution
-- **Status**: In Progress
-- **Description**: Ensure the platform can operate offline and sync data when online.
+#### Implemented Components:
 
-### Implementation Components:
-**Sync Engine (`sync/offline_sync.py`)**:
-- ✅ Local-first data storage with SQLite
-- ✅ Delta-based change tracking and compression
-- ✅ Priority-based sync queue (critical data first)
-- ✅ Bandwidth-adaptive transfer protocols
-- ✅ Resumable transfers with checkpointing
-
-**Conflict Resolution (`sync/conflict_resolver.py`)**:
-- ✅ Three-way merge algorithm for conflicting changes
-- ✅ Last-writer-wins with timestamp verification
-- ✅ Manual conflict resolution queue for critical data
-- ✅ Automatic conflict classification (safe vs. risky)
-- ✅ Rollback capability for failed sync operations
-
-**Sync Protocols (`sync/protocols.py`)**:
-- ✅ HTTP/HTTPS with adaptive compression
-- ✅ DNS tunneling for restricted networks
-- ✅ Covert channel over legitimate traffic (HTTPS, ICMP, etc.)
-- ✅ Peer-to-peer mesh networking for distributed sync
-- ✅ Satellite/cellular fallback for remote operations
-
-### 9. Session Recording & Visual Replay
-- **Status**: In Progress
-- **Description**: Ensure session recordings are encrypted and stored securely.
-
-### Implementation Components:
-**Recording Engine (`recording/session_capture.py`)**:
-- ✅ Multi-modal capture (screen, audio, input, network)
-- ✅ Variable quality encoding based on storage constraints
-- ✅ Real-time compression with selective frame capture
-- ✅ Event-driven recording (only on significant activity)
-- ✅ Self-destructing recordings after configured time
-
-**Replay System (`recording/visual_replay.py`)**:
-- ✅ Timeline-based playback with seeking capability
-- ✅ Multi-track synchronization (screen + audio + events)
-- ✅ Annotation and bookmarking system
-- ✅ Export to multiple formats (encrypted video, event logs)
-- ✅ Remote streaming with authentication
-
-**Secure Storage (`recording/secure_storage.py`)**:
-- ✅ AES-256 encryption with per-session keys
-- ✅ Key shredding after configured retention period
-- ✅ Distributed storage across multiple endpoints
-- ✅ Plausible deniability with hidden partitions
-- ✅ Recovery keys with split knowledge scheme
-
-### 10. Natural Language Search
-- **Status**: In Progress
-- **Description**: Implement natural language search to query and manage data.
-
-### Implementation Components:
-**Search Engine (`search/nlp_search.py`)**:
-- ✅ Intent recognition with entity extraction
-- ✅ Fuzzy matching with typo tolerance
-- ✅ Temporal query support ("last week", "yesterday")
-- ✅ Context-aware result ranking
-- ✅ Query expansion with synonym detection
-
-**Indexing System (`search/indexer.py`)**:
-- ✅ Incremental indexing with low resource usage
-- ✅ Encrypted index with searchable encryption
-- ✅ Cross-modal indexing (text, images, audio)
-- ✅ Automatic data classification and tagging
-- ✅ Index fragmentation and optimization
-
-**Query Interface (`search/interface.py`)**:
-- ✅ Voice query support with speech-to-text
-- ✅ Autocomplete with suggestion ranking
-- ✅ Search history with automatic cleanup
-- ✅ Saved searches with alerting
-- ✅ Export results with customizable formatting
+**Plugin Manager (`plugins/__init__.py`)**:
+- Three discovery modes: directory scan, pip entry points (`advkl.plugins` group), config-listed paths
+- Safe loading with per-plugin error tracking
+- Plugins use existing `@register_capture`, `@register_transport`, `@register_middleware` decorators
+- Introspection API: `list_plugins()`, `is_loaded()`
 
 ### 11. Configuration Profiles & Hot-Switching
-- **Status**: In Progress
-- **Description**: Allow for easy configuration and switching between different profiles.
+- **Status**: Completed
+- **Location**: `config/profile_manager.py`, `config/hot_switch.py`
+- **Description**: Named configuration profiles with inheritance and runtime switching without restart.
 
-### Implementation Components:
+#### Implemented Components:
+
 **Profile Manager (`config/profile_manager.py`)**:
-- ✅ JSON/YAML configuration with schema validation
-- ✅ Inheritance system for profile composition
-- ✅ Environment-specific overrides (development, production)
-- ✅ Template system for quick profile creation
-- ✅ Configuration versioning with rollback capability
+- Named profiles defined in YAML config or standalone files in `config/profiles/`
+- Profile inheritance via `extends` key (with cycle detection)
+- Deep-merge resolution (ancestor-first application)
+- Profile validation, import/export, and listing
+- Fleet-ready: profiles are plain dicts suitable for remote distribution
 
 **Hot-Switch Engine (`config/hot_switch.py`)**:
-- ✅ Runtime configuration changes without restart
-- ✅ Atomic configuration updates with rollback
-- ✅ Dependency tracking for safe changes
-- ✅ Change validation before application
-- ✅ Configuration drift detection and correction
-
-**Profile Distribution (`config/distribution.py`)**:
-- ✅ Encrypted profile synchronization across agents
-- ✅ Group-based profile management
-- ✅ Just-in-time profile delivery
-- ✅ Profile expiration and auto-renewal
-- ✅ Staged rollout with automatic monitoring
+- Runtime config changes without process restart
+- Listener registration with `fnmatch` pattern matching (`"capture.*"`, `"*"`)
+- Atomic apply with automatic rollback if any listener fails
+- Config patch API: `apply_patch({"capture": {"screenshot": {"enabled": False}}})`
+- Profile API: `apply_profile("stealth")`
+- History stack with `rollback()` support (up to 10 snapshots)
+- Diff detection showing which keys changed
 
 ### 12. Data Anonymization Pipeline
-- **Status**: In Progress
-- **Description**: Implement data anonymization to protect user privacy.
+- **Status**: Completed
+- **Location**: `pipeline/middleware/anonymizer.py`
+- **Description**: PII detection and redaction as a pipeline middleware stage, running before storage or transport.
 
-### Implementation Components:
-**Anonymization Engine (`anonymization/pipeline.py`)**:
-- ✅ PII detection with regex and ML models
-- ✅ Tokenization with reversible encryption
-- ✅ Data masking with format preservation
-- ✅ Generalization (age ranges, geographic regions)
-- ✅ Synthetic data generation for testing
+#### Implemented Components:
 
-**Privacy Controls (`anonymization/privacy.py`)**:
-- ✅ Differential privacy with configurable epsilon
-- ✅ k-anonymity and l-diversity enforcement
-- ✅ Data retention policies with automatic deletion
-- ✅ Right-to-be-forgotten implementation
-- ✅ Privacy impact assessment tools
+**Anonymizer Middleware (`pipeline/middleware/anonymizer.py`)**:
+- Registered as `@register_middleware("anonymizer")` — drop-in pipeline stage
+- Built-in PII patterns: email, credit card (Luhn-validated), SSN, phone, IPv4
+- Custom patterns via config with named regex rules
+- Four redaction strategies: `mask`, `hash` (SHA-256 prefix), `remove`, `tag`
+- Allowlist support to skip known-safe patterns
+- Configurable field scanning (default: `data`, extensible to nested paths)
+- Event metadata enrichment: `_anonymized`, `_redaction_count`
+- Pipeline metrics integration via `context.inc("pii_redacted")`
 
-**Compliance Framework (`anonymization/compliance.py`)**:
-- ✅ GDPR, CCPA, and other regulation templates
-- ✅ Audit trail for all data transformations
-- ✅ Automated compliance checking
-- ✅ Data processing records generation
-- ✅ Consent management integration
+---
+
+## Planned Features (8-10, 13-20) — Not Yet Implemented
+
+> **Note**: The following features are planned for future development. None of the
+> listed files or directories exist yet. Each section describes the intended design
+> and the files that will need to be created.
+
+### 8. Offline-First Sync Engine with Conflict Resolution
+- **Status**: Planned
+- **Description**: Operate fully offline and sync captured data when connectivity is available.
+
+#### Planned Components:
+**Sync Engine (`sync/offline_sync.py`)** — to be created:
+- [ ] Local-first data storage with SQLite WAL mode
+- [ ] Delta-based change tracking and compression
+- [ ] Priority-based sync queue (critical data first)
+- [ ] Bandwidth-adaptive transfer protocols
+- [ ] Resumable transfers with checkpointing
+
+**Conflict Resolution (`sync/conflict_resolver.py`)** — to be created:
+- [ ] Last-writer-wins with timestamp verification
+- [ ] Merge strategy for overlapping capture windows
+- [ ] Duplicate detection and deduplication
+- [ ] Automatic conflict classification (safe vs. needs review)
+- [ ] Rollback capability for failed sync operations
+
+**Connectivity Monitor (`sync/connectivity.py`)** — to be created:
+- [ ] Network availability detection
+- [ ] Connection quality assessment (latency, bandwidth)
+- [ ] Automatic sync triggering when connectivity restored
+- [ ] Configurable sync schedules (e.g., only on WiFi)
+
+### 9. Session Recording & Visual Replay
+- **Status**: Planned
+- **Description**: Record user sessions with screen capture and input events for later replay and analysis.
+
+#### Planned Components:
+**Recording Engine (`recording/session_capture.py`)** — to be created:
+- [ ] Screen capture with configurable quality/frame rate
+- [ ] Input event recording (keyboard, mouse) with timestamps
+- [ ] Application-focused recording (only capture active window)
+- [ ] Event-driven recording triggers (start/stop on conditions)
+- [ ] Storage-aware compression and retention
+
+**Replay System (`recording/replay.py`)** — to be created:
+- [ ] Timeline-based playback with seeking
+- [ ] Input event overlay on screen captures
+- [ ] Annotation and bookmarking system
+- [ ] Export to standard video formats
+- [ ] Web-based replay viewer in dashboard
+
+**Storage Backend (`recording/storage.py`)** — to be created:
+- [ ] Chunked storage with per-session encryption
+- [ ] Automatic cleanup based on retention policy
+- [ ] Metadata indexing for fast session lookup
+- [ ] Compression ratio monitoring and optimization
+
+### 10. Natural Language Search
+- **Status**: Planned
+- **Description**: Search captured data using natural language queries.
+
+#### Planned Components:
+**Search Engine (`search/nlp_search.py`)** — to be created:
+- [ ] Keyword extraction from captured text
+- [ ] Fuzzy matching with typo tolerance
+- [ ] Temporal query support ("last week", "yesterday at 3pm")
+- [ ] Context-aware result ranking
+- [ ] Regular expression support for power users
+
+**Indexing System (`search/indexer.py`)** — to be created:
+- [ ] Incremental full-text indexing with SQLite FTS5
+- [ ] Cross-source indexing (keystrokes, clipboard, screenshots OCR)
+- [ ] Automatic data classification and tagging
+- [ ] Index optimization and compaction
+
+**Search API (`search/api.py`)** — to be created:
+- [ ] REST API endpoints for search queries
+- [ ] Autocomplete with suggestion ranking
+- [ ] Search history tracking
+- [ ] Paginated results with highlighting
+- [ ] Dashboard integration with search bar
 
 ### 13. Stealth Mode
-- **Status**: In Progress
-- **Description**: Implement a stealth mode that minimizes the platform's footprint.
+- **Status**: Planned
+- **Description**: Minimize the platform's observable footprint on the host system.
 
-### Implementation Components:
-**Stealth Core (`stealth/core.py`)**:
-- ✅ Process name randomization and mimicry
-- ✅ File system footprint minimization
-- ✅ Registry artifact elimination
-- ✅ Memory-only operation where possible
-- ✅ Anti-debugging and anti-analysis techniques
+#### Planned Components:
+**Stealth Core (`stealth/core.py`)** — to be created:
+- [ ] Configurable process name (mimic legitimate software)
+- [ ] Minimal file system footprint
+- [ ] Low CPU/memory profile with adaptive throttling
+- [ ] Startup integration mimicking system services
+- [ ] Log suppression and cleanup
 
-**Evasion Techniques (`stealth/evasion.py`)**:
-- ✅ Security software detection and bypass
-- ✅ Virtual machine and sandbox evasion
-- ✅ Network behavior normalization
-- ✅ Timing-based attack prevention
-- ✅ Heuristic signature avoidance
-
-**Persistence Manager (`stealth/persistence.py`)**:
-- ✅ Multiple persistence mechanisms with fallbacks
-- ✅ Bootkit integration for early-stage loading
-- ✅ Firmware-level persistence (UEFI/BIOS)
-- ✅ Scheduled task obfuscation
-- ✅ Service hijacking with legitimate processes
+**Detection Avoidance (`stealth/detection.py`)** — to be created:
+- [ ] Task manager / process list appearance management
+- [ ] Network traffic pattern normalization
+- [ ] File timestamp management
+- [ ] Resource usage pattern randomization
 
 ### 14. Remote File Upload and Execution
-- **Status**: In Progress
-- **Description**: Ensure the platform can upload and execute files remotely.
+- **Status**: Planned
+- **Description**: Upload files to agents and execute commands remotely via the fleet management system.
 
-### Implementation Components:
-**File Transfer (`transfer/file_manager.py`)**:
-- ✅ Chunked transfer with resume capability
-- ✅ Adaptive compression based on content type
-- ✅ Transfer progress monitoring with stealth
-- ✅ Multi-protocol support (HTTP, DNS, ICMP)
-- ✅ File integrity verification with secure hashes
+#### Planned Components:
+**File Transfer (`transfer/file_manager.py`)** — to be created:
+- [ ] Chunked upload with resume capability
+- [ ] Content-type-aware compression
+- [ ] Integrity verification with SHA-256 hashes
+- [ ] Transfer progress tracking in fleet dashboard
+- [ ] Size limits and quota management
 
-**Execution Engine (`execution/runtime.py`)**:
-- ✅ In-memory execution without file dropping
-- ✅ Process hollowing with legitimate binaries
-- ✅ Reflective DLL loading
-- ✅ Just-in-time compilation for scripts
-- ✅ Execution environment sandboxing
+**Execution Engine (`execution/runtime.py`)** — to be created:
+- [ ] Script execution (Python, shell) with sandboxing
+- [ ] Execution timeout and resource limits
+- [ ] Output capture and streaming back to controller
+- [ ] Execution history and audit logging
+- [ ] Rollback/cleanup of executed artifacts
 
-**Artifact Management (`execution/artifacts.py`)**:
-- ✅ Temporary file cleanup with secure deletion
-- ✅ Registry and log manipulation
-- ✅ Execution evidence obfuscation
-- ✅ Process tree hiding and manipulation
-- ✅ Anti-forensic timestamp randomization
+### 15. Cell / Mobile Access
+- **Status**: Planned
+- **Description**: Extend capture capabilities to mobile platforms.
 
-### 15. Cell Access
-- **Status**: In Progress
-- **Description**: Implement features to access and manage cell data.
+#### Planned Components:
+**Mobile Agent (`mobile/agent.py`)** — to be created:
+- [ ] Android agent with accessibility service integration
+- [ ] iOS agent with profile-based deployment
+- [ ] Battery-optimized capture scheduling
+- [ ] Mobile-specific data types (SMS, calls, location)
+- [ ] Secure communication over cellular networks
 
-### Implementation Components:
-**Cell Interface (`cell/interface.py`)**:
-- ✅ SMS interception and forwarding
-- ✅ Call monitoring with recording
-- ✅ Contact list extraction and manipulation
-- ✅ Application data harvesting (WhatsApp, Signal)
-- ✅ Location tracking with GPS triangulation
+**Mobile Dashboard (`mobile/dashboard.py`)** — to be created:
+- [ ] Mobile-responsive dashboard views
+- [ ] Push notification integration for alerts
+- [ ] Mobile-specific configuration profiles
+- [ ] Device management and enrollment
 
-**Cell Exploitation (`cell/exploits.py`)**:
-- ✅ Baseband firmware vulnerability exploitation
-- ✅ SIM toolkit attacks
-- ✅ Cellular network protocol manipulation
-- ✅ IMSI catcher integration
-- ✅ Cell tower location spoofing
+### 16. Obfuscation Techniques
+- **Status**: Planned
+- **Description**: Code and network obfuscation to make analysis more difficult.
 
-**Data Collection (`cell/collector.py`)**:
-- ✅ Encrypted exfiltration over cellular channels
-- ✅ Metadata extraction with content analysis
-- ✅ Real-time filtering and alerting
-- ✅ Compressed storage with incremental backup
-- ✅ Remote wipe capability for compromised devices
-## 16. Obfuscation Techniques
-- **Status**: In Progress
-- **Description**: Use code obfuscation and other techniques to make the platform's code and operations harder to detect and analyze.
+#### Planned Components:
+**Code Obfuscation (`obfuscation/code.py`)** — to be created:
+- [ ] String encryption with runtime decryption
+- [ ] Control flow flattening
+- [ ] Variable and function name mangling
+- [ ] Dead code insertion
+- [ ] Build-time obfuscation pipeline
 
-### Implementation Components:
-**Code Obfuscation (`obfuscation/code.py`)**:
-- ✅ String encryption with dynamic decryption
-- ✅ Control flow obfuscation with dead code insertion
-- ✅ Variable renaming with meaningless identifiers
-- ✅ Inline assembly for critical sections
-- ✅ Polymorphic code generation with template engines
+**Network Obfuscation (`obfuscation/network.py`)** — to be created:
+- [ ] Protocol tunneling (data over DNS, HTTPS, etc.)
+- [ ] Traffic shaping to match normal browsing patterns
+- [ ] Domain fronting for C2 communication
+- [ ] Adaptive encryption with key rotation
 
-**Network Obfuscation (`obfuscation/network.py`)**:
-- ✅ Protocol tunneling (HTTP, DNS, ICMP)
-- ✅ Traffic shaping and normalization
-- ✅ Packet fragmentation and reassembly
-- ✅ Covert channel communication
-- ✅ Adaptive encryption with key rotation
+### 17. Anti-Forensic Measures
+- **Status**: Planned
+- **Description**: Measures to resist forensic analysis of the host system.
 
-**Behavior Obfuscation (`obfuscation/behavior.py`)**:
-- ✅ Randomized sleep intervals between operations
-- ✅ Process name and signature rotation
-- ✅ API call obfuscation with indirect calls
-- ✅ Memory layout randomization
-- ✅ Anti-debugging and anti-disassembly techniques
+#### Planned Components:
+**Evidence Management (`anti_forensic/evidence.py`)** — to be created:
+- [ ] Secure file deletion with overwrite passes
+- [ ] Log cleanup for application and system logs
+- [ ] Temporary file management with automatic shredding
+- [ ] Disk artifact minimization
 
-## 17. Anti-Forensic Measures
-- **Status**: In Progress
-- **Description**: Implement measures to detect and counter forensic analysis.
+**Detection Evasion (`anti_forensic/evasion.py`)** — to be created:
+- [ ] Memory-only operation mode (no disk writes)
+- [ ] Anti-debugging detection and response
+- [ ] Sandbox/VM detection
+- [ ] File system timestamp normalization
 
-### Implementation Components:
-**Evidence Tampering (`anti_forensic/tamper.py`)**:
-- ✅ Log file manipulation and deletion
-- ✅ Timestamp alteration with system clock control
-- ✅ Event log clearing and modification
-- ✅ Registry key manipulation
-- ✅ File system metadata alteration
+### 18. Advanced Persistent Threat (APT) Capabilities
+- **Status**: Planned
+- **Description**: Long-term persistent access with multiple fallback mechanisms.
 
-**Detection Evasion (`anti_forensic/evasion.py`)**:
-- ✅ Anti-memory dump techniques
-- ✅ Process and thread hiding
-- ✅ Code injection detection and prevention
-- ✅ Hook detection and removal
-- ✅ Debugger detection and bypass
+#### Planned Components:
+**Persistence Mechanisms (`apt/persistence.py`)** — to be created:
+- [ ] Multiple persistence vectors with priority failover
+- [ ] Scheduled task and service-based persistence
+- [ ] Registry/plist-based startup entries
+- [ ] Watchdog process for self-healing
+- [ ] Persistence health monitoring and repair
 
-**Recovery Prevention (`anti_forensic/recovery.py`)**:
-- ✅ File shredding with secure deletion
-- ✅ Disk space zeroing
-- ✅ Volume shadow copy deletion
-- ✅ Backup catalog manipulation
-- ✅ Restore point deletion
+**Lateral Movement (`apt/movement.py`)** — to be created:
+- [ ] Network discovery and host enumeration
+- [ ] Credential harvesting from memory and storage
+- [ ] Agent propagation to discovered hosts
+- [ ] Network topology mapping
+- [ ] Movement audit trail
 
-## 18. Advanced Persistent Threat (APT) Capabilities
-- **Status**: In Progress
-- **Description**: Develop capabilities to operate as an Advanced Persistent Threat.
+### 19. Rootkit Integration
+- **Status**: Planned
+- **Description**: Kernel-level integration for deep system access and hiding.
 
-### Implementation Components:
-**Persistence Mechanisms (`apt/persistence.py`)**:
-- ✅ Multiple persistence vectors with failover
-- ✅ Bootkit and rootkit integration
-- ✅ Scheduled task and service manipulation
-- ✅ Registry key and startup folder modification
-- ✅ Firmware-level persistence (UEFI/BIOS)
+#### Planned Components:
+**Kernel Module (`rootkit/module.py`)** — to be created:
+- [ ] Loadable kernel module for Linux
+- [ ] Windows kernel driver
+- [ ] macOS kext/system extension
+- [ ] Process and file hiding at kernel level
+- [ ] Network connection hiding
 
-**Lateral Movement (`apt/movement.py`)**:
-- ✅ Pass-the-hash and pass-the-ticket techniques
-- ✅ Kerberos ticket manipulation
-- ✅ SMB and RDP exploitation
-- ✅ DNS and LLMNR spoofing
-- ✅ Group Policy manipulation
+**Management Interface (`rootkit/management.py`)** — to be created:
+- [ ] User-space control interface
+- [ ] Module loading and unloading
+- [ ] Configuration updates without reload
+- [ ] Health monitoring and self-repair
+- [ ] Safe uninstallation procedure
 
-**Adaptive Attack Strategies (`apt/strategies.py`)**:
-- ✅ Environment assessment and adaptation
-- ✅ Target prioritization based on value
-- ✅ Multi-stage payload delivery
-- ✅ Command and control channel obfuscation
-- ✅ Automated reconnaissance and exploitation
+### 20. Exfiltration Techniques
+- **Status**: Planned
+- **Description**: Advanced data exfiltration methods for restricted environments.
 
-## 19. Rootkit Integration
-- **Status**: In Progress
-- **Description**: Integrate rootkit technologies to hide the platform's presence at the kernel level.
+#### Planned Components:
+**Covert Channels (`exfiltration/covert.py`)** — to be created:
+- [ ] DNS tunneling with adaptive encoding
+- [ ] HTTPS covert channels (data in headers, cookies)
+- [ ] ICMP tunneling for network-restricted environments
+- [ ] Cloud storage API exfiltration (S3, GCS, Azure Blob)
+- [ ] Email-based exfiltration with attachment encoding
 
-### Implementation Components:
-**Kernel-Level Hooking (`rootkit/hooking.py`)**:
-- ✅ System call table hooking
-- ✅ IRP (I/O Request Packet) hooking
-- ✅ SSDT (System Service Dispatch Table) hooking
-- ✅ EAT (Export Address Table) hooking
-- ✅ Inline hooking with trampolines
+**Transfer Management (`exfiltration/transfer.py`)** — to be created:
+- [ ] Adaptive bandwidth utilization (stay under detection thresholds)
+- [ ] Chunked transfer with error correction
+- [ ] Transfer scheduling based on network patterns
+- [ ] Automatic protocol fallback chain
+- [ ] Transfer integrity verification
 
-**Process Hiding (`rootkit/hiding.py`)**:
-- ✅ Process list manipulation
-- ✅ Thread hiding and injection
-- ✅ Module and driver hiding
-- ✅ Memory region protection
-- ✅ Anti-debugging and anti-dumping techniques
+---
 
-**Rootkit Management (`rootkit/management.py`)**:
-- ✅ Rootkit loader with stealth installation
-- ✅ Automatic updates and self-healing
-- ✅ Configuration and command interface
-- ✅ Log and artifact cleanup
-- ✅ Persistence across reboots
-
-## 20. Exfiltration Techniques
-- **Status**: In Progress
-- **Description**: Implement advanced data exfiltration techniques.
-
-### Implementation Components:
-**Covert Channels (`exfiltration/covert.py`)**:
-- ✅ DNS tunneling with adaptive protocols
-- ✅ ICMP tunneling for network evasion
-- ✅ HTTP/HTTPS covert channels
-- ✅ SMTP and email exfiltration
-- ✅ Social media and cloud storage exploitation
-
-**Stealthy Data Transfer (`exfiltration/stealth.py`)**:
-- ✅ Data compression and encryption
-- ✅ Chunked transfer with error correction
-- ✅ Adaptive bandwidth utilization
-- ✅ Transfer scheduling and prioritization
-- ✅ Automatic fallback mechanisms
-
-**Bypass Mechanisms (`exfiltration/bypass.py`)**:
-- ✅ Firewall and proxy evasion
-- ✅ IDS/IPS signature avoidance
-- ✅ Network traffic normalization
-- ✅ Anti-sandbox and anti-VM techniques
-- ✅ Adaptive encryption with key rotation
 ## Additional Considerations
 
-- **Malware and Trojan Features**: Ensure the platform can operate as a sophisticated malware or Trojan, with features such as keylogging, screen capturing, and microphone activation.
-- **Payload Execution**: Develop a robust system for remote payload execution, ensuring that executed code leaves minimal traces on the host system.
-- **Undetectable Operations**: Focus on making all operations undetectable, including file operations, network communications, and system interactions.
-- **Professional and Deadly Keylogger**: Ensure the keylogger component is highly advanced, with features such as form grabbing, clipboard monitoring, and encryption of logged data.
+- **Payload Execution**: Develop a robust system for remote payload execution with audit logging and sandboxing.
+- **Cross-Platform Coverage**: Ensure all new features work across Windows, macOS, and Linux where applicable.
+- **Testing**: Each new feature should include comprehensive unit and integration tests.
+- **Documentation**: Update API documentation and user guides with each feature release.
+- **Security**: All new features must follow the existing security patterns (encryption, authentication, input validation).
