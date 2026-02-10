@@ -412,7 +412,7 @@ async def _get_recent_captures() -> list[dict[str, Any]]:
     # Try to use real storage if available
     if _storage is not None:
         try:
-            pending = _storage.get_pending(limit=10)
+            pending = await asyncio.to_thread(_storage.get_pending, 10)
             return [
                 {
                     "id": item.get("id", f"capture_{i}"),
@@ -446,7 +446,7 @@ async def _update_agent_status(agent_id: str, status_data: dict[str, Any]) -> No
     if _fleet_storage is not None:
         try:
             status = status_data.get("status", "ONLINE")
-            _fleet_storage.update_agent_status(agent_id, status)
+            await asyncio.to_thread(_fleet_storage.update_agent_status, agent_id, status)
             logger.debug(f"Agent {agent_id} status updated to {status} in DB")
         except Exception as e:
             logger.warning(f"Failed to update agent status in DB: {e}")
@@ -462,7 +462,8 @@ async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> N
     # Persist to storage if available
     if _storage is not None:
         try:
-            _storage.insert(
+            await asyncio.to_thread(
+                _storage.insert,
                 capture_type=capture_type,
                 data=str(data),
             )
