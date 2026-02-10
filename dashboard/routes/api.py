@@ -247,7 +247,7 @@ async def activity_data(request: Request) -> dict[str, Any]:
                     except (ValueError, TypeError, OSError):
                         pass
     except Exception:
-        pass
+        logger.warning("Failed to load activity data from storage", exc_info=True)
 
     return {"heatmap": heatmap, "total_events": total}
 
@@ -277,7 +277,7 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
                 stats["sent"] = stats["total_captures"] - stats["pending"]
             stats["db_size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
         except Exception:
-            pass
+            logger.warning("Failed to load analytics summary from storage", exc_info=True)
 
     screenshot_dir = Path("data/screenshots")
     if screenshot_dir.exists():
@@ -338,7 +338,7 @@ async def list_modules(request: Request) -> dict[str, Any]:
                 }
             )
     except Exception:
-        pass
+        logger.warning("Failed to load capture module registry", exc_info=True)
 
     try:
         from transport import _TRANSPORT_REGISTRY
@@ -352,7 +352,7 @@ async def list_modules(request: Request) -> dict[str, Any]:
                 }
             )
     except Exception:
-        pass
+        logger.warning("Failed to load transport module registry", exc_info=True)
 
     return {
         "capture_modules": capture_modules,

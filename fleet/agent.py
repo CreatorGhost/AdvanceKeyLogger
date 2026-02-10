@@ -71,10 +71,13 @@ class FleetAgent(Agent):
         """Stop the agent service and cleanup resources."""
         self.running = False
 
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._command_listener_task:
-            self._command_listener_task.cancel()
+        for task in (self._heartbeat_task, self._command_listener_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         # Close HTTP session
         if self.session:
@@ -286,10 +289,22 @@ class FleetAgent(Agent):
         else:
             error = f"Unknown action: {action}"
 
-        # Send response
+        # Send response with retry
         resp_payload = {"result": result, "success": success, "error": error}
 
-        await self._request("POST", f"/commands/{cmd_id}/response", json=resp_payload)
+        max_retries = 3
+        for attempt in range(max_retries):
+            resp = await self._request("POST", f"/commands/{cmd_id}/response", json=resp_payload)
+            if resp is not None and resp.status_code < 500:
+                break
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                logger.warning(
+                    "Retrying command response for %s (attempt %d/%d)",
+                    cmd_id, attempt + 2, max_retries,
+                )
+            else:
+                logger.error("Failed to deliver command response for %s after %d attempts", cmd_id, max_retries)
 
     @staticmethod
     def _get_system_metrics() -> dict:

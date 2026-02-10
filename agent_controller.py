@@ -273,6 +273,9 @@ class Controller:
         self._command_counter = itertools.count()
         self._command_processor_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
+        # Lock protecting shared mutable state (agents, commands, command_queues,
+        # agent_channels, agent_transports) from concurrent async task access.
+        self._lock = asyncio.Lock()
 
         # Configuration
         self.heartbeat_timeout = float(config.get("heartbeat_timeout", 120))
@@ -289,24 +292,33 @@ class Controller:
     async def stop(self) -> None:
         """Stop the controller service."""
         self.running = False
-        if self._command_processor_task:
-            self._command_processor_task.cancel()
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
+
+        for task in (self._command_processor_task, self._cleanup_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         # Close all transport connections
-        for transport in self.agent_transports.values():
+        for agent_id, transport in list(self.agent_transports.items()):
             try:
                 transport.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error disconnecting transport for agent %s: %s", agent_id, e)
 
         logger.info("Controller stopped")
 
     def register_agent(
         self, metadata: AgentMetadata, transport: BaseTransport, public_key: bytes
     ) -> SecureChannel:
-        """Register a new agent with the controller."""
+        """Register a new agent with the controller.
+
+        Note: This method mutates shared dicts. In pure-async usage callers
+        should hold ``self._lock`` around the call.  The method itself cannot
+        acquire an asyncio.Lock because it is synchronous.
+        """
         agent_id = metadata.agent_id
 
         # Create secure channel
@@ -336,8 +348,8 @@ class Controller:
         if transport:
             try:
                 transport.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error disconnecting transport for agent %s: %s", agent_id, e)
 
         logger.info(f"Agent unregistered: {agent_id}")
 
@@ -422,48 +434,50 @@ class Controller:
 
     async def handle_heartbeat(self, agent_id: str, data: Dict[str, Any]) -> None:
         """Handle heartbeat from an agent."""
-        agent = self.agents.get(agent_id)
-        if not agent:
-            logger.warning(f"Heartbeat from unknown agent: {agent_id}")
-            return
+        async with self._lock:
+            agent = self.agents.get(agent_id)
+            if not agent:
+                logger.warning(f"Heartbeat from unknown agent: {agent_id}")
+                return
 
-        agent.last_seen = time.time()
-        status_name = data.get("status", "ONLINE")
-        try:
-            agent.status = AgentStatus[status_name]
-        except KeyError:
-            logger.warning("Unknown agent status %r, keeping current status", status_name)
-        agent.uptime = data.get("uptime", 0.0)
+            agent.last_seen = time.time()
+            status_name = data.get("status", "ONLINE")
+            try:
+                agent.status = AgentStatus[status_name]
+            except KeyError:
+                logger.warning("Unknown agent status %r, keeping current status", status_name)
+            agent.uptime = data.get("uptime", 0.0)
 
-        # Update capabilities if provided
-        if "capabilities" in data:
-            agent.capabilities = AgentCapabilities(**data["capabilities"])
+            # Update capabilities if provided
+            if "capabilities" in data:
+                agent.capabilities = AgentCapabilities(**data["capabilities"])
 
     async def handle_command_response(
         self, agent_id: str, command_id: str, result: Dict[str, Any]
     ) -> None:
         """Handle command response from an agent."""
-        command = self.commands.get(command_id)
-        if not command:
-            logger.warning(f"Response for unknown command: {command_id}")
-            return
+        async with self._lock:
+            command = self.commands.get(command_id)
+            if not command:
+                logger.warning(f"Response for unknown command: {command_id}")
+                return
 
-        command.result = result
-        command.completed_at = time.time()
+            command.result = result
+            command.completed_at = time.time()
 
-        if result.get("success", False):
-            command.status = CommandStatus.COMPLETED
-            agent = self.agents.get(agent_id)
-            if agent:
-                agent.total_commands_executed += 1
-            logger.info(f"Command {command_id} completed successfully")
-        else:
-            command.status = CommandStatus.FAILED
-            command.error_message = result.get("error")
-            agent = self.agents.get(agent_id)
-            if agent:
-                agent.failed_commands += 1
-            logger.error(f"Command {command_id} failed: {command.error_message}")
+            if result.get("success", False):
+                command.status = CommandStatus.COMPLETED
+                agent = self.agents.get(agent_id)
+                if agent:
+                    agent.total_commands_executed += 1
+                logger.info(f"Command {command_id} completed successfully")
+            else:
+                command.status = CommandStatus.FAILED
+                command.error_message = result.get("error")
+                agent = self.agents.get(agent_id)
+                if agent:
+                    agent.failed_commands += 1
+                logger.error(f"Command {command_id} failed: {command.error_message}")
 
     async def _process_commands(self) -> None:
         """Process commands from queues and send to agents.
@@ -474,29 +488,51 @@ class Controller:
         """
         while self.running:
             try:
-                # Snapshot to avoid RuntimeError if dict mutates during iteration
-                items = list(self.command_queues.items())
+                # Snapshot under lock to avoid RuntimeError if dict mutates
+                async with self._lock:
+                    items = list(self.command_queues.items())
+                    transport_snapshot = dict(self.agent_transports)
+                    agents_snapshot = set(self.agents.keys())
+
                 for agent_id, queue in items:
-                    # Verify agent still registered before sending
-                    if agent_id not in self.agents:
+                    if agent_id not in agents_snapshot:
                         continue
 
                     # Skip REST-polling agents — they have no transport and will
                     # drain their queue themselves via the GET /commands endpoint.
-                    if not self.agent_transports.get(agent_id):
+                    if not transport_snapshot.get(agent_id):
                         continue
 
                     try:
                         _, _seq, command = queue.get_nowait()
                     except asyncio.QueueEmpty:
                         continue
+
                     await self._send_command_to_agent(agent_id, command)
+
+                    # Re-queue on failure if retries remain
+                    if command.status == CommandStatus.FAILED and command.retries > 0:
+                        command.retries -= 1
+                        command.status = CommandStatus.PENDING
+                        command.error_message = None
+                        seq = next(self._command_counter)
+                        try:
+                            queue.put_nowait((command.priority.value, seq, command))
+                            logger.info(
+                                "Command %s re-queued for agent %s (%d retries left)",
+                                command.command_id, agent_id, command.retries,
+                            )
+                        except asyncio.QueueFull:
+                            command.status = CommandStatus.FAILED
+                            logger.error(
+                                "Cannot re-queue command %s: queue full", command.command_id
+                            )
 
                 await asyncio.sleep(0.1)  # Prevent CPU spinning
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error processing commands: {e}")
+                logger.error("Error processing commands: %s", e, exc_info=True)
 
     async def _send_command_to_agent(self, agent_id: str, command: Command) -> None:
         """Send a command to an agent."""
@@ -571,52 +607,69 @@ class Controller:
 
                 current_time = time.time()
 
-                # Check for stale agents
-                for agent_id, agent in list(self.agents.items()):
-                    if current_time - agent.last_seen > self.heartbeat_timeout:
-                        agent.status = AgentStatus.OFFLINE
-                        logger.warning(f"Agent {agent_id} marked as offline (timeout)")
+                async with self._lock:
+                    # Check for stale agents
+                    for agent_id, agent in list(self.agents.items()):
+                        if current_time - agent.last_seen > self.heartbeat_timeout:
+                            agent.status = AgentStatus.OFFLINE
+                            logger.warning(f"Agent {agent_id} marked as offline (timeout)")
 
-                # Clean up old completed commands (>1 hour)
-                commands_to_remove = []
-                for cmd_id, command in list(self.commands.items()):
-                    if command.status in (
+                    # Clean up old completed commands (>1 hour)
+                    commands_to_remove = []
+                    for cmd_id, command in list(self.commands.items()):
+                        if command.status in (
+                            CommandStatus.COMPLETED,
+                            CommandStatus.FAILED,
+                            CommandStatus.CANCELLED,
+                        ):
+                            if command.completed_at and current_time - command.completed_at > 3600:
+                                commands_to_remove.append(cmd_id)
+
+                    # Also expire stale PENDING/SENT commands past their timeout
+                    for cmd_id, command in list(self.commands.items()):
+                        if command.status in (CommandStatus.PENDING, CommandStatus.SENT):
+                            age = current_time - command.timestamp
+                            if age > command.timeout:
+                                command.status = CommandStatus.FAILED
+                                command.error_message = "Timed out"
+                                command.completed_at = current_time
+                                commands_to_remove.append(cmd_id)
+
+                    for cmd_id in commands_to_remove:
+                        del self.commands[cmd_id]
+
+                    if commands_to_remove:
+                        logger.info(f"Cleaned up {len(commands_to_remove)} old commands")
+
+                    # Enforce max_command_history to prevent unbounded growth.
+                    # Only evict commands in terminal states to avoid dropping commands
+                    # that are still in-flight (PENDING, QUEUED, SENT, EXECUTING).
+                    _terminal = (
                         CommandStatus.COMPLETED,
                         CommandStatus.FAILED,
                         CommandStatus.CANCELLED,
-                    ):
-                        if command.completed_at and current_time - command.completed_at > 3600:
-                            commands_to_remove.append(cmd_id)
-
-                # Also expire stale PENDING/SENT commands past their timeout
-                for cmd_id, command in list(self.commands.items()):
-                    if command.status in (CommandStatus.PENDING, CommandStatus.SENT):
-                        age = current_time - command.timestamp
-                        if age > command.timeout:
-                            command.status = CommandStatus.FAILED
-                            command.error_message = "Timed out"
-                            command.completed_at = current_time
-                            commands_to_remove.append(cmd_id)
-
-                for cmd_id in commands_to_remove:
-                    del self.commands[cmd_id]
-
-                if commands_to_remove:
-                    logger.info(f"Cleaned up {len(commands_to_remove)} old commands")
-
-                # Enforce max_command_history to prevent unbounded growth
-                excess = len(self.commands) - self.max_command_history
-                if excess > 0:
-                    # Evict oldest commands first
-                    sorted_cmds = sorted(self.commands.items(), key=lambda kv: kv[1].timestamp)
-                    for cmd_id, _ in sorted_cmds[:excess]:
-                        del self.commands[cmd_id]
-                    logger.info(f"Evicted {excess} commands to enforce max_command_history={self.max_command_history}")
+                        CommandStatus.TIMEOUT,
+                    )
+                    evictable = [
+                        (cid, cmd) for cid, cmd in self.commands.items()
+                        if cmd.status in _terminal
+                    ]
+                    excess = len(self.commands) - self.max_command_history
+                    if excess > 0 and evictable:
+                        evictable.sort(key=lambda kv: kv[1].timestamp)
+                        evict_count = min(excess, len(evictable))
+                        for cmd_id, _ in evictable[:evict_count]:
+                            del self.commands[cmd_id]
+                        if evict_count:
+                            logger.info(
+                                "Evicted %d terminal commands to enforce max_command_history=%d",
+                                evict_count, self.max_command_history,
+                            )
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}")
+                logger.error("Error in cleanup loop: %s", e, exc_info=True)
 
 
 class Agent:
@@ -732,10 +785,13 @@ class Agent:
         """Stop the agent service."""
         self.running = False
 
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._command_listener_task:
-            self._command_listener_task.cancel()
+        for task in (self._heartbeat_task, self._command_listener_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         if self.transport:
             self.transport.disconnect()

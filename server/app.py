@@ -1,9 +1,9 @@
 """FastAPI collector for E2E envelopes."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
-import threading
 from typing import Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -43,8 +43,9 @@ def create_app(config: dict[str, Any]) -> FastAPI:
         max_entries=int(config.get("replay_cache_max", 10000)),
     )
     max_payload = int(config.get("max_payload_bytes", 10 * 1024 * 1024))
+    _MAX_TRACKED_SENDERS = int(config.get("max_tracked_senders", 10000))
     last_sequences: dict[str, int] = {}
-    seq_lock = threading.Lock()
+    seq_lock = asyncio.Lock()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -115,7 +116,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             raise HTTPException(status_code=409, detail="replay detected")
 
         if envelope.sequence is not None:
-            with seq_lock:
+            async with seq_lock:
                 last = last_sequences.get(sender_key_b64)
                 if last is not None and envelope.sequence <= last:
                     audit_logger.warning(
@@ -135,6 +136,11 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                         envelope.sequence,
                     )
                 last_sequences[sender_key_b64] = envelope.sequence
+                # Evict oldest entries if the tracking dict grows too large
+                if len(last_sequences) > _MAX_TRACKED_SENDERS:
+                    excess = len(last_sequences) - _MAX_TRACKED_SENDERS
+                    for _key in list(last_sequences)[:excess]:
+                        del last_sequences[_key]
 
         payload = None
         decrypt_error: str | Exception = "no server keys configured"

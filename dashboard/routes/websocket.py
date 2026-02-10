@@ -40,20 +40,25 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
         self.max_connections = max_connections
 
-    def is_full(self) -> bool:
-        """Return True if the connection limit has been reached."""
-        return len(self.active_connections) >= self.max_connections
-
     async def connect_dashboard(self, websocket: WebSocket) -> None:
-        """Connect dashboard client."""
-        await websocket.accept()
-        self.active_connections.add(websocket)
-        self.dashboard_connections.add(websocket)
+        """Connect dashboard client (with connection limit check under lock)."""
+        async with self._lock:
+            if len(self.active_connections) >= self.max_connections:
+                await websocket.accept()
+                await websocket.close(code=4008, reason="Connection limit reached")
+                return
+            await websocket.accept()
+            self.active_connections.add(websocket)
+            self.dashboard_connections.add(websocket)
         logger.info("Dashboard client connected")
 
     async def connect_agent(self, websocket: WebSocket, agent_id: str) -> None:
         """Connect agent client, gracefully closing any previous connection."""
         async with self._lock:
+            if len(self.active_connections) >= self.max_connections:
+                await websocket.accept()
+                await websocket.close(code=4008, reason="Connection limit reached")
+                return
             # Close existing connection for this agent if present
             previous = self.agent_connections.get(agent_id)
             if previous is not None:
@@ -84,6 +89,16 @@ class ConnectionManager:
                     logger.info(f"Agent {agent_id} disconnected")
                     break
 
+            # Prune stale agent_last_seen entries for agents no longer connected
+            # to prevent unbounded memory growth from transient agents.
+            _stale_threshold = time.time() - 3600  # 1 hour
+            stale = [
+                aid for aid, ts in self.agent_last_seen.items()
+                if aid not in self.agent_connections and ts < _stale_threshold
+            ]
+            for aid in stale:
+                del self.agent_last_seen[aid]
+
         logger.info("Client disconnected")
 
     async def send_personal_message(self, message: str, websocket: WebSocket) -> None:
@@ -93,7 +108,8 @@ class ConnectionManager:
 
     async def broadcast_dashboard(self, message: str) -> None:
         """Broadcast message to all dashboard clients concurrently."""
-        connections = list(self.dashboard_connections)
+        async with self._lock:
+            connections = list(self.dashboard_connections)
         if not connections:
             return
 
@@ -114,33 +130,35 @@ class ConnectionManager:
 
     async def send_to_agent(self, agent_id: str, message: str) -> bool:
         """Send message to specific agent."""
-        if agent_id in self.agent_connections:
-            websocket = self.agent_connections[agent_id]
-            if websocket and websocket.client_state == WebSocketState.CONNECTED:
-                await websocket.send_text(message)
-                return True
-
+        async with self._lock:
+            websocket = self.agent_connections.get(agent_id)
+        if websocket and websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.send_text(message)
+            return True
         return False
 
     async def get_dashboard_clients(self) -> int:
         """Get count of dashboard clients."""
-        return len(self.dashboard_connections)
+        async with self._lock:
+            return len(self.dashboard_connections)
 
     async def get_agent_clients(self) -> dict[str, Any]:
         """Get agent client information."""
-        # Snapshot to avoid RuntimeError if dict mutates during iteration
-        items = list(self.agent_connections.items())
+        async with self._lock:
+            items = list(self.agent_connections.items())
+            last_seen_snapshot = dict(self.agent_last_seen)
         return {
             agent_id: {
                 "connected": (ws.client_state == WebSocketState.CONNECTED if ws else False),
-                "last_seen": self.agent_last_seen.get(agent_id, 0.0),
+                "last_seen": last_seen_snapshot.get(agent_id, 0.0),
             }
             for agent_id, ws in items
         }
 
-    def update_agent_last_seen(self, agent_id: str) -> None:
+    async def update_agent_last_seen(self, agent_id: str) -> None:
         """Update the last_seen timestamp for an agent."""
-        self.agent_last_seen[agent_id] = time.time()
+        async with self._lock:
+            self.agent_last_seen[agent_id] = time.time()
 
 
 # Global connection manager
@@ -239,12 +257,6 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=4002, reason="Origin not allowed")
         return
 
-    # Connection limit
-    if manager.is_full():
-        await websocket.accept()
-        await websocket.close(code=4008, reason="Connection limit reached")
-        return
-
     # Must accept before sending close with reason (WebSocket protocol)
     token = _extract_ws_token(websocket)
     if not token:
@@ -258,6 +270,7 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=4003, reason="Invalid or expired token")
         return
 
+    # connect_dashboard now checks the connection limit atomically under the lock.
     await manager.connect_dashboard(websocket)
 
     try:
@@ -275,6 +288,10 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
         await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"Dashboard WebSocket error: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
         await manager.disconnect(websocket)
 
 
@@ -285,12 +302,6 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
     if not _validate_origin(websocket):
         await websocket.accept()
         await websocket.close(code=4002, reason="Origin not allowed")
-        return
-
-    # Connection limit
-    if manager.is_full():
-        await websocket.accept()
-        await websocket.close(code=4008, reason="Connection limit reached")
         return
 
     # Extract token before accepting so we can reject early
@@ -322,6 +333,7 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
         await manager.disconnect(websocket)
         return
 
+    # connect_agent now checks the connection limit atomically under the lock.
     await manager.connect_agent(websocket, agent_id)
 
     try:
@@ -339,6 +351,10 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
         await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"Agent {agent_id} WebSocket error: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
         await manager.disconnect(websocket)
 
 
@@ -446,7 +462,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         if message_type == "heartbeat":
             # Update agent status and last_seen
             status_data = _get_payload()
-            manager.update_agent_last_seen(agent_id)
+            await manager.update_agent_last_seen(agent_id)
             await _update_agent_status(agent_id, status_data)
 
             # Broadcast to dashboard
@@ -461,7 +477,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         elif message_type == "capture":
             # Handle capture data
             capture_data = _get_payload()
-            manager.update_agent_last_seen(agent_id)
+            await manager.update_agent_last_seen(agent_id)
             await _handle_capture_data(agent_id, capture_data)
 
             # Broadcast to dashboard — flatten capture fields so frontend
@@ -479,7 +495,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         elif message_type == "command_response":
             # Handle command response from agent
             response_data = _get_payload()
-            manager.update_agent_last_seen(agent_id)
+            await manager.update_agent_last_seen(agent_id)
             await _handle_command_response(agent_id, response_data)
 
         else:
@@ -493,8 +509,9 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
 async def _broadcast_to_agents(message: str) -> None:
     """Broadcast message to all connected agents."""
-    # Snapshot to avoid RuntimeError if dict mutates during iteration
-    agents = list(manager.agent_connections.items())
+    # Snapshot under lock to avoid RuntimeError if dict mutates during iteration
+    async with manager._lock:
+        agents = list(manager.agent_connections.items())
     for _agent_id, websocket in agents:
         if websocket and websocket.client_state == WebSocketState.CONNECTED:
             try:
@@ -537,17 +554,9 @@ async def _get_recent_captures() -> list[dict[str, Any]]:
         except Exception as e:
             logger.warning(f"Failed to get captures from storage: {e}")
 
-    # Fallback to mock data
-    return [
-        {
-            "id": f"capture_{i}",
-            "type": "keystroke",
-            "data": "Sample keystroke data",
-            "timestamp": time.time() - i * 60,
-            "agent_id": f"agent_{i % 3}",
-        }
-        for i in range(10)
-    ]
+    # No storage configured or storage query failed — return empty list rather
+    # than fabricated mock data which would be misleading in a production dashboard.
+    return []
 
 
 async def _update_agent_status(agent_id: str, status_data: dict[str, Any]) -> None:

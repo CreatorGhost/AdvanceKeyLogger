@@ -262,22 +262,27 @@ class FleetStorage:
         now = time.time()
         metrics_json = json.dumps(metrics)
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
-                (agent_id, now, metrics_json, ip),
-            )
-            # Also update agent last seen and status (inline to reuse the lock)
-            if ip:
+            try:
+                self._conn.execute("BEGIN")
                 self._conn.execute(
-                    "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
-                    (status, now, ip, agent_id),
+                    "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
+                    (agent_id, now, metrics_json, ip),
                 )
-            else:
-                self._conn.execute(
-                    "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
-                    (status, now, agent_id),
-                )
-            self._conn.commit()
+                # Also update agent last seen and status (inline to reuse the lock)
+                if ip:
+                    self._conn.execute(
+                        "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
+                        (status, now, ip, agent_id),
+                    )
+                else:
+                    self._conn.execute(
+                        "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
+                        (status, now, agent_id),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def get_latest_heartbeat(self, agent_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -458,6 +463,32 @@ class FleetStorage:
             )
             self._conn.commit()
             return cursor.lastrowid
+
+    def create_tokens_batch(
+        self, entries: list[tuple[str, str, str, float]]
+    ) -> None:
+        """Persist multiple token JTIs atomically in a single transaction.
+
+        Each entry is a tuple of ``(agent_id, token_hash, jti, expires_at)``.
+        Either all rows are inserted or none are.
+        """
+        now = time.time()
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                for agent_id, token_hash, jti, expires_at in entries:
+                    self._conn.execute(
+                        """
+                        INSERT INTO agent_tokens
+                            (agent_id, token_hash, token_jti, issued_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (agent_id, token_hash, jti, now, expires_at),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def revoke_token(self, jti: str) -> None:
         now = time.time()

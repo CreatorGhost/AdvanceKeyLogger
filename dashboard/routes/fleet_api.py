@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from fleet.auth import FleetAuth
 from fleet.controller import FleetController
@@ -127,6 +127,9 @@ async def verify_signature(
 # Pydantic Models
 
 
+_MAX_METADATA_SIZE = 10 * 1024  # 10 KB
+
+
 class RegisterRequest(BaseModel):
     agent_id: str
     hostname: str
@@ -136,6 +139,26 @@ class RegisterRequest(BaseModel):
     capabilities: Dict[str, bool] = {}
     metadata: Dict[str, Any] = {}
     enrollment_key: Optional[str] = None  # Optional pre-shared key for enrollment validation
+
+    @field_validator("agent_id")
+    @classmethod
+    def validate_agent_id(cls, v: str) -> str:
+        import re
+
+        if not v or len(v) > 128:
+            raise ValueError("agent_id must be 1-128 characters")
+        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", v):
+            raise ValueError("agent_id may only contain alphanumeric characters, hyphens, underscores, and dots")
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata_size(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        import json as _json
+
+        if len(_json.dumps(v)) > _MAX_METADATA_SIZE:
+            raise ValueError(f"metadata must be less than {_MAX_METADATA_SIZE} bytes when serialized")
+        return v
 
 
 class TokenResponse(BaseModel):
@@ -195,27 +218,47 @@ async def register_agent(
             tags=tags,
         )
 
-        # Register with controller (persists to DB)
-        # We assume public_key is PEM encoded string
-        controller.register_agent(metadata, None, req.public_key.encode())
+        # Register with controller (persists to DB).
+        # Wrapped in to_thread because the storage call blocks.
+        await asyncio.to_thread(
+            controller.register_agent, metadata, None, req.public_key.encode()
+        )
 
         # Generate tokens
         tokens = auth_service.create_tokens(req.agent_id)
 
-        # Persist token JTIs so revocation checks work (is_token_revoked
-        # treats unknown JTIs as revoked, so we must store them).
+        # Persist both token JTIs atomically so revocation checks work
+        # (is_token_revoked treats unknown JTIs as revoked).
         import hashlib as _hashlib
 
+        token_entries: list[tuple[str, str, str, float]] = []
         for prefix in ("access", "refresh"):
             jti = tokens.get(f"{prefix}_jti")
             expires_at = tokens.get(f"{prefix}_expires_at")
             raw_token = tokens.get(f"{prefix}_token", "")
             token_hash = _hashlib.sha256(raw_token.encode()).hexdigest()
             if jti and expires_at:
+                token_entries.append((req.agent_id, token_hash, jti, expires_at))
+
+        if token_entries:
+            try:
                 await asyncio.to_thread(
-                    controller.storage.create_token,
-                    req.agent_id, token_hash, jti, expires_at,
+                    controller.storage.create_tokens_batch, token_entries,
                 )
+            except Exception as tok_exc:
+                # Token JTI persistence failed — the agent would receive tokens
+                # whose JTIs are unknown to the DB, and is_token_revoked() treats
+                # unknown JTIs as revoked, effectively locking the agent out.
+                # Roll back the registration so the agent can retry cleanly.
+                logger.error("Token JTI persistence failed, rolling back registration: %s", tok_exc)
+                try:
+                    controller.unregister_agent(req.agent_id)
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=500,
+                    detail="Registration failed (token persistence error)",
+                ) from tok_exc
 
         # Include controller public key for secure channel
         tokens["controller_public_key"] = controller.get_public_key()
@@ -290,21 +333,33 @@ async def get_commands(
 
     if queue:
         # Drain all available commands from the queue
+        drained: list[tuple[int, int, Any]] = []
         while True:
             try:
-                priority, seq, cmd = queue.get_nowait()
+                entry = queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            drained.append(entry)
 
+        for _priority, _seq, cmd in drained:
             commands.append(cmd.to_dict())
 
-            # Update status to SENT (use .get() to guard against concurrent cleanup)
+            # Update status to SENT (use .get() to guard against concurrent cleanup).
+            # Wrap DB update in try/except so that a storage failure does not
+            # prevent the commands from being returned to the agent — the commands
+            # have already been dequeued, so we must deliver them regardless.
             tracked_cmd = controller.commands.get(cmd.command_id)
             if tracked_cmd is not None:
                 tracked_cmd.status = CommandStatus.SENT
-            await asyncio.to_thread(
-                controller.storage.update_command_status, cmd.command_id, "sent"
-            )
+            try:
+                await asyncio.to_thread(
+                    controller.storage.update_command_status, cmd.command_id, "sent"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist SENT status for command %s: %s",
+                    cmd.command_id, exc,
+                )
 
     return {"commands": commands}
 
