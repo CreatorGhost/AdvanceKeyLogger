@@ -212,7 +212,10 @@ class FleetStorage:
             return None
         d = dict(row)
         if d.get("metadata"):
-            d["metadata"] = json.loads(d["metadata"])
+            try:
+                d["metadata"] = json.loads(d["metadata"])
+            except (json.JSONDecodeError, TypeError):
+                d["metadata"] = {}
         return d
 
     def list_agents(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -225,7 +228,10 @@ class FleetStorage:
         for row in rows:
             d = dict(row)
             if d.get("metadata"):
-                d["metadata"] = json.loads(d["metadata"])
+                try:
+                    d["metadata"] = json.loads(d["metadata"])
+                except (json.JSONDecodeError, TypeError):
+                    d["metadata"] = {}
             agents.append(d)
         return agents
 
@@ -283,7 +289,10 @@ class FleetStorage:
             return None
         d = dict(row)
         if d.get("metrics"):
-            d["metrics"] = json.loads(d["metrics"])
+            try:
+                d["metrics"] = json.loads(d["metrics"])
+            except (json.JSONDecodeError, TypeError):
+                d["metrics"] = {}
         return d
 
     # --- Command Methods ---
@@ -309,7 +318,11 @@ class FleetStorage:
             self._conn.commit()
 
     def get_pending_commands(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get pending commands for an agent, ordered by priority and time."""
+        """Get pending commands for an agent, ordered by priority and time.
+
+        Returns dicts with both ``type`` (DB column) and ``action`` (Command dataclass)
+        keys so callers can use either name safely.
+        """
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -332,7 +345,13 @@ class FleetStorage:
         for row in rows:
             d = dict(row)
             if d.get("payload"):
-                d["payload"] = json.loads(d["payload"])
+                try:
+                    d["payload"] = json.loads(d["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    d["payload"] = {}
+            # Provide both 'type' (DB column) and 'action' (Command dataclass) for compatibility
+            if "type" in d and "action" not in d:
+                d["action"] = d["type"]
             commands.append(d)
         return commands
 
@@ -378,9 +397,18 @@ class FleetStorage:
             return None
         d = dict(row)
         if d.get("payload"):
-            d["payload"] = json.loads(d["payload"])
+            try:
+                d["payload"] = json.loads(d["payload"])
+            except (json.JSONDecodeError, TypeError):
+                d["payload"] = {}
         if d.get("response"):
-            d["response"] = json.loads(d["response"])
+            try:
+                d["response"] = json.loads(d["response"])
+            except (json.JSONDecodeError, TypeError):
+                d["response"] = {}
+        # Provide 'action' alias for 'type' column
+        if "type" in d and "action" not in d:
+            d["action"] = d["type"]
         return d
 
     def list_commands(
@@ -399,9 +427,18 @@ class FleetStorage:
         for row in rows:
             d = dict(row)
             if d.get("payload"):
-                d["payload"] = json.loads(d["payload"])
+                try:
+                    d["payload"] = json.loads(d["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    d["payload"] = {}
             if d.get("response"):
-                d["response"] = json.loads(d["response"])
+                try:
+                    d["response"] = json.loads(d["response"])
+                except (json.JSONDecodeError, TypeError):
+                    d["response"] = {}
+            # Provide 'action' alias for 'type' column
+            if "type" in d and "action" not in d:
+                d["action"] = d["type"]
             commands.append(d)
         return commands
 

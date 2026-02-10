@@ -79,6 +79,19 @@ async function refreshAgents() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', refreshAgents);
+document.addEventListener('DOMContentLoaded', () => {
+    refreshAgents();
+
+    // Initialize WebSocket for real-time agent status updates
+    if (window.LiveDashboard && !window.getLiveDashboard()) {
+        const ld = new window.LiveDashboard();
+        ld.init();
+
+        // Listen for agent_status messages to refresh the table
+        if (ld.ws) {
+            ld.ws.on('agent_status', () => refreshAgents());
+        }
+    }
+});
 </script>
 {% endblock %}

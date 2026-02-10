@@ -6,7 +6,9 @@ import hmac
 import logging
 import os
 import secrets
+import threading
 import time
+from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
@@ -18,6 +20,12 @@ auth_router = APIRouter(tags=["auth"])
 
 # In-memory session store (simple, no external deps)
 _sessions: dict[str, dict[str, Any]] = {}
+_sessions_lock = threading.Lock()
+
+# Rate limiting for login attempts (IP -> list of timestamps)
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_LOGIN_RATE_LIMIT = 5  # max attempts per window
+_LOGIN_RATE_WINDOW = 300  # 5 minute window
 
 # PBKDF2 parameters
 _PBKDF2_ITERATIONS = 480_000
@@ -87,23 +95,27 @@ def verify_password(password: str, stored_hash: str) -> bool:
 def create_session(username: str) -> str:
     """Create a new session and return token."""
     token = secrets.token_urlsafe(32)
-    _sessions[token] = {
-        "username": username,
-        "created": time.time(),
-    }
+    with _sessions_lock:
+        _sessions[token] = {
+            "username": username,
+            "created": time.time(),
+        }
     return token
 
 
 def get_current_user(request: Request) -> str | None:
     """Get the current user from session cookie."""
     token = request.cookies.get("session_token")
-    if not token or token not in _sessions:
+    if not token:
         return None
-    session = _sessions[token]
-    if time.time() - session["created"] > _SESSION_TTL:
-        _sessions.pop(token, None)
-        return None
-    return session["username"]
+    with _sessions_lock:
+        session = _sessions.get(token)
+        if not session:
+            return None
+        if time.time() - session["created"] > _SESSION_TTL:
+            _sessions.pop(token, None)
+            return None
+        return session["username"]
 
 
 def require_auth(request: Request) -> RedirectResponse | None:
@@ -113,14 +125,38 @@ def require_auth(request: Request) -> RedirectResponse | None:
     return None
 
 
+def _is_rate_limited(ip: str) -> bool:
+    """Check if an IP is rate-limited for login attempts."""
+    now = time.time()
+    attempts = _login_attempts[ip]
+    # Remove attempts outside the window
+    _login_attempts[ip] = [t for t in attempts if now - t < _LOGIN_RATE_WINDOW]
+    return len(_login_attempts[ip]) >= _LOGIN_RATE_LIMIT
+
+
 @auth_router.post("/auth/login")
 async def login(request: Request) -> Response:
     """Handle login form submission."""
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Rate limit check
+    if _is_rate_limited(client_ip):
+        logger.warning("Rate limited login attempt from %s", client_ip)
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Too many login attempts. Please try again later."},
+            status_code=429,
+        )
+
     form = await request.form()
     username = form.get("username", "")
     password = form.get("password", "")
 
     if username == _ADMIN_USERNAME and verify_password(password, _ADMIN_PASSWORD_HASH):
+        # Clear failed attempts on success
+        _login_attempts.pop(client_ip, None)
         token = create_session(username)
         response = RedirectResponse(url="/dashboard", status_code=302)
         response.set_cookie(
@@ -132,6 +168,9 @@ async def login(request: Request) -> Response:
         )
         logger.info("User '%s' logged in", username)
         return response
+
+    # Record failed attempt
+    _login_attempts[client_ip].append(time.time())
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -147,7 +186,8 @@ async def logout(request: Request) -> RedirectResponse:
     """Handle logout (POST only to prevent CSRF via GET)."""
     token = request.cookies.get("session_token")
     if token:
-        _sessions.pop(token, None)
+        with _sessions_lock:
+            _sessions.pop(token, None)
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("session_token")
     return response

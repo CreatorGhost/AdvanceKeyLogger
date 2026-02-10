@@ -97,7 +97,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             envelope = Envelope.from_bytes(body)
         except Exception as exc:
             audit_logger.warning("invalid_envelope ip=%s error=%s", client_ip, exc)
-            raise HTTPException(status_code=400, detail=f"invalid envelope: {exc}")
+            raise HTTPException(status_code=400, detail="invalid envelope")
 
         sender_key_b64 = base64.b64encode(envelope.sender_public_key).decode("utf-8")
         truncated_sender = _truncate(sender_key_b64)
@@ -147,7 +147,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                 continue
         if payload is None:
             audit_logger.warning("decrypt_failed ip=%s error=%s", client_ip, decrypt_error)
-            raise HTTPException(status_code=400, detail=f"decrypt failed: {decrypt_error}")
+            raise HTTPException(status_code=400, detail="decrypt failed")
 
         path = store_payload(payload, config)
         audit_logger.info(

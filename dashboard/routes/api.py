@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import platform
 import time
@@ -13,6 +14,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from dashboard.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 try:
     import psutil
@@ -140,7 +143,8 @@ async def list_captures(
                     continue
                 items.append(item)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Failed to list captures: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve captures") from exc
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -292,7 +296,8 @@ async def get_config(request: Request) -> dict[str, Any]:
         settings = Settings()
         return {"config": settings.as_dict()}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Failed to load config: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to load configuration") from exc
 
 
 @api_router.get("/modules")

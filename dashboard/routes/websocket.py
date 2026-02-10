@@ -32,6 +32,7 @@ class ConnectionManager:
         self.agent_connections: dict[str, WebSocket] = {}
         self.dashboard_connections: set[WebSocket] = set()
         self.agent_last_seen: dict[str, float] = {}
+        self._lock = asyncio.Lock()
 
     async def connect_dashboard(self, websocket: WebSocket) -> None:
         """Connect dashboard client."""
@@ -42,21 +43,22 @@ class ConnectionManager:
 
     async def connect_agent(self, websocket: WebSocket, agent_id: str) -> None:
         """Connect agent client, gracefully closing any previous connection."""
-        # Close existing connection for this agent if present
-        previous = self.agent_connections.get(agent_id)
-        if previous is not None:
-            try:
-                await previous.close(code=1012, reason="Replaced by new connection")
-            except Exception:
-                pass
-            self.active_connections.discard(previous)
-            logger.info(f"Agent {agent_id} previous connection closed (reconnection)")
+        async with self._lock:
+            # Close existing connection for this agent if present
+            previous = self.agent_connections.get(agent_id)
+            if previous is not None:
+                try:
+                    await previous.close(code=1012, reason="Replaced by new connection")
+                except Exception:
+                    pass
+                self.active_connections.discard(previous)
+                logger.info(f"Agent {agent_id} previous connection closed (reconnection)")
 
-        await websocket.accept()
-        self.active_connections.add(websocket)
-        self.agent_connections[agent_id] = websocket
-        self.agent_last_seen[agent_id] = time.time()
-        logger.info(f"Agent {agent_id} connected")
+            await websocket.accept()
+            self.active_connections.add(websocket)
+            self.agent_connections[agent_id] = websocket
+            self.agent_last_seen[agent_id] = time.time()
+            logger.info(f"Agent {agent_id} connected")
 
     def disconnect(self, websocket: WebSocket) -> None:
         """Disconnect client."""
@@ -114,12 +116,14 @@ class ConnectionManager:
 
     async def get_agent_clients(self) -> dict[str, Any]:
         """Get agent client information."""
+        # Snapshot to avoid RuntimeError if dict mutates during iteration
+        items = list(self.agent_connections.items())
         return {
             agent_id: {
                 "connected": (ws.client_state == WebSocketState.CONNECTED if ws else False),
                 "last_seen": self.agent_last_seen.get(agent_id, 0.0),
             }
-            for agent_id, ws in self.agent_connections.items()
+            for agent_id, ws in items
         }
 
     def update_agent_last_seen(self, agent_id: str) -> None:
@@ -129,6 +133,33 @@ class ConnectionManager:
 
 # Global connection manager
 manager = ConnectionManager()
+
+
+def _validate_origin(websocket: WebSocket) -> bool:
+    """Validate WebSocket Origin header against allowed origins.
+
+    Returns True if origin is acceptable, False otherwise.
+    If no Origin header is present (e.g. non-browser clients), allow by default.
+    """
+    origin = websocket.headers.get("origin")
+    if not origin:
+        # Non-browser clients (agents) may not send Origin
+        return True
+
+    # Load allowed origins from settings; default allows same-host connections
+    try:
+        settings = Settings()
+        allowed = settings.get("dashboard.allowed_origins", [])
+    except Exception:
+        allowed = []
+
+    if not allowed:
+        # If no allow-list configured, accept same-host origins
+        host = websocket.headers.get("host", "")
+        # Origin format: scheme://host[:port]
+        return origin.endswith(f"://{host}") if host else True
+
+    return origin in allowed
 
 
 def _extract_ws_token(websocket: WebSocket) -> str | None:
@@ -182,6 +213,12 @@ def _validate_session_token(token: str) -> str | None:
 @ws_router.websocket("/ws/dashboard")
 async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint for dashboard clients (authenticated)."""
+    # Validate Origin header to prevent cross-site WebSocket hijacking
+    if not _validate_origin(websocket):
+        await websocket.accept()
+        await websocket.close(code=4002, reason="Origin not allowed")
+        return
+
     # Must accept before sending close with reason (WebSocket protocol)
     token = _extract_ws_token(websocket)
     if not token:
@@ -215,6 +252,12 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
 @ws_router.websocket("/ws/agent/{agent_id}")
 async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
     """WebSocket endpoint for agent clients (authenticated)."""
+    # Validate Origin header to prevent cross-site WebSocket hijacking
+    if not _validate_origin(websocket):
+        await websocket.accept()
+        await websocket.close(code=4002, reason="Origin not allowed")
+        return
+
     # Extract token before accepting so we can reject early
     token = _extract_ws_token(websocket)
 
@@ -335,9 +378,16 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
         message = json.loads(data)
         message_type = message.get("type")
 
+        # ProtocolMessage uses "payload" key, plain messages use "data".
+        # Support both so agents using either transport format work correctly.
+        def _get_payload(fallback=None):
+            if fallback is None:
+                fallback = {}
+            return message.get("data") or message.get("payload") or fallback
+
         if message_type == "heartbeat":
             # Update agent status and last_seen
-            status_data = message.get("data", {})
+            status_data = _get_payload()
             manager.update_agent_last_seen(agent_id)
             await _update_agent_status(agent_id, status_data)
 
@@ -352,7 +402,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
         elif message_type == "capture":
             # Handle capture data
-            capture_data = message.get("data", {})
+            capture_data = _get_payload()
             manager.update_agent_last_seen(agent_id)
             await _handle_capture_data(agent_id, capture_data)
 
@@ -370,7 +420,7 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
         elif message_type == "command_response":
             # Handle command response from agent
-            response_data = message.get("data", {})
+            response_data = _get_payload()
             manager.update_agent_last_seen(agent_id)
             await _handle_command_response(agent_id, response_data)
 
@@ -385,7 +435,9 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
 async def _broadcast_to_agents(message: str) -> None:
     """Broadcast message to all connected agents."""
-    for agent_id, websocket in manager.agent_connections.items():
+    # Snapshot to avoid RuntimeError if dict mutates during iteration
+    agents = list(manager.agent_connections.items())
+    for _agent_id, websocket in agents:
         if websocket and websocket.client_state == WebSocketState.CONNECTED:
             try:
                 await websocket.send_text(message)
@@ -489,11 +541,19 @@ async def _handle_command_response(agent_id: str, response_data: dict[str, Any])
     # Forward to fleet controller if available
     if _fleet_controller is not None:
         try:
-            # Pass the full response_data dict, not just the inner "result" field.
-            # The controller's handle_command_response checks result.get("success")
-            # and result.get("error") at the top level — matching the REST API path
-            # which passes req.model_dump() ({"result": {...}, "success": bool, "error": str}).
-            await _fleet_controller.handle_command_response(agent_id, cmd_id, response_data)
+            # Normalize to match the REST API's CommandResponseRequest contract.
+            # The controller checks result.get("success", False) and result.get("error")
+            # at the top level.  req.model_dump() from the REST path produces
+            # {"result": {...}, "success": bool, "error": str|None}, so we must
+            # build the same shape here — the raw response_data dict from a WebSocket
+            # agent may carry extra keys (command_id, status) or nest success/error
+            # inside "result" rather than at the top level.
+            normalized = {
+                "result": response_data.get("result", {}),
+                "success": response_data.get("success", False),
+                "error": response_data.get("error"),
+            }
+            await _fleet_controller.handle_command_response(agent_id, cmd_id, normalized)
             logger.debug(f"Command response forwarded to controller")
         except Exception as e:
             logger.warning(f"Failed to forward command response to controller: {e}")

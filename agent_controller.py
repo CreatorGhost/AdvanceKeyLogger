@@ -392,7 +392,8 @@ class Controller:
         """Broadcast a command to multiple agents."""
         command_ids = []
 
-        for agent_id, metadata in self.agents.items():
+        # Snapshot to avoid RuntimeError if dict mutates during iteration
+        for agent_id, metadata in list(self.agents.items()):
             if filter_func and not filter_func(metadata):
                 continue
 
@@ -568,7 +569,7 @@ class Controller:
 
                 # Clean up old completed commands
                 commands_to_remove = []
-                for cmd_id, command in self.commands.items():
+                for cmd_id, command in list(self.commands.items()):
                     if command.status in (
                         CommandStatus.COMPLETED,
                         CommandStatus.FAILED,
@@ -715,10 +716,13 @@ class Agent:
     async def _register(self) -> bool:
         """Register with the controller."""
         try:
-            # Get IP address
+            # Get IP address (non-blocking)
             import socket
 
-            ip_address = socket.gethostbyname(socket.gethostname())
+            loop = asyncio.get_running_loop()
+            ip_address = await loop.run_in_executor(
+                None, lambda: socket.gethostbyname(socket.gethostname())
+            )
 
             metadata = AgentMetadata(
                 agent_id=self.agent_id,

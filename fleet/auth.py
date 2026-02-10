@@ -17,11 +17,12 @@ logger = logging.getLogger(__name__)
 class FleetAuth:
     """JWT-based authentication for fleet agents."""
 
-    def __init__(self, secret_key: str, access_ttl_minutes: int = 15, refresh_ttl_days: int = 7):
+    def __init__(self, secret_key: str, access_ttl_minutes: int = 15, refresh_ttl_days: int = 7, storage=None):
         self.secret_key = secret_key
         self.access_ttl = timedelta(minutes=access_ttl_minutes)
         self.refresh_ttl = timedelta(days=refresh_ttl_days)
         self.algorithm = "HS256"
+        self._storage = storage  # FleetStorage instance for token revocation checks
 
     def create_tokens(self, agent_id: str) -> Dict[str, str]:
         """Generate access and refresh tokens for an agent."""
@@ -56,7 +57,7 @@ class FleetAuth:
     def verify_token(self, token: str, expected_type: str = "access") -> Optional[str]:
         """
         Verify a token and return the agent_id (sub) if valid.
-        Returns None if invalid.
+        Returns None if invalid or revoked.
         """
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
@@ -66,6 +67,16 @@ class FleetAuth:
                     f"Token type mismatch: expected {expected_type}, got {payload.get('type')}"
                 )
                 return None
+
+            # Check token revocation if storage is available
+            jti = payload.get("jti")
+            if jti and self._storage is not None:
+                try:
+                    if self._storage.is_token_revoked(jti):
+                        logger.warning("Token revoked (jti=%s)", jti)
+                        return None
+                except Exception as exc:
+                    logger.warning("Token revocation check failed: %s", exc)
 
             return payload.get("sub")
 
