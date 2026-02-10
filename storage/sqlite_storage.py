@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import logging
 from pathlib import Path
@@ -30,6 +31,7 @@ class SQLiteStorage:
     def __init__(self, db_path: str = "./data/captures.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
         self._create_tables()
@@ -106,13 +108,14 @@ class SQLiteStorage:
         Returns:
             The row ID of the inserted record.
         """
-        cursor = self._conn.execute(
-            "INSERT INTO captures (type, data, file_path, file_size, timestamp) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (capture_type, data, file_path, file_size, time.time()),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO captures (type, data, file_path, file_size, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (capture_type, data, file_path, file_size, time.time()),
+            )
+            self._conn.commit()
+            return cursor.lastrowid
 
     def get_pending(self, limit: int = 50) -> list[dict]:
         """
@@ -124,36 +127,40 @@ class SQLiteStorage:
         Returns:
             List of dicts with keys: id, type, data, file_path, timestamp.
         """
-        cursor = self._conn.execute(
-            "SELECT id, type, data, file_path, file_size, timestamp "
-            "FROM captures WHERE sent = 0 "
-            "ORDER BY timestamp ASC LIMIT ?",
-            (limit,),
-        )
-        columns = ["id", "type", "data", "file_path", "file_size", "timestamp"]
-        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT id, type, data, file_path, file_size, timestamp "
+                "FROM captures WHERE sent = 0 "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (limit,),
+            )
+            columns = ["id", "type", "data", "file_path", "file_size", "timestamp"]
+            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
     def mark_sent(self, ids: list[int]) -> None:
         """Mark captures as successfully sent."""
         if not ids:
             return
         placeholders = ",".join("?" * len(ids))
-        self._conn.execute(
-            f"UPDATE captures SET sent = 1 WHERE id IN ({placeholders})",
-            ids,
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE captures SET sent = 1 WHERE id IN ({placeholders})",
+                ids,
+            )
+            self._conn.commit()
         logger.debug("Marked %d records as sent", len(ids))
 
     def count_pending(self) -> int:
         """Count unsent captures."""
-        cursor = self._conn.execute("SELECT COUNT(*) FROM captures WHERE sent = 0")
-        return cursor.fetchone()[0]
+        with self._lock:
+            cursor = self._conn.execute("SELECT COUNT(*) FROM captures WHERE sent = 0")
+            return cursor.fetchone()[0]
 
     def count_total(self) -> int:
         """Count all captures."""
-        cursor = self._conn.execute("SELECT COUNT(*) FROM captures")
-        return cursor.fetchone()[0]
+        with self._lock:
+            cursor = self._conn.execute("SELECT COUNT(*) FROM captures")
+            return cursor.fetchone()[0]
 
     def purge_sent(self, older_than_seconds: int = 86400) -> int:
         """
@@ -166,12 +173,13 @@ class SQLiteStorage:
             Number of records deleted.
         """
         cutoff = time.time() - older_than_seconds
-        cursor = self._conn.execute(
-            "DELETE FROM captures WHERE sent = 1 AND timestamp < ?",
-            (cutoff,),
-        )
-        self._conn.commit()
-        deleted = cursor.rowcount
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM captures WHERE sent = 1 AND timestamp < ?",
+                (cutoff,),
+            )
+            self._conn.commit()
+            deleted = cursor.rowcount
         if deleted:
             logger.info("Purged %d sent records older than %ds", deleted, older_than_seconds)
         return deleted
@@ -186,29 +194,31 @@ class SQLiteStorage:
         Returns:
             The row ID of the inserted profile.
         """
-        cursor = self._conn.execute(
-            "INSERT INTO biometrics_profiles "
-            "(profile_id, created_at, sample_size, avg_dwell_ms, avg_flight_ms, error_rate, profile_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                profile.get("profile_id", ""),
-                profile.get("created_at", ""),
-                int(profile.get("sample_size", 0)),
-                float(profile.get("avg_dwell_ms", 0.0)),
-                float(profile.get("avg_flight_ms", 0.0)),
-                float(profile.get("error_rate", 0.0)),
-                json.dumps(profile),
-            ),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO biometrics_profiles "
+                "(profile_id, created_at, sample_size, avg_dwell_ms, avg_flight_ms, error_rate, profile_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    profile.get("profile_id", ""),
+                    profile.get("created_at", ""),
+                    int(profile.get("sample_size", 0)),
+                    float(profile.get("avg_dwell_ms", 0.0)),
+                    float(profile.get("avg_flight_ms", 0.0)),
+                    float(profile.get("error_rate", 0.0)),
+                    json.dumps(profile),
+                ),
+            )
+            self._conn.commit()
+            return cursor.lastrowid
 
     def get_latest_profile(self) -> dict | None:
         """Return the most recently created biometrics profile."""
-        cursor = self._conn.execute(
-            "SELECT profile_json FROM biometrics_profiles ORDER BY created_at DESC LIMIT 1"
-        )
-        row = cursor.fetchone()
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT profile_json FROM biometrics_profiles ORDER BY created_at DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
         if not row:
             return None
         try:
@@ -226,30 +236,32 @@ class SQLiteStorage:
         Returns:
             The row ID of the inserted profile.
         """
-        cursor = self._conn.execute(
-            "INSERT INTO app_usage_profiles "
-            "(profile_date, generated_at, total_active_seconds, productive_ratio, "
-            "deep_work_score, productivity_score, profile_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                profile.get("date", ""),
-                profile.get("generated_at", ""),
-                float(profile.get("total_active_seconds", 0.0)),
-                float(profile.get("productive_ratio", 0.0)),
-                float(profile.get("deep_work_score", 0.0)),
-                float(profile.get("productivity_score", 0.0)),
-                json.dumps(profile),
-            ),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        with self._lock:
+            cursor = self._conn.execute(
+                "INSERT INTO app_usage_profiles "
+                "(profile_date, generated_at, total_active_seconds, productive_ratio, "
+                "deep_work_score, productivity_score, profile_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    profile.get("date", ""),
+                    profile.get("generated_at", ""),
+                    float(profile.get("total_active_seconds", 0.0)),
+                    float(profile.get("productive_ratio", 0.0)),
+                    float(profile.get("deep_work_score", 0.0)),
+                    float(profile.get("productivity_score", 0.0)),
+                    json.dumps(profile),
+                ),
+            )
+            self._conn.commit()
+            return cursor.lastrowid
 
     def get_latest_app_profile(self) -> dict | None:
         """Return the most recently created app usage profile."""
-        cursor = self._conn.execute(
-            "SELECT profile_json FROM app_usage_profiles ORDER BY generated_at DESC LIMIT 1"
-        )
-        row = cursor.fetchone()
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT profile_json FROM app_usage_profiles ORDER BY generated_at DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
         if not row:
             return None
         try:
@@ -259,7 +271,8 @@ class SQLiteStorage:
 
     def close(self) -> None:
         """Close the database connection."""
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
         logger.debug("SQLite storage closed")
 
     def __enter__(self) -> SQLiteStorage:

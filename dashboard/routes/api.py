@@ -1,4 +1,5 @@
 """REST API routes for dashboard data."""
+
 from __future__ import annotations
 
 import asyncio
@@ -127,11 +128,7 @@ async def list_captures(
                 item = {
                     "id": row["id"],
                     "capture_type": row["type"],
-                    "data": (
-                        data_val[:500]
-                        if isinstance(data_val, str)
-                        else str(data_val)[:500]
-                    ),
+                    "data": (data_val[:500] if isinstance(data_val, str) else str(data_val)[:500]),
                     "timestamp": (
                         datetime.fromtimestamp(row["timestamp"]).isoformat()
                         if row.get("timestamp")
@@ -171,13 +168,15 @@ async def list_screenshots(
     screenshots = []
     for f in files:
         stat = f.stat()
-        screenshots.append({
-            "filename": f.name,
-            "path": f"/api/screenshots/{f.name}",
-            "size_bytes": stat.st_size,
-            "size_kb": round(stat.st_size / 1024, 1),
-            "timestamp": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        })
+        screenshots.append(
+            {
+                "filename": f.name,
+                "path": f"/api/screenshots/{f.name}",
+                "size_bytes": stat.st_size,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "timestamp": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
 
     return {"screenshots": screenshots, "total": total}
 
@@ -187,17 +186,34 @@ async def get_screenshot(request: Request, filename: str) -> Any:
     """Serve a screenshot file."""
     _require_api_auth(request)
 
-    # Prevent path traversal
-    if ".." in filename or "/" in filename or "\\" in filename:
+    # Define the allowed screenshots directory (resolve to absolute path)
+    screenshots_dir = Path("data/screenshots").resolve()
+
+    # Construct the requested path and resolve it
+    # Using Path.joinpath to avoid issues, then resolve to get canonical path
+    try:
+        requested_path = (screenshots_dir / filename).resolve()
+    except (ValueError, OSError):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    filepath = Path("data/screenshots") / filename
-    if not filepath.exists():
+    # Security check: ensure resolved path is within screenshots directory
+    # This prevents path traversal attacks like ../../etc/passwd
+    try:
+        requested_path.relative_to(screenshots_dir)
+    except ValueError:
+        # Path is not relative to screenshots_dir (traversal attempt)
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Additional checks for safety
+    if not requested_path.exists():
         raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    if not requested_path.is_file():
+        raise HTTPException(status_code=400, detail="Invalid filename")
 
     from fastapi.responses import FileResponse
 
-    return FileResponse(str(filepath), media_type="image/png")
+    return FileResponse(str(requested_path), media_type="image/png")
 
 
 @api_router.get("/analytics/activity")
@@ -255,9 +271,7 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
                 stats["total_captures"] = db.count_total()
                 stats["pending"] = db.count_pending()
                 stats["sent"] = stats["total_captures"] - stats["pending"]
-            stats["db_size_mb"] = round(
-                db_path.stat().st_size / 1024 / 1024, 2
-            )
+            stats["db_size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
         except Exception:
             pass
 
@@ -293,11 +307,13 @@ async def list_modules(request: Request) -> dict[str, Any]:
         from capture import _CAPTURE_REGISTRY
 
         for name, cls in _CAPTURE_REGISTRY.items():
-            capture_modules.append({
-                "name": name,
-                "class": cls.__name__,
-                "module": cls.__module__,
-            })
+            capture_modules.append(
+                {
+                    "name": name,
+                    "class": cls.__name__,
+                    "module": cls.__module__,
+                }
+            )
     except Exception:
         pass
 
@@ -305,11 +321,13 @@ async def list_modules(request: Request) -> dict[str, Any]:
         from transport import _TRANSPORT_REGISTRY
 
         for name, cls in _TRANSPORT_REGISTRY.items():
-            transport_modules.append({
-                "name": name,
-                "class": cls.__name__,
-                "module": cls.__module__,
-            })
+            transport_modules.append(
+                {
+                    "name": name,
+                    "class": cls.__name__,
+                    "module": cls.__module__,
+                }
+            )
     except Exception:
         pass
 

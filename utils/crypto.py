@@ -273,3 +273,35 @@ def decrypt_with_private_key(private_key_pem: bytes, encrypted_data: bytes) -> b
 
     logger.debug("Decrypted %d bytes with RSA private key", len(encrypted_data))
     return decrypted
+
+
+def verify_with_public_key(public_key_pem: bytes, data: bytes, signature: bytes) -> bool:
+    """
+    Verify a signature using RSA public key with PSS padding.
+
+    Args:
+        public_key_pem: Public key in PEM format.
+        data: Original data that was signed.
+        signature: Signature to verify.
+
+    Returns:
+        True if signature is valid, False otherwise.
+    """
+    try:
+        public_key = cast(RSAPublicKey, serialization.load_pem_public_key(public_key_pem))
+
+        public_key.verify(
+            signature,
+            data,
+            asymmetric_padding.PSS(
+                mgf=asymmetric_padding.MGF1(hashes.SHA256()),
+                salt_length=asymmetric_padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+
+        logger.debug("Signature verified successfully")
+        return True
+    except Exception as e:
+        logger.warning(f"Signature verification failed: {e}")
+        return False

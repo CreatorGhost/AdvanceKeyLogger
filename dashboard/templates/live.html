@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}Live Dashboard{% endblock %}
+{% block page_title %}Live{% endblock %}
+
+{% block content %}
+<!-- Connection Status -->
+<div class="live-status-bar">
+    <span id="wsStatus" class="disconnected" title="Disconnected"></span>
+    <span>Real-time updates</span>
+    <span id="liveBadge">LIVE</span>
+</div>
+
+<!-- Metric Tabs -->
+<div class="metric-tabs" id="metric-tabs">
+    <div class="metric-tab active" data-metric="captures">
+        <div class="metric-tab-label">Total Captures</div>
+        <div class="metric-tab-value" id="totalCaptures">--</div>
+    </div>
+    <div class="metric-tab" data-metric="pending">
+        <div class="metric-tab-label">Pending</div>
+        <div class="metric-tab-value" id="pendingCount">--</div>
+    </div>
+    <div class="metric-tab" data-metric="agents">
+        <div class="metric-tab-label">Agents Online</div>
+        <div class="metric-tab-value" id="connectedAgents">--</div>
+    </div>
+    <div class="metric-tab" data-metric="uptime">
+        <div class="metric-tab-label">Uptime</div>
+        <div class="metric-tab-value" id="uptimeValue">--</div>
+    </div>
+</div>
+
+<div class="content">
+    <!-- Live Activity Feed -->
+    <div class="section">
+        <div class="card">
+            <div class="section-header">
+                <div class="section-title">Live Activity Feed</div>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="liveDashboard && liveDashboard.requestCaptures()">Refresh</button>
+                </div>
+            </div>
+            <div class="tbl-wrap-mobile">
+                <table class="tbl" id="activityTable">
+                    <thead>
+                        <tr>
+                            <th>Event</th>
+                            <th>Details</th>
+                            <th style="text-align:right">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityBody">
+                        <tr><td colspan="3" class="empty-state-sm">Waiting for events...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card-list-mobile" id="activityMobile"></div>
+        </div>
+    </div>
+
+    <!-- Two Columns: Agents + Resources -->
+    <div class="two-col">
+        <!-- Online Agents -->
+        <div class="section">
+            <div class="card">
+                <div class="section-header">
+                    <div class="section-title">Online Agents</div>
+                    <a href="/fleet" class="section-link">Manage &#8594;</a>
+                </div>
+                <div id="agentsList">
+                    <div class="empty-state-sm">No agents connected</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Resources + Quick Actions -->
+        <div>
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Resources</div>
+                    </div>
+                    <div id="resourcesPanel">
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">CPU</span>
+                                <span class="res-value" id="resCpu">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resCpuBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Memory</span>
+                                <span class="res-value" id="resMemory">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resMemoryBar" style="width:0%"></div></div>
+                        </div>
+                        <div class="res-item">
+                            <div class="res-header">
+                                <span class="res-label">Storage</span>
+                                <span class="res-value" id="resStorage">--</span>
+                            </div>
+                            <div class="res-bar"><div class="res-fill" id="resStorageBar" style="width:0%"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="card">
+                    <div class="section-header">
+                        <div class="section-title">Quick Actions</div>
+                    </div>
+                    <div class="quick-actions">
+                        <button class="btn btn-primary" onclick="liveDashboard && liveDashboard.broadcastCommand('ping')">
+                            Ping All Agents
+                        </button>
+                        <button class="btn btn-secondary" onclick="liveDashboard && liveDashboard.requestStatus()">
+                            Request Status
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.live-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: rgba(16, 185, 129, 0.1);
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+
+.quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.2s;
+}
+
+.btn-sm {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+
+.btn-primary {
+    background: #3b82f6;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #2563eb;
+}
+
+.btn-secondary {
+    background: #374151;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #4b5563;
+}
+
+.section-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.agent-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.agent-item:last-child {
+    border-bottom: none;
+}
+
+.agent-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot-online {
+    background-color: #10b981;
+    box-shadow: 0 0 6px rgba(16,185,129,0.4);
+}
+
+.status-dot-offline {
+    background-color: #6b7280;
+}
+
+.agent-name {
+    flex: 1;
+    font-size: 13px;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 500;
+}
+
+.agent-badge-online {
+    background: rgba(16,185,129,0.15);
+    color: #10b981;
+}
+
+.agent-badge-offline {
+    background: rgba(107,114,128,0.15);
+    color: #9ca3af;
+}
+
+.res-item {
+    margin-bottom: 12px;
+}
+
+.res-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+
+.res-label {
+    color: #9ca3af;
+}
+
+.res-value {
+    font-weight: 500;
+}
+
+.res-bar {
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.res-fill {
+    height: 100%;
+    background: #3b82f6;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+<script>
+// Enable WebSocket on this page
+document.body.dataset.enableWebsocket = 'true';
+
+// Initialize live dashboard on load
+document.addEventListener('DOMContentLoaded', () => {
+    if (!window.liveDashboard) {
+        window.liveDashboard = new LiveDashboard();
+        window.liveDashboard.init();
+    }
+});
+</script>
+{% endblock %}

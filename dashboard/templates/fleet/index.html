@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Fleet{% endblock %}
+
+{% block page_title %}Fleet Management{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>Registered Agents</h2>
+        <button class="btn btn-primary" onclick="refreshAgents()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table" id="agents-table">
+                <thead>
+                    <tr>
+                        <th>Hostname</th>
+                        <th>Status</th>
+                        <th>Platform</th>
+                        <th>IP Address</th>
+                        <th>Last Seen</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated by JS -->
+                    <tr><td colspan="6">Loading agents...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
+async function refreshAgents() {
+    try {
+        const res = await fetch('/api/dashboard/fleet/agents');
+        if (res.ok) {
+            const data = await res.json();
+            const tbody = document.querySelector('#agents-table tbody');
+            tbody.innerHTML = '';
+            
+            if (data.agents.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center">No agents registered</td></tr>';
+                return;
+            }
+            
+            data.agents.forEach(agent => {
+                const tr = document.createElement('tr');
+                const lastSeen = new Date(agent.last_seen * 1000).toLocaleString();
+                const statusClass = agent.status.toLowerCase() === 'online' ? 'success' : 'secondary';
+                
+                tr.innerHTML = `
+                    <td>
+                        <div style="font-weight: bold;">${esc(agent.hostname)}</div>
+                        <div class="text-muted small">${esc(agent.agent_id.substring(0, 8))}...</div>
+                    </td>
+                    <td><span class="badge bg-${statusClass}">${esc(agent.status)}</span></td>
+                    <td>${esc(agent.platform)} <span class="text-muted small">${esc(agent.version)}</span></td>
+                    <td>${esc(agent.ip_address)}</td>
+                    <td>${lastSeen}</td>
+                    <td>
+                        <a href="/fleet/agents/${encodeURIComponent(agent.agent_id)}" class="btn btn-sm btn-outline-primary">Details</a>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    } catch (e) {
+        console.error("Failed to load agents", e);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', refreshAgents);
+</script>
+{% endblock %}

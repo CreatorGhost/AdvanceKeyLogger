@@ -1,23 +1,149 @@
 """
 BiometricsAnalyzer computes typing dynamics metrics and profiles.
 """
+
 from __future__ import annotations
 
 import math
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from biometrics.models import BiometricsProfile, DigraphStats
+from biometrics.matcher import ProfileMatcher
 
 
 class BiometricsAnalyzer:
-    """Analyze keystroke timing events to produce a profile."""
+    """Analyze keystroke timing events to produce a profile.
 
-    def __init__(self, profile_id_prefix: str = "usr") -> None:
+    Also supports profile matching for user authentication via the integrated
+    ProfileMatcher. Register reference profiles with `register_reference_profile()`
+    and authenticate users with `authenticate()`.
+    """
+
+    def __init__(
+        self,
+        profile_id_prefix: str = "usr",
+        match_threshold: float = 50.0,
+        authentication_enabled: bool = False,
+    ) -> None:
         self._prefix = profile_id_prefix
+        self._matcher = ProfileMatcher(threshold=match_threshold)
+        self._authentication_enabled = authentication_enabled
+        self._reference_profiles: dict[str, dict[str, Any]] = {}
+
+    # -------------------------------------------------------------------------
+    # Profile Matching / Authentication Methods
+    # -------------------------------------------------------------------------
+
+    def register_reference_profile(
+        self, user_id: str, profile: BiometricsProfile | dict[str, Any]
+    ) -> None:
+        """Register a reference profile for a user.
+
+        Args:
+            user_id: Unique identifier for the user
+            profile: BiometricsProfile or dict representation of the profile
+        """
+        if isinstance(profile, BiometricsProfile):
+            profile_dict = profile.to_dict()
+        else:
+            profile_dict = profile
+        self._reference_profiles[user_id] = profile_dict
+
+    def unregister_profile(self, user_id: str) -> bool:
+        """Remove a user's reference profile.
+
+        Returns:
+            True if profile was removed, False if user_id not found.
+        """
+        if user_id in self._reference_profiles:
+            del self._reference_profiles[user_id]
+            return True
+        return False
+
+    def authenticate(self, live_profile: BiometricsProfile | dict[str, Any]) -> Optional[str]:
+        """Authenticate a user based on their typing profile.
+
+        Compares the live profile against all registered reference profiles
+        and returns the user_id of the best match (if within threshold).
+
+        Args:
+            live_profile: The profile generated from live typing data
+
+        Returns:
+            user_id of the matched user, or None if no match found.
+        """
+        if not self._authentication_enabled:
+            return None
+
+        if isinstance(live_profile, BiometricsProfile):
+            live_dict = live_profile.to_dict()
+        else:
+            live_dict = live_profile
+
+        best_match: Optional[str] = None
+        best_distance = float("inf")
+
+        for user_id, ref_profile in self._reference_profiles.items():
+            distance = self._matcher.distance(ref_profile, live_dict)
+            if distance < best_distance and self._matcher.is_match(ref_profile, live_dict):
+                best_distance = distance
+                best_match = user_id
+
+        return best_match
+
+    def get_similarity_score(
+        self,
+        profile_a: BiometricsProfile | dict[str, Any],
+        profile_b: BiometricsProfile | dict[str, Any],
+    ) -> float:
+        """Calculate similarity score between two profiles.
+
+        Args:
+            profile_a: First profile
+            profile_b: Second profile
+
+        Returns:
+            Similarity score from 0 to 100 (100 = identical)
+        """
+        dict_a = profile_a.to_dict() if isinstance(profile_a, BiometricsProfile) else profile_a
+        dict_b = profile_b.to_dict() if isinstance(profile_b, BiometricsProfile) else profile_b
+
+        distance = self._matcher.distance(dict_a, dict_b)
+        # Convert distance to similarity (inverse relationship, capped at 100)
+        return max(0.0, 100.0 - distance)
+
+    def is_same_user(
+        self,
+        profile_a: BiometricsProfile | dict[str, Any],
+        profile_b: BiometricsProfile | dict[str, Any],
+    ) -> bool:
+        """Check if two profiles likely belong to the same user.
+
+        Args:
+            profile_a: First profile
+            profile_b: Second profile
+
+        Returns:
+            True if profiles match within threshold, False otherwise.
+        """
+        dict_a = profile_a.to_dict() if isinstance(profile_a, BiometricsProfile) else profile_a
+        dict_b = profile_b.to_dict() if isinstance(profile_b, BiometricsProfile) else profile_b
+
+        return self._matcher.is_match(dict_a, dict_b)
+
+    @property
+    def registered_users(self) -> list[str]:
+        """Return list of registered user IDs."""
+        return list(self._reference_profiles.keys())
+
+    # -------------------------------------------------------------------------
+    # Profile Generation Methods (existing)
+    # -------------------------------------------------------------------------
 
     def generate_profile(self, events: list[dict[str, Any]]) -> BiometricsProfile:
+        """Generate a biometrics profile from keystroke events."""
         if not events:
             raise ValueError("No events provided for biometrics analysis")
 

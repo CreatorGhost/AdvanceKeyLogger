@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Union
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.responses import Response
 
 from dashboard.auth import get_current_user, require_auth
 
@@ -11,7 +14,7 @@ pages_router = APIRouter(tags=["pages"])
 
 
 @pages_router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request) -> HTMLResponse:
+async def login_page(request: Request) -> Response:
     """Render login page."""
     if get_current_user(request):
         return RedirectResponse(url="/dashboard", status_code=302)
@@ -27,7 +30,7 @@ async def landing_page(request: Request) -> HTMLResponse:
 
 
 @pages_router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page(request: Request) -> HTMLResponse:
+async def dashboard_page(request: Request) -> Response:
     """Render main dashboard."""
     redirect = require_auth(request)
     if redirect:
@@ -44,24 +47,25 @@ async def dashboard_page(request: Request) -> HTMLResponse:
 
 
 @pages_router.get("/live", response_class=HTMLResponse)
-async def live_dashboard_page(request: Request) -> HTMLResponse:
-    """Render real-time live dashboard."""
+async def live_dashboard_page(request: Request) -> Response:
+    """Render real-time live dashboard with WebSocket support."""
     user = get_current_user(request)
     if user is None:
         return RedirectResponse(url="/login", status_code=302)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
-        "dashboard.html",
+        "live.html",
         {
             "user": user,
             "page": "live",
+            "enable_websocket": True,
         },
     )
 
 
 @pages_router.get("/captures", response_class=HTMLResponse)
-async def captures_page(request: Request) -> HTMLResponse:
+async def captures_page(request: Request) -> Response:
     """Render captures viewer page."""
     redirect = require_auth(request)
     if redirect:
@@ -78,7 +82,7 @@ async def captures_page(request: Request) -> HTMLResponse:
 
 
 @pages_router.get("/screenshots", response_class=HTMLResponse)
-async def screenshots_page(request: Request) -> HTMLResponse:
+async def screenshots_page(request: Request) -> Response:
     """Render screenshots gallery page."""
     redirect = require_auth(request)
     if redirect:
@@ -94,8 +98,25 @@ async def screenshots_page(request: Request) -> HTMLResponse:
     )
 
 
+@pages_router.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request) -> Response:
+    """Render analytics page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "analytics.html",
+        {
+            "user": get_current_user(request),
+            "page": "analytics",
+        },
+    )
+
+
 @pages_router.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request) -> HTMLResponse:
+async def settings_page(request: Request) -> Response:
     """Render settings page."""
     redirect = require_auth(request)
     if redirect:

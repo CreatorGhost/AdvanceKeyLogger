@@ -27,7 +27,7 @@
     </div>
     {% endif %}
 
-    <form action="{{ url_for('login') }}" method="POST" class="login-form">
+    <form action="/auth/login" method="POST" class="login-form">
         <label for="username" class="sr-only">Username</label>
         <input type="text" id="username" name="username" class="login-input" placeholder="Username" autocomplete="username" required autofocus>
         <label for="password" class="sr-only">Password</label>

@@ -116,9 +116,7 @@ class ConnectionManager:
         """Get agent client information."""
         return {
             agent_id: {
-                "connected": (
-                    ws.client_state == WebSocketState.CONNECTED if ws else False
-                ),
+                "connected": (ws.client_state == WebSocketState.CONNECTED if ws else False),
                 "last_seen": self.agent_last_seen.get(agent_id, 0.0),
             }
             for agent_id, ws in self.agent_connections.items()
@@ -144,30 +142,56 @@ def _extract_ws_token(websocket: WebSocket) -> str | None:
 
 
 def _validate_session_token(token: str) -> str | None:
-    """Validate a session token and return username, or None if invalid."""
+    """Validate a session token and return username, or None if invalid.
+
+    Tries dashboard session tokens first, then falls back to fleet JWT tokens
+    so that agents connecting via WebSocket transport can authenticate.
+    """
     from dashboard.auth import _sessions, _SESSION_TTL
     import time as _time
 
+    # Try dashboard session token first
     session = _sessions.get(token)
-    if not session:
-        return None
-    if _time.time() - session["created"] > _SESSION_TTL:
-        _sessions.pop(token, None)
-        return None
-    return session["username"]
+    if session:
+        if _time.time() - session["created"] > _SESSION_TTL:
+            _sessions.pop(token, None)
+        else:
+            return session["username"]
+
+    # Fall back to fleet JWT token validation
+    try:
+        from fleet.auth import FleetAuth
+
+        # Try to get the app's fleet_auth instance via the global fleet_controller reference
+        if _fleet_controller and hasattr(_fleet_controller, "config"):
+            jwt_secret = _fleet_controller.config.get("jwt_secret")
+            if not jwt_secret:
+                return None
+            auth = FleetAuth(jwt_secret)
+            agent_id = auth.verify_token(token, expected_type="access")
+            if agent_id:
+                return agent_id
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    return None
 
 
 @ws_router.websocket("/ws/dashboard")
 async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint for dashboard clients (authenticated)."""
-    # Authenticate before accepting
+    # Must accept before sending close with reason (WebSocket protocol)
     token = _extract_ws_token(websocket)
     if not token:
+        await websocket.accept()
         await websocket.close(code=4001, reason="Missing authentication token")
         return
 
     user = _validate_session_token(token)
     if not user:
+        await websocket.accept()
         await websocket.close(code=4003, reason="Invalid or expired token")
         return
 
@@ -232,10 +256,24 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
         action = command.get("action")
 
         if action == "get_status":
+            # Collect system resource metrics
+            system_info = {}
+            try:
+                import psutil
+
+                system_info = {
+                    "cpu_percent": psutil.cpu_percent(interval=0),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "disk_percent": psutil.disk_usage("/").percent,
+                }
+            except Exception:
+                pass
+
             # Send dashboard status
             status = {
                 "clients": await manager.get_dashboard_clients(),
                 "agents": await manager.get_agent_clients(),
+                "system": system_info,
                 "timestamp": time.time(),
             }
             await websocket.send_text(json.dumps({"type": "status", "data": status}))
@@ -245,7 +283,8 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
             message = command.get("message", "")
             await _broadcast_to_agents(message)
 
-        elif action == "send_to_agent":
+        elif action == "send_to_agent" or action == "command":
+            # "command" is an alias for "send_to_agent" (frontend uses "command")
             # Validate agent_id before sending
             agent_id = command.get("agent_id")
             if not agent_id:
@@ -257,7 +296,15 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
                 await websocket.send_text(json.dumps(response))
                 return
 
-            message = command.get("message", "")
+            # Support both message (raw) and action/parameters (structured command)
+            cmd_action = command.get("action_type") or command.get("action")
+            parameters = command.get("parameters", {})
+            message = command.get("message") or json.dumps(
+                {
+                    "action": cmd_action,
+                    "parameters": parameters,
+                }
+            )
             success = await manager.send_to_agent(agent_id, message)
             response = {
                 "type": "command_result",
@@ -309,11 +356,14 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
             manager.update_agent_last_seen(agent_id)
             await _handle_capture_data(agent_id, capture_data)
 
-            # Broadcast to dashboard
+            # Broadcast to dashboard — flatten capture fields so frontend
+            # can access data.capture_type, data.data, data.status directly
             broadcast_data = {
                 "type": "new_capture",
                 "agent_id": agent_id,
-                "capture": capture_data,
+                "capture_type": capture_data.get("type", "unknown"),
+                "data": capture_data.get("data", ""),
+                "status": capture_data.get("status", "pending"),
                 "timestamp": time.time(),
             }
             await manager.broadcast_dashboard(json.dumps(broadcast_data))
@@ -343,10 +393,41 @@ async def _broadcast_to_agents(message: str) -> None:
                 continue
 
 
+# Storage reference for handlers (set by app initialization)
+_storage = None
+_fleet_storage = None
+_fleet_controller = None
+
+
+def set_storage_references(storage=None, fleet_storage=None, fleet_controller=None):
+    """Set storage references for WebSocket handlers."""
+    global _storage, _fleet_storage, _fleet_controller
+    _storage = storage
+    _fleet_storage = fleet_storage
+    _fleet_controller = fleet_controller
+
+
 async def _get_recent_captures() -> list[dict[str, Any]]:
-    """Get recent captures from storage (mock implementation)."""
-    # In production, this would query the actual storage system
-    # For now, return mock data
+    """Get recent captures from storage."""
+    # Try to use real storage if available
+    if _storage is not None:
+        try:
+            pending = await asyncio.to_thread(_storage.get_pending, 10)
+            return [
+                {
+                    "id": item.get("id", f"capture_{i}"),
+                    "type": item.get("capture_type", "unknown"),
+                    "data": item.get("data", "")[:100],  # Truncate for preview
+                    "timestamp": item.get("timestamp", time.time()),
+                    "agent_id": item.get("agent_id", "local"),
+                    "status": item.get("status", "pending"),
+                }
+                for i, item in enumerate(pending)
+            ]
+        except Exception as e:
+            logger.warning(f"Failed to get captures from storage: {e}")
+
+    # Fallback to mock data
     return [
         {
             "id": f"capture_{i}",
@@ -361,25 +442,60 @@ async def _get_recent_captures() -> list[dict[str, Any]]:
 
 async def _update_agent_status(agent_id: str, status_data: dict[str, Any]) -> None:
     """Update agent status in storage."""
-    # In production, this would update the actual agent status in database
-    logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
+    # Update in fleet storage if available
+    if _fleet_storage is not None:
+        try:
+            status = status_data.get("status", "ONLINE")
+            await asyncio.to_thread(_fleet_storage.update_agent_status, agent_id, status)
+            logger.debug(f"Agent {agent_id} status updated to {status} in DB")
+        except Exception as e:
+            logger.warning(f"Failed to update agent status in DB: {e}")
+    else:
+        logger.debug(f"Agent {agent_id} status updated (keys: {list(status_data.keys())})")
 
 
 async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> None:
-    """Handle capture data from agent."""
-    # In production, this would store the capture data
-    logger.debug(
-        "Agent %s sent capture (type=%s, size=%d)",
-        agent_id,
-        capture_data.get("type", "unknown"),
-        len(str(capture_data)),
-    )
+    """Handle capture data from agent and persist to storage."""
+    capture_type = capture_data.get("type", "unknown")
+    data = capture_data.get("data", "")
+
+    # Persist to storage if available
+    if _storage is not None:
+        try:
+            await asyncio.to_thread(
+                _storage.insert,
+                capture_type=capture_type,
+                data=str(data),
+            )
+            logger.debug(f"Agent {agent_id} capture stored (type={capture_type})")
+        except Exception as e:
+            logger.warning(f"Failed to store capture data: {e}")
+    else:
+        logger.debug(
+            "Agent %s sent capture (type=%s, size=%d)",
+            agent_id,
+            capture_type,
+            len(str(capture_data)),
+        )
 
 
 async def _handle_command_response(agent_id: str, response_data: dict[str, Any]) -> None:
-    """Handle command response from agent."""
-    # In production, this would process the command response
+    """Handle command response from agent and update in controller."""
     cmd_id = response_data.get("command_id", "unknown")
     status = response_data.get("status", "unknown")
+
     logger.info("Agent %s command response (command_id=%s, status=%s)", agent_id, cmd_id, status)
-    logger.debug("Agent %s full command response: %s", agent_id, response_data)
+
+    # Forward to fleet controller if available
+    if _fleet_controller is not None:
+        try:
+            # Pass the full response_data dict, not just the inner "result" field.
+            # The controller's handle_command_response checks result.get("success")
+            # and result.get("error") at the top level — matching the REST API path
+            # which passes req.model_dump() ({"result": {...}, "success": bool, "error": str}).
+            await _fleet_controller.handle_command_response(agent_id, cmd_id, response_data)
+            logger.debug(f"Command response forwarded to controller")
+        except Exception as e:
+            logger.warning(f"Failed to forward command response to controller: {e}")
+    else:
+        logger.debug("Agent %s full command response: %s", agent_id, response_data)

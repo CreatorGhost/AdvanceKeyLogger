@@ -8,6 +8,7 @@ Usage:
     settings = Settings("my_config.yaml")            # Load with user overrides
     interval = settings.get("general.report_interval")  # Dot-notation access
 """
+
 from __future__ import annotations
 
 import os
@@ -162,3 +163,19 @@ class Settings:
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         if log_level.upper() not in valid_levels:
             raise ValueError(f"log_level must be one of {valid_levels}, got {log_level}")
+
+        if self.get("fleet.enabled"):
+            secret = self.get("fleet.auth.jwt_secret")
+            if not secret or secret == "CHANGE_ME_IN_PRODUCTION":
+                allow_default = self.get("fleet.auth.allow_default_secret", False)
+                if allow_default:
+                    logger.warning(
+                        "Fleet enabled with default/empty JWT secret. "
+                        "PLEASE CHANGE IN PRODUCTION (allow_default_secret=true)."
+                    )
+                else:
+                    raise RuntimeError(
+                        "Fleet is enabled but JWT secret is not configured. "
+                        "Set fleet.auth.jwt_secret to a strong random value (32+ chars). "
+                        "For development, set fleet.auth.allow_default_secret to true."
+                    )

