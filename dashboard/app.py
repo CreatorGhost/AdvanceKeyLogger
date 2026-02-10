@@ -66,8 +66,8 @@ async def lifespan(app: FastAPI):
             fleet_storage = FleetStorage(db_path)
 
             # Auth config
-            jwt_secret = settings.get("fleet.auth.jwt_secret", "change-me-in-production")
-            if jwt_secret == "change-me-in-production" or jwt_secret == _INSECURE_DEFAULT:
+            jwt_secret = settings.get("fleet.auth.jwt_secret", _INSECURE_DEFAULT)
+            if jwt_secret.lower() == _INSECURE_DEFAULT.lower():
                 env = os.environ.get("APP_ENV", "development").lower()
                 if env != "development":
                     raise RuntimeError(

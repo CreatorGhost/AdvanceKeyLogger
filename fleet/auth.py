@@ -57,7 +57,8 @@ class FleetAuth:
     def verify_token(self, token: str, expected_type: str = "access") -> Optional[str]:
         """
         Verify a token and return the agent_id (sub) if valid.
-        Returns None if invalid or revoked.
+        Returns None if invalid, revoked, or if the revocation check fails
+        (fail-closed: tokens are rejected when storage is unavailable).
         """
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
@@ -68,7 +69,9 @@ class FleetAuth:
                 )
                 return None
 
-            # Check token revocation if storage is available
+            # Check token revocation if storage is available.
+            # Fail closed: if self._storage.is_token_revoked raises,
+            # reject the token rather than allowing it through.
             jti = payload.get("jti")
             if jti and self._storage is not None:
                 try:
@@ -76,7 +79,10 @@ class FleetAuth:
                         logger.warning("Token revoked (jti=%s)", jti)
                         return None
                 except Exception as exc:
-                    logger.warning("Token revocation check failed: %s", exc)
+                    logger.error(
+                        "Token revocation check failed (jti=%s): %s", jti, exc
+                    )
+                    return None
 
             return payload.get("sub")
 

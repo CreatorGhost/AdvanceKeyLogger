@@ -283,10 +283,9 @@ async def get_commands(
             tracked_cmd = controller.commands.get(cmd.command_id)
             if tracked_cmd is not None:
                 tracked_cmd.status = CommandStatus.SENT
-            controller.storage.update_command_status(cmd.command_id, "sent")
-
-    # Also check DB for any pending commands that might have been loaded but not in queue?
-    # (Memory queue should be source of truth for active controller)
+            await asyncio.to_thread(
+                controller.storage.update_command_status, cmd.command_id, "sent"
+            )
 
     return {"commands": commands}
 

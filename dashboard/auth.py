@@ -93,10 +93,23 @@ def verify_password(password: str, stored_hash: str) -> bool:
     )
 
 
+def _cleanup_expired_sessions() -> None:
+    """Remove expired sessions to prevent unbounded memory growth.
+
+    Must be called while holding ``_sessions_lock``.
+    """
+    now = time.time()
+    expired = [tok for tok, s in _sessions.items() if now - s["created"] > _SESSION_TTL]
+    for tok in expired:
+        _sessions.pop(tok, None)
+
+
 def create_session(username: str) -> str:
     """Create a new session and return token."""
     token = secrets.token_urlsafe(32)
     with _sessions_lock:
+        # Periodically purge expired sessions
+        _cleanup_expired_sessions()
         _sessions[token] = {
             "username": username,
             "created": time.time(),
@@ -136,6 +149,14 @@ def _is_rate_limited(ip: str) -> bool:
         return len(_login_attempts[ip]) >= _LOGIN_RATE_LIMIT
 
 
+def _upgrade_password_hash(plaintext: str) -> None:
+    """Re-hash a password from legacy SHA-256 to PBKDF2 in-place."""
+    global _ADMIN_PASSWORD_HASH
+    new_hash = hash_password(plaintext)
+    _ADMIN_PASSWORD_HASH = new_hash
+    logger.info("Upgraded admin password hash from legacy SHA-256 to PBKDF2")
+
+
 @auth_router.post("/auth/login")
 async def login(request: Request) -> Response:
     """Handle login form submission."""
@@ -157,15 +178,21 @@ async def login(request: Request) -> Response:
     password = form.get("password", "")
 
     if username == _ADMIN_USERNAME and verify_password(password, _ADMIN_PASSWORD_HASH):
+        # Migrate legacy SHA-256 hashes to PBKDF2 on successful login
+        if "$" not in _ADMIN_PASSWORD_HASH:
+            _upgrade_password_hash(password)
+
         # Clear failed attempts on success
         with _login_attempts_lock:
             _login_attempts.pop(client_ip, None)
         token = create_session(username)
         response = RedirectResponse(url="/dashboard", status_code=302)
+        is_secure = request.url.scheme == "https"
         response.set_cookie(
             key="session_token",
             value=token,
             httponly=True,
+            secure=is_secure,
             samesite="strict",
             max_age=_SESSION_TTL,
         )

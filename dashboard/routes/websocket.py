@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -24,15 +25,24 @@ logger = logging.getLogger(__name__)
 ws_router = APIRouter(tags=["websocket"])
 
 
+_MAX_WS_CONNECTIONS = 200  # Upper bound on total simultaneous WebSocket connections
+_MAX_WS_MESSAGE_SIZE = 1_048_576  # 1 MB max inbound WebSocket message
+
+
 class ConnectionManager:
     """Manage WebSocket connections for dashboard."""
 
-    def __init__(self):
+    def __init__(self, max_connections: int = _MAX_WS_CONNECTIONS):
         self.active_connections: set[WebSocket] = set()
         self.agent_connections: dict[str, WebSocket] = {}
         self.dashboard_connections: set[WebSocket] = set()
         self.agent_last_seen: dict[str, float] = {}
         self._lock = asyncio.Lock()
+        self.max_connections = max_connections
+
+    def is_full(self) -> bool:
+        """Return True if the connection limit has been reached."""
+        return len(self.active_connections) >= self.max_connections
 
     async def connect_dashboard(self, websocket: WebSocket) -> None:
         """Connect dashboard client."""
@@ -60,21 +70,19 @@ class ConnectionManager:
             self.agent_last_seen[agent_id] = time.time()
             logger.info(f"Agent {agent_id} connected")
 
-    def disconnect(self, websocket: WebSocket) -> None:
+    async def disconnect(self, websocket: WebSocket) -> None:
         """Disconnect client."""
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        async with self._lock:
+            self.active_connections.discard(websocket)
+            self.dashboard_connections.discard(websocket)
 
-        if websocket in self.dashboard_connections:
-            self.dashboard_connections.remove(websocket)
-
-        # Remove from agent connections if present
-        for agent_id, ws in list(self.agent_connections.items()):
-            if ws == websocket:
-                del self.agent_connections[agent_id]
-                self.agent_last_seen[agent_id] = time.time()
-                logger.info(f"Agent {agent_id} disconnected")
-                break
+            # Remove from agent connections if present
+            for agent_id, ws in list(self.agent_connections.items()):
+                if ws == websocket:
+                    del self.agent_connections[agent_id]
+                    self.agent_last_seen[agent_id] = time.time()
+                    logger.info(f"Agent {agent_id} disconnected")
+                    break
 
         logger.info("Client disconnected")
 
@@ -84,21 +92,25 @@ class ConnectionManager:
             await websocket.send_text(message)
 
     async def broadcast_dashboard(self, message: str) -> None:
-        """Broadcast message to all dashboard clients."""
-        disconnected = []
+        """Broadcast message to all dashboard clients concurrently."""
+        connections = list(self.dashboard_connections)
+        if not connections:
+            return
 
-        for connection in list(self.dashboard_connections):
+        async def _safe_send(conn: WebSocket) -> WebSocket | None:
             try:
-                if connection.client_state == WebSocketState.CONNECTED:
-                    await connection.send_text(message)
-                else:
-                    disconnected.append(connection)
+                if conn.client_state == WebSocketState.CONNECTED:
+                    await conn.send_text(message)
+                    return None
+                return conn
             except Exception:
-                disconnected.append(connection)
+                return conn
 
+        results = await asyncio.gather(*[_safe_send(c) for c in connections])
         # Clean up disconnected connections
-        for connection in disconnected:
-            self.disconnect(connection)
+        for conn in results:
+            if conn is not None:
+                await self.disconnect(conn)
 
     async def send_to_agent(self, agent_id: str, message: str) -> bool:
         """Send message to specific agent."""
@@ -154,10 +166,16 @@ def _validate_origin(websocket: WebSocket) -> bool:
         allowed = []
 
     if not allowed:
-        # If no allow-list configured, accept same-host origins
-        host = websocket.headers.get("host", "")
-        # Origin format: scheme://host[:port]
-        return origin.endswith(f"://{host}") if host else True
+        # If no allow-list configured, accept same-host origins.
+        # Parse the Origin URL so we compare host[:port] correctly,
+        # regardless of scheme or default-port omission.
+        host_header = websocket.headers.get("host", "")
+        if not host_header:
+            return True
+        parsed = urlparse(origin)
+        # netloc is host[:port] from the Origin URL
+        origin_netloc = parsed.netloc or ""
+        return origin_netloc == host_header
 
     return origin in allowed
 
@@ -178,16 +196,18 @@ def _validate_session_token(token: str) -> str | None:
     Tries dashboard session tokens first, then falls back to fleet JWT tokens
     so that agents connecting via WebSocket transport can authenticate.
     """
-    from dashboard.auth import _sessions, _SESSION_TTL
+    from dashboard.auth import _sessions, _sessions_lock, _SESSION_TTL
     import time as _time
 
-    # Try dashboard session token first
-    session = _sessions.get(token)
-    if session:
-        if _time.time() - session["created"] > _SESSION_TTL:
-            _sessions.pop(token, None)
-        else:
-            return session["username"]
+    # Try dashboard session token first (must hold the lock – WebSocket handlers
+    # run concurrently with HTTP request handlers that mutate _sessions).
+    with _sessions_lock:
+        session = _sessions.get(token)
+        if session:
+            if _time.time() - session["created"] > _SESSION_TTL:
+                _sessions.pop(token, None)
+            else:
+                return session["username"]
 
     # Fall back to fleet JWT token validation
     try:
@@ -219,6 +239,12 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=4002, reason="Origin not allowed")
         return
 
+    # Connection limit
+    if manager.is_full():
+        await websocket.accept()
+        await websocket.close(code=4008, reason="Connection limit reached")
+        return
+
     # Must accept before sending close with reason (WebSocket protocol)
     token = _extract_ws_token(websocket)
     if not token:
@@ -236,17 +262,20 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
 
     try:
         while True:
-            # Receive message from dashboard
             data = await websocket.receive_text()
 
-            # Process dashboard commands
+            # Reject oversized messages
+            if len(data) > _MAX_WS_MESSAGE_SIZE:
+                logger.warning("Dashboard WS message too large (%d bytes), dropping", len(data))
+                continue
+
             await _process_dashboard_command(data, websocket)
 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"Dashboard WebSocket error: {e}")
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
 
 
 @ws_router.websocket("/ws/agent/{agent_id}")
@@ -258,6 +287,12 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
         await websocket.close(code=4002, reason="Origin not allowed")
         return
 
+    # Connection limit
+    if manager.is_full():
+        await websocket.accept()
+        await websocket.close(code=4008, reason="Connection limit reached")
+        return
+
     # Extract token before accepting so we can reject early
     token = _extract_ws_token(websocket)
 
@@ -265,31 +300,45 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
     if not token:
         await websocket.accept()
         await websocket.close(code=4001, reason="Missing authentication token")
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
         return
 
     agent_user = _validate_session_token(token)
     if not agent_user:
         await websocket.accept()
         await websocket.close(code=4003, reason="Invalid or expired token")
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
+        return
+
+    # For fleet JWT tokens, ensure the authenticated identity matches the URL agent_id
+    # to prevent one agent from connecting as another. Dashboard admin users are allowed
+    # to connect to any agent channel for management purposes.
+    from dashboard.auth import _sessions as _dash_sessions
+    is_dashboard_user = token in _dash_sessions
+    if not is_dashboard_user and agent_user != agent_id:
+        await websocket.accept()
+        await websocket.close(code=4003, reason="Token identity does not match agent_id")
+        await manager.disconnect(websocket)
         return
 
     await manager.connect_agent(websocket, agent_id)
 
     try:
         while True:
-            # Receive message from agent
             data = await websocket.receive_text()
 
-            # Process agent message
+            # Reject oversized messages
+            if len(data) > _MAX_WS_MESSAGE_SIZE:
+                logger.warning("Agent %s WS message too large (%d bytes), dropping", agent_id, len(data))
+                continue
+
             await _process_agent_message(data, agent_id)
 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"Agent {agent_id} WebSocket error: {e}")
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
 
 
 async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
@@ -349,8 +398,10 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
                 }
             )
             success = await manager.send_to_agent(agent_id, message)
+            import secrets as _secrets
             response = {
                 "type": "command_result",
+                "command_id": command.get("command_id") or _secrets.token_hex(8),
                 "success": success,
                 "agent_id": agent_id,
                 "message": message,
@@ -380,10 +431,16 @@ async def _process_agent_message(data: str, agent_id: str) -> None:
 
         # ProtocolMessage uses "payload" key, plain messages use "data".
         # Support both so agents using either transport format work correctly.
+        # Use key-presence checks instead of truthiness so that legitimate
+        # falsy values (e.g. an empty dict {}) are not silently skipped.
         def _get_payload(fallback=None):
             if fallback is None:
                 fallback = {}
-            return message.get("data") or message.get("payload") or fallback
+            if "data" in message:
+                return message["data"]
+            if "payload" in message:
+                return message["payload"]
+            return fallback
 
         if message_type == "heartbeat":
             # Update agent status and last_seen

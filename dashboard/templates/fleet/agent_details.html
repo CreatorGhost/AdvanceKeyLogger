@@ -67,7 +67,7 @@
 </div>
 
 <script>
-const agentId = "{{ agent_id }}";
+const agentId = {{ agent_id|tojson }};
 
 function esc(str) {
     if (!str) return '';
@@ -79,6 +79,7 @@ function esc(str) {
 async function loadAgent() {
     try {
         const res = await fetch(`/api/dashboard/fleet/agents/${agentId}`);
+        if (res.status === 401) { window.location.href = '/login'; return; }
         if (res.ok) {
             const agent = await res.json();
             const statusClass = agent.status.toLowerCase() === 'online' ? 'success' : 'secondary';
@@ -106,6 +107,7 @@ async function loadAgent() {
 async function loadCommands() {
     try {
         const res = await fetch(`/api/dashboard/fleet/agents/${agentId}/commands`);
+        if (res.status === 401) { window.location.href = '/login'; return; }
         if (res.ok) {
             const data = await res.json();
             const tbody = document.querySelector('#commands-table tbody');

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
@@ -35,9 +34,9 @@ def main() -> None:
         settings.set("fleet.database_path", args.fleet_db)
 
     # Configure auth
-    from dashboard.auth import configure_auth
+    from dashboard.auth import configure_auth, hash_password
 
-    password_hash = hashlib.sha256(args.admin_pass.encode()).hexdigest()
+    password_hash = hash_password(args.admin_pass)
     configure_auth(args.admin_user, password_hash)
 
     # Create and run app

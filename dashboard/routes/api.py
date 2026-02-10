@@ -286,18 +286,36 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
     return stats
 
 
+_SENSITIVE_CONFIG_KEYS = {"jwt_secret", "secret_key", "password", "api_key", "token", "private_key"}
+
+
 @api_router.get("/config")
 async def get_config(request: Request) -> dict[str, Any]:
-    """Get current configuration."""
+    """Get current configuration (sensitive values redacted)."""
     _require_api_auth(request)
     try:
         from config.settings import Settings
 
         settings = Settings()
-        return {"config": settings.as_dict()}
+        raw = settings.as_dict()
+        return {"config": _redact_sensitive(raw)}
     except Exception as exc:
         logger.error("Failed to load config: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to load configuration") from exc
+
+
+def _redact_sensitive(obj: Any, _depth: int = 0) -> Any:
+    """Recursively redact values whose keys look sensitive."""
+    if _depth > 10:
+        return obj
+    if isinstance(obj, dict):
+        return {
+            k: ("***REDACTED***" if any(s in k.lower() for s in _SENSITIVE_CONFIG_KEYS) else _redact_sensitive(v, _depth + 1))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_redact_sensitive(item, _depth + 1) for item in obj]
+    return obj
 
 
 @api_router.get("/modules")

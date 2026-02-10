@@ -22,7 +22,15 @@ class DashboardWebSocket {
 
     _buildWsUrl(path) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${window.location.host}${path}`;
+        let url = `${protocol}//${window.location.host}${path}`;
+
+        // Extract session_token cookie and pass as query param for WS auth
+        const match = document.cookie.match(/(?:^|;\s*)session_token=([^;]*)/);
+        if (match) {
+            url += `?token=${encodeURIComponent(match[1])}`;
+        }
+
+        return url;
     }
 
     connect() {
@@ -254,7 +262,7 @@ class LiveDashboard {
         this._updateConnectedAgentsCount();
 
         // Update existing agent row in fleet table if visible
-        const agentRow = document.querySelector(`[data-agent-id="${data.agent_id}"]`);
+        const agentRow = document.querySelector(`[data-agent-id="${CSS.escape(data.agent_id)}"]`);
         if (agentRow) {
             const statusCell = agentRow.querySelector('.agent-status');
             if (statusCell) {
@@ -321,7 +329,8 @@ class LiveDashboard {
         console.log('[Live] Command result:', data);
 
         // Update command status in UI if visible
-        const cmdRow = document.querySelector(`[data-command-id="${data.command_id}"]`);
+        const cmdId = data.command_id || '';
+        const cmdRow = cmdId ? document.querySelector(`[data-command-id="${CSS.escape(cmdId)}"]`) : null;
         if (cmdRow) {
             const statusCell = cmdRow.querySelector('.command-status');
             if (statusCell) {
@@ -648,8 +657,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const isLivePage = window.location.pathname.includes('/live') ||
                        document.body.dataset.enableWebsocket === 'true';
 
-    if (isLivePage) {
+    if (isLivePage && !liveDashboard) {
         liveDashboard = new LiveDashboard();
+        // Also expose on window so inline template scripts (live.html) can access it
+        window.liveDashboard = liveDashboard;
         liveDashboard.init();
         console.log('[WS] Live dashboard initialized');
     }
