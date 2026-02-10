@@ -195,6 +195,23 @@ class WebSocketTransport(BaseTransport):
             return
 
         try:
+            # Cancel the _receive_task so _receive_loop stops reliably
+            if self._loop and self._receive_task is not None:
+                try:
+                    async def _cancel_receive() -> None:
+                        task = self._receive_task
+                        if task is not None:
+                            task.cancel()
+                            try:
+                                await task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+
+                    future = asyncio.run_coroutine_threadsafe(_cancel_receive(), self._loop)
+                    future.result(timeout=5.0)
+                except Exception as e:
+                    logger.debug("Error cancelling receive task: %s", e)
+
             if self._loop and self._websocket:
                 future = asyncio.run_coroutine_threadsafe(self._websocket.close(), self._loop)
                 future.result(timeout=5.0)

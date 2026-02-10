@@ -278,6 +278,74 @@ def _cleanup_files(file_paths: list[str]) -> None:
             logger.warning("Failed to remove %s: %s", filepath, exc)
 
 
+def _legacy_sync(
+    batch_items: list[dict[str, Any]],
+    batch_ids: list[int],
+    transport: Any,
+    breaker: Any,
+    sqlite_store: Any,
+    queue: Any,
+    storage_manager: Any,
+    config: dict[str, Any],
+    sys_info: dict[str, Any],
+    data_dir: str,
+    e2e_protocol: Any,
+    args: Any,
+) -> None:
+    """Original sync path (used when the SyncEngine is disabled)."""
+    if not batch_items:
+        return
+
+    if hasattr(transport, "preflight"):
+        try:
+            if not transport.preflight():
+                logger.warning("Transport health check failed; skipping send")
+                if sqlite_store is None:
+                    queue.requeue(batch_items)
+                return
+        except Exception as exc:
+            logger.warning("Transport preflight error: %s", exc)
+            if sqlite_store is None:
+                queue.requeue(batch_items)
+            return
+
+    if args.dry_run:
+        logger.info("Dry run: captured %d items", len(batch_items))
+        if sqlite_store is None:
+            queue.requeue(batch_items)
+        return
+
+    if not breaker.can_proceed():
+        logger.warning("Circuit open, skipping send")
+        if sqlite_store is None:
+            queue.requeue(batch_items)
+        return
+
+    payload, metadata, file_paths = _build_report_bundle(batch_items, config, sys_info)
+    payload, metadata = _apply_encryption(
+        payload, metadata, config, data_dir, e2e_protocol=e2e_protocol
+    )
+
+    try:
+        success = transport.send(payload, metadata)
+    except Exception as exc:
+        logger.error("Transport send failed: %s", exc)
+        success = False
+
+    if success:
+        breaker.record_success()
+        if sqlite_store is not None:
+            sqlite_store.mark_sent(batch_ids)
+            purge_age = config.get("storage", {}).get("purge_sent_after_seconds", 86400)
+            sqlite_store.purge_sent(older_than_seconds=purge_age)
+        _cleanup_files(file_paths)
+        storage_manager.rotate()
+    else:
+        breaker.record_failure()
+        if sqlite_store is None:
+            queue.requeue(batch_items)
+
+
 def _items_from_sqlite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[int]]:
     items = []
     ids: list[int] = []
@@ -564,6 +632,27 @@ def main() -> int:
         cooldown=float(settings.get("transport.cooldown", 60)),
     )
 
+    # --- Sync engine (offline-first) ---
+    sync_engine = None
+    if config.get("sync", {}).get("enabled", False) and sqlite_store is not None:
+        try:
+            from sync import SyncEngine
+
+            sync_engine = SyncEngine(
+                config=config,
+                sqlite_store=sqlite_store,
+                transport=transport,
+                build_payload=_build_report_bundle,
+                apply_encryption=_apply_encryption,
+                sys_info=sys_info,
+                e2e_protocol=e2e_protocol if "e2e_protocol" in dir() else None,
+            )
+            sync_engine.start()
+            logger.info("Sync engine started (mode=%s)", config.get("sync", {}).get("mode", "immediate"))
+        except Exception as exc:
+            logger.warning("Failed to start sync engine, falling back to basic sync: %s", exc)
+            sync_engine = None
+
     # --- Graceful shutdown handler ---
     shutdown = GracefulShutdown()
 
@@ -754,66 +843,33 @@ def main() -> int:
                 if queue_items:
                     queue.enqueue_many(queue_items)
 
-                pending_rows = sqlite_store.get_pending(limit=batch_size)
-                batch_items, batch_ids = _items_from_sqlite(pending_rows)
+                # ── Sync: use SyncEngine if available, else fallback ──
+                if sync_engine is not None:
+                    # SyncEngine handles batching, retry, checkpointing, and
+                    # marking sent internally — single call replaces the old
+                    # get_pending → send → mark_sent pipeline.
+                    sync_engine.process_pending()
+                else:
+                    pending_rows = sqlite_store.get_pending(limit=batch_size)
+                    batch_items, batch_ids = _items_from_sqlite(pending_rows)
+                    if batch_items:
+                        _legacy_sync(
+                            batch_items, batch_ids, transport, breaker,
+                            sqlite_store, queue, storage_manager, config,
+                            sys_info, data_dir, e2e_protocol, args,
+                        )
             else:
                 if collected:
                     queue.enqueue_many(collected)
                 batch_items = queue.drain(batch_size=batch_size)
                 batch_ids = []
 
-            if not batch_items:
-                continue
-
-            if hasattr(transport, "preflight"):
-                try:
-                    if not transport.preflight():
-                        logger.warning("Transport health check failed; skipping send")
-                        if sqlite_store is None:
-                            queue.requeue(batch_items)
-                        continue
-                except Exception as exc:
-                    logger.warning("Transport preflight error: %s", exc)
-                    if sqlite_store is None:
-                        queue.requeue(batch_items)
-                    continue
-
-            if args.dry_run:
-                logger.info("Dry run: captured %d items", len(batch_items))
-                if sqlite_store is None:
-                    queue.requeue(batch_items)
-                continue
-
-            if not breaker.can_proceed():
-                logger.warning("Circuit open, skipping send")
-                if sqlite_store is None:
-                    queue.requeue(batch_items)
-                continue
-
-            payload, metadata, file_paths = _build_report_bundle(batch_items, config, sys_info)
-            payload, metadata = _apply_encryption(
-                payload, metadata, config, data_dir, e2e_protocol=e2e_protocol
-            )
-
-            try:
-                success = transport.send(payload, metadata)
-            except Exception as exc:
-                logger.error("Transport send failed: %s", exc)
-                success = False
-
-            if success:
-                breaker.record_success()
-                if sqlite_store is not None:
-                    sqlite_store.mark_sent(batch_ids)
-                    # Purge old sent records to prevent unbounded database growth
-                    purge_age = config.get("storage", {}).get("purge_sent_after_seconds", 86400)
-                    sqlite_store.purge_sent(older_than_seconds=purge_age)
-                _cleanup_files(file_paths)
-                storage_manager.rotate()
-            else:
-                breaker.record_failure()
-                if sqlite_store is None:
-                    queue.requeue(batch_items)
+                if batch_items:
+                    _legacy_sync(
+                        batch_items, batch_ids, transport, breaker,
+                        sqlite_store, queue, storage_manager, config,
+                        sys_info, data_dir, e2e_protocol, args,
+                    )
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received")
@@ -830,6 +886,12 @@ def main() -> int:
 
     if pid_lock:
         pid_lock.release()
+
+    if sync_engine is not None:
+        try:
+            sync_engine.stop()
+        except Exception:
+            pass
 
     if sqlite_store is not None:
         sqlite_store.close()

@@ -218,11 +218,8 @@ async def register_agent(
             tags=tags,
         )
 
-        # Register with controller (persists to DB).
-        # Wrapped in to_thread because the storage call blocks.
-        await asyncio.to_thread(
-            controller.register_agent, metadata, None, req.public_key.encode()
-        )
+        # Register with controller (async — handles storage I/O internally).
+        await controller.register_agent(metadata, None, req.public_key.encode())
 
         # Generate tokens
         tokens = auth_service.create_tokens(req.agent_id)
@@ -252,7 +249,7 @@ async def register_agent(
                 # Roll back the registration so the agent can retry cleanly.
                 logger.error("Token JTI persistence failed, rolling back registration: %s", tok_exc)
                 try:
-                    controller.unregister_agent(req.agent_id)
+                    await asyncio.to_thread(controller.unregister_agent, req.agent_id)
                 except Exception:
                     pass
                 raise HTTPException(
@@ -323,15 +320,14 @@ async def get_commands(
     controller: FleetController = Depends(get_controller),
 ):
     """Poll for pending commands."""
-    # This requires controller to expose get_pending_commands
-    # For now, we'll implement a simple fetch from DB via controller logic
-    # or expose access to storage
+    # Acquire the controller lock to safely read command_queues and mutate
+    # command status — other code paths (_process_commands, _cleanup_loop,
+    # handle_command_response) all hold this lock for the same state.
+    async with controller._lock:
+        queue = controller.command_queues.get(agent_id)
+        if not queue:
+            return {"commands": []}
 
-    # Check command queue in memory
-    queue = controller.command_queues.get(agent_id)
-    commands = []
-
-    if queue:
         # Drain all available commands from the queue
         drained: list[tuple[int, int, Any]] = []
         while True:
@@ -341,25 +337,27 @@ async def get_commands(
                 break
             drained.append(entry)
 
+        commands = []
         for _priority, _seq, cmd in drained:
             commands.append(cmd.to_dict())
 
             # Update status to SENT (use .get() to guard against concurrent cleanup).
-            # Wrap DB update in try/except so that a storage failure does not
-            # prevent the commands from being returned to the agent — the commands
-            # have already been dequeued, so we must deliver them regardless.
             tracked_cmd = controller.commands.get(cmd.command_id)
             if tracked_cmd is not None:
                 tracked_cmd.status = CommandStatus.SENT
-            try:
-                await asyncio.to_thread(
-                    controller.storage.update_command_status, cmd.command_id, "sent"
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to persist SENT status for command %s: %s",
-                    cmd.command_id, exc,
-                )
+
+    # Persist status updates outside the lock — DB I/O can be slow and the
+    # commands have already been dequeued, so we must deliver them regardless.
+    for _priority, _seq, cmd in drained:
+        try:
+            await asyncio.to_thread(
+                controller.storage.update_command_status, cmd.command_id, "sent"
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist SENT status for command %s: %s",
+                cmd.command_id, exc,
+            )
 
     return {"commands": commands}
 

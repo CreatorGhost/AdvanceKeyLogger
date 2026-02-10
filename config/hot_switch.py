@@ -117,16 +117,16 @@ class HotSwitch:
             else {}
         )
 
-        # Save snapshot for rollback
-        self._history.append(copy.deepcopy(old_config))
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history:]
-
-        # Determine which top-level keys changed
+        # Determine which top-level keys changed — skip no-op applies
         changed_keys = _diff_keys(old_config, new_config)
         if not changed_keys:
             logger.info("Hot-switch: no effective changes (%s)", reason)
             return True
+
+        # Save snapshot for rollback only when there are real changes
+        self._history.append(copy.deepcopy(old_config))
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history:]
 
         logger.info(
             "Hot-switch applying %s — changed keys: %s",
@@ -138,12 +138,15 @@ class HotSwitch:
 
         # Notify matching listeners
         failed: list[str] = []
+        succeeded: list[tuple[str, ChangeListener]] = []
         for pattern, listener in self._listeners:
             if any(fnmatch.fnmatch(k, pattern) for k in changed_keys):
                 try:
                     ok = listener(old_config, new_config)
                     if not ok:
                         failed.append(pattern)
+                    else:
+                        succeeded.append((pattern, listener))
                 except Exception as exc:
                     logger.error("Listener '%s' raised: %s", pattern, exc)
                     failed.append(pattern)
@@ -153,6 +156,15 @@ class HotSwitch:
                 "Hot-switch rollback: %d listener(s) failed: %s",
                 len(failed), failed,
             )
+            # Re-notify already-succeeded listeners with swapped args to revert
+            for pattern, listener in succeeded:
+                try:
+                    listener(new_config, old_config)
+                except Exception as exc:
+                    logger.error(
+                        "Listener '%s' raised during rollback re-notify: %s",
+                        pattern, exc,
+                    )
             self._replace_config(old_config)
             return False
 

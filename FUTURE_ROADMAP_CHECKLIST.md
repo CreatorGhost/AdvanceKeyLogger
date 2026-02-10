@@ -11,7 +11,7 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 - [x] 5. End-to-End Encrypted Transport with Asymmetric Key Exchange
 - [x] 6. Distributed Fleet Management (Agent-Controller Architecture)
 - [x] 7. Adaptive Capture Intelligence
-- [ ] 8. Offline-First Sync Engine with Conflict Resolution
+- [x] 8. Offline-First Sync Engine with Conflict Resolution
 - [ ] 9. Session Recording & Visual Replay
 - [ ] 10. Natural Language Search
 - [x] 11. Configuration Profiles & Hot-Switching
@@ -28,7 +28,7 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Completed Features (1-7, 11-12, Plugin System)
+## Completed Features (1-8, 11-12, Plugin System)
 
 ### 1. Event-Driven Rule Engine with Custom DSL
 - **Status**: Completed
@@ -222,36 +222,78 @@ Track implementation status for FUTURE_ROADMAP.md features (20 total).
 
 ---
 
-## Planned Features (8-10, 13-20) — Not Yet Implemented
+### 8. Offline-First Sync Engine with Conflict Resolution
+- **Status**: Completed
+- **Location**: `sync/` package (5 modules)
+- **Description**: Comprehensive offline-first sync pipeline replacing the basic get_pending/send/mark_sent loop with priority queuing, adaptive batching, checkpointing, connectivity awareness, and conflict resolution.
+
+#### Implemented Components:
+
+**Sync Ledger (`sync/ledger.py`)**:
+- Per-record state machine: PENDING -> QUEUED -> IN_FLIGHT -> SYNCED | FAILED | DEAD
+- Retry tracking with exponential backoff (attempt_count, next_retry_at)
+- Content-hash fingerprinting (SHA-256) for deduplication and delta skip
+- Batch grouping with batch_id for atomic send/fail operations
+- Priority tiers: CRITICAL (commands, config), NORMAL (keystrokes), LOW (screenshots)
+- Monotonic sequence numbers for ordering guarantees
+- Non-breaking: separate sync_ledger table alongside existing captures table
+
+**Connectivity Monitor (`sync/connectivity.py`)**:
+- Background daemon thread probing network availability
+- Network type detection: WiFi / cellular / wired / VPN / offline (via psutil)
+- Latency probing via TCP connect to transport endpoint
+- Bandwidth estimation from recent send throughput
+- Jitter tracking (latency variance) for stability assessment
+- Per-network-type sync policies (batch limits, intervals)
+- Backpressure signal when local DB exceeds configurable threshold
+- Callback registration for connect/disconnect transitions
+
+**Checkpoint Manager (`sync/checkpoint.py`)**:
+- Per-batch checkpoints written before send (manifest of record IDs, digest)
+- Crash recovery on startup: scans incomplete checkpoints, re-queues records
+- Partial acknowledgment: supports split success (records 1-30 ok, 31-50 failed)
+- Progress reporting: get_progress() returns percent complete for dashboard
+- Automatic checkpoint pruning after configurable retention period
+
+**Conflict Resolver (`sync/conflict_resolver.py`)**:
+- Pluggable strategy pattern with 4 built-in strategies:
+  - LastWriterWins (timestamp comparison, default)
+  - ServerWins (always accept remote)
+  - ClientWins (always keep local)
+  - MergeFields (field-level merge for dict records)
+- Content-hash deduplication (skip false conflicts)
+- Conflict journal in sync_conflicts table (both versions, strategy, outcome)
+- Auto-resolve for append-only captures; queue mutable config conflicts for review
+- Rollback support: each resolution stores undo data
+- Custom strategy registration for plugins
+
+**Sync Engine (`sync/engine.py`)**:
+- State machine: IDLE -> SYNCING -> PAUSED -> ERROR with automatic transitions
+- Adaptive batch sizing: grows on success (+25%), shrinks on failure (halve)
+- zlib compression with skip threshold (don't compress < 1KB)
+- SHA-256 integrity digest per batch payload
+- Rolling health metrics: success rate, avg latency, throughput, queue depth
+- Graceful degradation: exponential backoff (2s -> 4s -> ... -> 5min cap)
+- Connectivity-aware: pauses when offline, resumes on reconnect
+- Scheduling modes: immediate, interval, manual
+- Drop-in replacement: process_pending() replaces the old main loop sync block
+- force_sync() API for fleet commands ("sync now")
+
+**Configuration (`config/default_config.yaml`)**:
+- Full `sync:` config section with mode, batch sizes, compression, retry, connectivity policies
+
+**Main Loop Integration (`main.py`)**:
+- SyncEngine initialised alongside transport with fallback to legacy sync
+- Single `sync_engine.process_pending()` call replaces ~60 lines of old sync code
+- Graceful shutdown: `sync_engine.stop()` in cleanup section
+
+---
+
+## Planned Features (9-10, 13-20) — Not Yet Implemented
 
 > **Note**: The following features are planned for future development. None of the
 > listed files or directories exist yet. Each section describes the intended design
 > and the files that will need to be created.
-
-### 8. Offline-First Sync Engine with Conflict Resolution
-- **Status**: Planned
-- **Description**: Operate fully offline and sync captured data when connectivity is available.
-
-#### Planned Components:
-**Sync Engine (`sync/offline_sync.py`)** — to be created:
-- [ ] Local-first data storage with SQLite WAL mode
-- [ ] Delta-based change tracking and compression
-- [ ] Priority-based sync queue (critical data first)
-- [ ] Bandwidth-adaptive transfer protocols
-- [ ] Resumable transfers with checkpointing
-
-**Conflict Resolution (`sync/conflict_resolver.py`)** — to be created:
-- [ ] Last-writer-wins with timestamp verification
-- [ ] Merge strategy for overlapping capture windows
-- [ ] Duplicate detection and deduplication
-- [ ] Automatic conflict classification (safe vs. needs review)
-- [ ] Rollback capability for failed sync operations
-
-**Connectivity Monitor (`sync/connectivity.py`)** — to be created:
-- [ ] Network availability detection
-- [ ] Connection quality assessment (latency, bandwidth)
-- [ ] Automatic sync triggering when connectivity restored
-- [ ] Configurable sync schedules (e.g., only on WiFi)
 
 ### 9. Session Recording & Visual Replay
 - **Status**: Planned

@@ -40,25 +40,34 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
         self.max_connections = max_connections
 
-    async def connect_dashboard(self, websocket: WebSocket) -> None:
-        """Connect dashboard client (with connection limit check under lock)."""
+    async def connect_dashboard(self, websocket: WebSocket) -> bool:
+        """Connect dashboard client (with connection limit check under lock).
+
+        Returns True if the connection was accepted and added, False if the
+        limit was reached (socket accepted then immediately closed).
+        """
         async with self._lock:
             if len(self.active_connections) >= self.max_connections:
                 await websocket.accept()
                 await websocket.close(code=4008, reason="Connection limit reached")
-                return
+                return False
             await websocket.accept()
             self.active_connections.add(websocket)
             self.dashboard_connections.add(websocket)
         logger.info("Dashboard client connected")
+        return True
 
-    async def connect_agent(self, websocket: WebSocket, agent_id: str) -> None:
-        """Connect agent client, gracefully closing any previous connection."""
+    async def connect_agent(self, websocket: WebSocket, agent_id: str) -> bool:
+        """Connect agent client, gracefully closing any previous connection.
+
+        Returns True if the connection was accepted and added, False if the
+        limit was reached (socket accepted then immediately closed).
+        """
         async with self._lock:
             if len(self.active_connections) >= self.max_connections:
                 await websocket.accept()
                 await websocket.close(code=4008, reason="Connection limit reached")
-                return
+                return False
             # Close existing connection for this agent if present
             previous = self.agent_connections.get(agent_id)
             if previous is not None:
@@ -74,6 +83,7 @@ class ConnectionManager:
             self.agent_connections[agent_id] = websocket
             self.agent_last_seen[agent_id] = time.time()
             logger.info(f"Agent {agent_id} connected")
+        return True
 
     async def disconnect(self, websocket: WebSocket) -> None:
         """Disconnect client."""
@@ -133,8 +143,17 @@ class ConnectionManager:
         async with self._lock:
             websocket = self.agent_connections.get(agent_id)
         if websocket and websocket.client_state == WebSocketState.CONNECTED:
-            await websocket.send_text(message)
-            return True
+            try:
+                await websocket.send_text(message)
+                return True
+            except (WebSocketDisconnect, Exception) as exc:
+                logger.warning("send_to_agent(%s) failed: %s", agent_id, exc)
+                # Clean up stale connection
+                async with self._lock:
+                    if self.agent_connections.get(agent_id) is websocket:
+                        del self.agent_connections[agent_id]
+                    self.active_connections.discard(websocket)
+                return False
         return False
 
     async def get_dashboard_clients(self) -> int:
@@ -270,8 +289,10 @@ async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=4003, reason="Invalid or expired token")
         return
 
-    # connect_dashboard now checks the connection limit atomically under the lock.
-    await manager.connect_dashboard(websocket)
+    # connect_dashboard checks the connection limit atomically under the lock.
+    connected = await manager.connect_dashboard(websocket)
+    if not connected:
+        return
 
     try:
         while True:
@@ -333,8 +354,10 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
         await manager.disconnect(websocket)
         return
 
-    # connect_agent now checks the connection limit atomically under the lock.
-    await manager.connect_agent(websocket, agent_id)
+    # connect_agent checks the connection limit atomically under the lock.
+    connected = await manager.connect_agent(websocket, agent_id)
+    if not connected:
+        return
 
     try:
         while True:

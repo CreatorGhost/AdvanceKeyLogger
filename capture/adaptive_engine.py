@@ -92,6 +92,15 @@ class AdaptiveEngine:
         self._burst_interval = float(cfg.get("burst_interval", 0.25))
         self._base_interval = float(cfg.get("base_interval", 1.0))
 
+        # Prime psutil's internal CPU counter so the first evaluate() call
+        # doesn't see 0.0%.  cpu_percent(interval=None) is non-blocking and
+        # simply seeds the internal "last" reading.
+        try:
+            import psutil
+            psutil.cpu_percent(interval=None)
+        except ImportError:
+            pass
+
         # Smoothing: keep a rolling window of system snapshots
         self._history: list[SystemSnapshot] = []
         self._max_history = 30  # ~30 seconds at 1 Hz
@@ -199,7 +208,15 @@ def take_system_snapshot() -> SystemSnapshot:
 
         snap.cpu_percent = psutil.cpu_percent(interval=0)
         snap.memory_percent = psutil.virtual_memory().percent
-        snap.disk_percent = psutil.disk_usage("/").percent
+
+        # Use the root partition's mount point for cross-platform disk reporting.
+        # On Windows psutil.disk_partitions() returns "C:\\" etc.; on Unix "/".
+        try:
+            partitions = psutil.disk_partitions()
+            root_mount = partitions[0].mountpoint if partitions else "/"
+            snap.disk_percent = psutil.disk_usage(root_mount).percent
+        except Exception:
+            snap.disk_percent = psutil.disk_usage("/").percent
 
         if hasattr(psutil, "sensors_battery"):
             bat = psutil.sensors_battery()

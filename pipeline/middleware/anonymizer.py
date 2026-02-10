@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 _BUILTIN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("email", re.compile(
-        r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Z|a-z]{2,}\b"
+        r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"
     )),
     ("credit_card", re.compile(
         r"\b(?:\d[ \-]*?){13,19}\b"
@@ -65,7 +65,9 @@ _BUILTIN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         r"\b\d{3}[\- ]?\d{2}[\- ]?\d{4}\b"
     )),
     ("phone", re.compile(
-        r"(?:\+?\d{1,3}[\s\-]?)?\(?\d{2,4}\)?[\s\-]?\d{3,4}[\s\-]?\d{3,4}\b"
+        r"(?:\+\d{1,3}[\s\-]?|\b)\(?(?:\d{2,4})\)[\s\-]?\d{3,4}[\s\-]?\d{3,4}\b"
+        r"|"
+        r"\+\d{1,3}[\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}\b"
     )),
     ("ipv4", re.compile(
         r"\b(?:\d{1,3}\.){3}\d{1,3}\b"

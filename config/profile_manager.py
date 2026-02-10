@@ -117,11 +117,12 @@ class ProfileManager:
     # ------------------------------------------------------------------
 
     def _load_profile(self, name: str, raw: dict[str, Any]) -> Profile:
-        extends = raw.pop("extends", None)
-        description = raw.pop("description", "")
+        data = dict(raw)  # shallow copy to avoid mutating the caller's dict
+        extends = data.pop("extends", None)
+        description = data.pop("description", "")
         profile = Profile(
             name=name,
-            overrides=raw,
+            overrides=data,
             description=description,
             extends=extends,
         )
