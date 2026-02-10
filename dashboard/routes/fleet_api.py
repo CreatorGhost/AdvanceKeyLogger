@@ -4,6 +4,7 @@ Fleet management API endpoints for agents.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 
 from fleet.auth import FleetAuth
 from fleet.controller import FleetController
-from agent_controller import AgentMetadata, AgentCapabilities, AgentStatus
+from agent_controller import AgentMetadata, AgentCapabilities, AgentStatus, CommandStatus
 from utils.crypto import verify_with_public_key
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,8 @@ async def register_agent(
         ip = request.client.host if request.client else "0.0.0.0"
 
         # Build tags set, including enrollment key if provided
+        # TODO: Validate enrollment key against a configured allow-list before
+        # accepting the registration. Currently the key is stored but not verified.
         tags: set[str] = set()
         if req.enrollment_key:
             tags.add(f"enrollment_key:{req.enrollment_key}")
@@ -206,7 +209,7 @@ async def register_agent(
 
     except Exception as e:
         logger.error(f"Registration failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Registration failed") from e
 
 
 @router.post("/heartbeat")
@@ -224,19 +227,29 @@ async def heartbeat(
         config.get("fleet", {}).get("security", {}).get("require_signature_verification", False)
     )
 
-    if require_sig and x_signature:
+    if require_sig:
+        if not x_signature:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing X-Signature header (signature verification enabled)",
+            )
         agent_data = controller.storage.get_agent(agent_id)
-        if agent_data and agent_data.get("public_key"):
-            body = await request.body()
-            try:
-                signature = base64.b64decode(x_signature)
-                public_key_pem = agent_data["public_key"].encode("utf-8")
-                if not verify_with_public_key(public_key_pem, body, signature):
-                    raise HTTPException(status_code=401, detail="Invalid signature")
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"Signature verification error: {e}")
+        if not agent_data or not agent_data.get("public_key"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Agent public key not found",
+            )
+        body = await request.body()
+        try:
+            signature = base64.b64decode(x_signature)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid signature encoding (expected base64)",
+            )
+        public_key_pem = agent_data["public_key"].encode("utf-8")
+        if not verify_with_public_key(public_key_pem, body, signature):
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
     await controller.handle_heartbeat(agent_id, req.model_dump())
     return {"status": "ok"}
@@ -256,41 +269,19 @@ async def get_commands(
     queue = controller.command_queues.get(agent_id)
     commands = []
 
-    if queue and not queue.empty():
-        # Get all available commands
-        while not queue.empty():
+    if queue:
+        # Drain all available commands from the queue
+        while True:
             try:
-                # We peek/get but only if we can confirm delivery?
-                # Ideally we peek, return, and ack later.
-                # Or we return and mark as SENT.
                 priority, seq, cmd = queue.get_nowait()
-                # Encrypt command for agent
-                # Since we are using REST, we might skip full encryption if TLS is used
-                # But Gap 4 says "Secure Channel".
-                # So we should return the encrypted blob that _send_command_to_agent would produce.
-
-                # However, _send_command_to_agent sends directly via transport.
-                # Here we want to RETURN the command payload.
-
-                # For MVP, let's return the command object and let the agent handle it.
-                # If we want encryption, we need to invoke controller logic to encrypt it.
-
-                # Let's trust TLS for now (Gap 4 mentions "RSA keys ... never exposed").
-                # If we rely on TLS, we don't need app-level encryption for confidentiality,
-                # but we need signatures for integrity/auth.
-
-                # Let's return the raw command dict for now,
-                # assuming agent will verify signature if we add it.
-                commands.append(cmd.to_dict())
-
-                # Update status to SENT
-                from agent_controller import CommandStatus
-
-                controller.commands[cmd.command_id].status = CommandStatus.SENT
-                controller.storage.update_command_status(cmd.command_id, "sent")
-
-            except Exception:
+            except asyncio.QueueEmpty:
                 break
+
+            commands.append(cmd.to_dict())
+
+            # Update status to SENT
+            controller.commands[cmd.command_id].status = CommandStatus.SENT
+            controller.storage.update_command_status(cmd.command_id, "sent")
 
     # Also check DB for any pending commands that might have been loaded but not in queue?
     # (Memory queue should be source of truth for active controller)
@@ -314,19 +305,29 @@ async def command_response(
         config.get("fleet", {}).get("security", {}).get("require_signature_verification", False)
     )
 
-    if require_sig and x_signature:
+    if require_sig:
+        if not x_signature:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing X-Signature header (signature verification enabled)",
+            )
         agent_data = controller.storage.get_agent(agent_id)
-        if agent_data and agent_data.get("public_key"):
-            body = await request.body()
-            try:
-                signature = base64.b64decode(x_signature)
-                public_key_pem = agent_data["public_key"].encode("utf-8")
-                if not verify_with_public_key(public_key_pem, body, signature):
-                    raise HTTPException(status_code=401, detail="Invalid signature")
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"Signature verification error: {e}")
+        if not agent_data or not agent_data.get("public_key"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Agent public key not found",
+            )
+        body = await request.body()
+        try:
+            signature = base64.b64decode(x_signature)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid signature encoding (expected base64)",
+            )
+        public_key_pem = agent_data["public_key"].encode("utf-8")
+        if not verify_with_public_key(public_key_pem, body, signature):
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
     await controller.handle_command_response(agent_id, cmd_id, req.model_dump())
     return {"status": "received"}

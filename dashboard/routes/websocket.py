@@ -168,7 +168,7 @@ def _validate_session_token(token: str) -> str | None:
                 "jwt_secret", "CHANGE_ME_IN_PRODUCTION"
             )
             auth = FleetAuth(jwt_secret)
-            agent_id = auth.verify_token(token, token_type="access")
+            agent_id = auth.verify_token(token, expected_type="access")
             if agent_id:
                 return agent_id
     except ImportError:
@@ -460,13 +460,9 @@ async def _handle_capture_data(agent_id: str, capture_data: dict[str, Any]) -> N
     # Persist to storage if available
     if _storage is not None:
         try:
-            _storage.store(
-                {
-                    "capture_type": capture_type,
-                    "data": data,
-                    "timestamp": time.time(),
-                    "metadata": {"agent_id": agent_id, **capture_data.get("metadata", {})},
-                }
+            _storage.insert(
+                capture_type=capture_type,
+                data=str(data),
             )
             logger.debug(f"Agent {agent_id} capture stored (type={capture_type})")
         except Exception as e:

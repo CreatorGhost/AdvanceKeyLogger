@@ -167,6 +167,15 @@ class Settings:
         if self.get("fleet.enabled"):
             secret = self.get("fleet.auth.jwt_secret")
             if not secret or secret == "CHANGE_ME_IN_PRODUCTION":
-                logger.warning(
-                    "Fleet enabled with default/empty JWT secret. PLEASE CHANGE IN PRODUCTION."
-                )
+                allow_default = self.get("fleet.auth.allow_default_secret", False)
+                if allow_default:
+                    logger.warning(
+                        "Fleet enabled with default/empty JWT secret. "
+                        "PLEASE CHANGE IN PRODUCTION (allow_default_secret=true)."
+                    )
+                else:
+                    raise RuntimeError(
+                        "Fleet is enabled but JWT secret is not configured. "
+                        "Set fleet.auth.jwt_secret to a strong random value (32+ chars). "
+                        "For development, set fleet.auth.allow_default_secret to true."
+                    )

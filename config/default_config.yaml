@@ -225,6 +225,9 @@ fleet:
 
   auth:
     jwt_secret: "CHANGE_ME_IN_PRODUCTION"  # 32+ char secret
+    # Set to true explicitly for development/testing to allow the default JWT secret.
+    # In production, this must remain false and a real secret must be configured.
+    allow_default_secret: false
     access_token_ttl_minutes: 15
     refresh_token_ttl_days: 7
     # NOTE: max_failed_attempts and lockout_minutes are defined but not yet enforced

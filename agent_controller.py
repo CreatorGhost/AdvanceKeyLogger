@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
+import requests
+
 from transport.base import BaseTransport
 from transport.http_transport import HttpTransport
 from utils.crypto import (
@@ -810,20 +812,28 @@ class Agent:
                             response = await self.handle_command(data)
                             if transport and response:
                                 transport.send(response)
+                        else:
+                            # receive() returned None/empty quickly (e.g. not connected);
+                            # sleep to avoid busy-waiting
+                            await asyncio.sleep(poll_interval)
                     except asyncio.TimeoutError:
-                        continue  # No message received, loop again
+                        # Already waited poll_interval seconds inside wait_for;
+                        # no additional sleep needed, just loop back
+                        continue
 
                 elif commands_endpoint and transport:
                     # HTTP polling mode: periodically fetch commands
                     # This requires the transport to support GET requests
                     # or a separate HTTP client for polling
-                    import requests
-
                     try:
-                        resp = requests.get(
-                            str(commands_endpoint),
-                            headers={"Content-Type": "application/json"},
-                            timeout=10,
+                        loop = asyncio.get_running_loop()
+                        resp = await loop.run_in_executor(
+                            None,
+                            lambda: requests.get(
+                                str(commands_endpoint),
+                                headers={"Content-Type": "application/json"},
+                                timeout=10,
+                            ),
                         )
                         if resp.status_code == 200:
                             commands = resp.json().get("commands", [])

@@ -70,7 +70,8 @@ class FleetController(Controller):
                     self.commands[cmd.command_id] = cmd
                     queue = self.command_queues.get(agent_id)
                     if queue:
-                        await queue.put((cmd.priority.value, 0, cmd))
+                        seq = next(self._command_counter)
+                        await queue.put((cmd.priority.value, seq, cmd))
                 except Exception as e:
                     logger.error(f"Failed to re-queue command {cmd_data.get('id')}: {e}")
 

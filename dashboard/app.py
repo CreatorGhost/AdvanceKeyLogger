@@ -64,8 +64,8 @@ async def lifespan(app: FastAPI):
             jwt_secret = settings.get("fleet.auth.jwt_secret", "change-me-in-production")
             auth_service = FleetAuth(jwt_secret)
 
-            # Controller config
-            controller_config = settings.get("fleet.controller", {})
+            # Controller config - copy to avoid mutating Settings._config
+            controller_config = dict(settings.get("fleet.controller", {}))
             controller_config.update(settings.get("fleet.auth", {}))
 
             controller = FleetController(controller_config, fleet_storage)
@@ -86,7 +86,11 @@ async def lifespan(app: FastAPI):
 
         except Exception as e:
             logger.error(f"Failed to start fleet controller: {e}")
-            # Don't crash app if fleet fails
+            # Don't crash app if fleet fails — close FleetStorage to prevent leak
+            try:
+                fleet_storage.close()
+            except Exception:
+                pass
             app.state.fleet_controller = None
             # Still set SQLite storage for WebSocket handlers even if fleet fails
             if sqlite_storage:

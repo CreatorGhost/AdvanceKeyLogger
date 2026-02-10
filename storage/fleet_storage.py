@@ -5,9 +5,11 @@ SQLite-based storage for fleet management (agents, commands, configs).
 from __future__ import annotations
 
 import json
-import sqlite3
-import time
 import logging
+import os
+import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
@@ -21,11 +23,20 @@ class FleetStorage:
     def __init__(self, db_path: str = "./data/fleet.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row  # Return dict-like rows
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._create_tables()
+
+        # Key encryption for private keys at rest
+        self._key_passphrase: Optional[str] = os.environ.get("FLEET_KEY_PASSPHRASE")
+        if not self._key_passphrase:
+            logger.warning(
+                "FLEET_KEY_PASSPHRASE not set — controller private keys stored in plaintext. "
+                "Set this env var to enable encryption at rest."
+            )
         logger.info("Fleet storage initialized: %s", self.db_path)
 
     def _create_tables(self) -> None:
@@ -123,7 +134,8 @@ class FleetStorage:
         self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> FleetStorage:
         return self
@@ -138,58 +150,64 @@ class FleetStorage:
         now = time.time()
         metadata = json.dumps(data.get("metadata", {}))
 
-        # Check if exists to preserve created_at if updating
-        exists = self._conn.execute("SELECT 1 FROM agents WHERE id = ?", (agent_id,)).fetchone()
+        with self._lock:
+            # Check if exists to preserve created_at if updating
+            exists = self._conn.execute(
+                "SELECT 1 FROM agents WHERE id = ?", (agent_id,)
+            ).fetchone()
 
-        if exists:
-            self._conn.execute(
-                """
-                UPDATE agents SET 
-                    name = ?, public_key = ?, status = ?, ip_address = ?, 
-                    hostname = ?, platform = ?, version = ?, metadata = ?, 
-                    last_seen_at = ?
-                WHERE id = ?
-            """,
-                (
-                    data.get("name"),
-                    data.get("public_key"),
-                    data.get("status", "online"),
-                    data.get("ip_address"),
-                    data.get("hostname"),
-                    data.get("platform"),
-                    data.get("version"),
-                    metadata,
-                    now,
-                    agent_id,
-                ),
-            )
-        else:
-            self._conn.execute(
-                """
-                INSERT INTO agents (
-                    id, name, public_key, status, ip_address, hostname, 
-                    platform, version, metadata, created_at, last_seen_at, enrollment_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    agent_id,
-                    data.get("name"),
-                    data.get("public_key"),
-                    data.get("status", "online"),
-                    data.get("ip_address"),
-                    data.get("hostname"),
-                    data.get("platform"),
-                    data.get("version"),
-                    metadata,
-                    now,
-                    now,
-                    data.get("enrollment_key"),
-                ),
-            )
-        self._conn.commit()
+            if exists:
+                self._conn.execute(
+                    """
+                    UPDATE agents SET
+                        name = ?, public_key = ?, status = ?, ip_address = ?,
+                        hostname = ?, platform = ?, version = ?, metadata = ?,
+                        last_seen_at = ?
+                    WHERE id = ?
+                """,
+                    (
+                        data.get("name"),
+                        data.get("public_key"),
+                        data.get("status", "online"),
+                        data.get("ip_address"),
+                        data.get("hostname"),
+                        data.get("platform"),
+                        data.get("version"),
+                        metadata,
+                        now,
+                        agent_id,
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO agents (
+                        id, name, public_key, status, ip_address, hostname,
+                        platform, version, metadata, created_at, last_seen_at, enrollment_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        agent_id,
+                        data.get("name"),
+                        data.get("public_key"),
+                        data.get("status", "online"),
+                        data.get("ip_address"),
+                        data.get("hostname"),
+                        data.get("platform"),
+                        data.get("version"),
+                        metadata,
+                        now,
+                        now,
+                        data.get("enrollment_key"),
+                    ),
+                )
+            self._conn.commit()
 
     def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM agents WHERE id = ?", (agent_id,)
+            ).fetchone()
         if not row:
             return None
         d = dict(row)
@@ -198,11 +216,13 @@ class FleetStorage:
         return d
 
     def list_agents(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        cursor = self._conn.execute(
-            "SELECT * FROM agents ORDER BY last_seen_at DESC LIMIT ? OFFSET ?", (limit, offset)
-        )
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agents ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
         agents = []
-        for row in cursor:
+        for row in rows:
             d = dict(row)
             if d.get("metadata"):
                 d["metadata"] = json.loads(d["metadata"])
@@ -211,17 +231,18 @@ class FleetStorage:
 
     def update_agent_status(self, agent_id: str, status: str, ip: Optional[str] = None) -> None:
         now = time.time()
-        if ip:
-            self._conn.execute(
-                "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
-                (status, now, ip, agent_id),
-            )
-        else:
-            self._conn.execute(
-                "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
-                (status, now, agent_id),
-            )
-        self._conn.commit()
+        with self._lock:
+            if ip:
+                self._conn.execute(
+                    "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
+                    (status, now, ip, agent_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
+                    (status, now, agent_id),
+                )
+            self._conn.commit()
 
     # --- Heartbeat Methods ---
 
@@ -230,19 +251,30 @@ class FleetStorage:
     ) -> None:
         now = time.time()
         metrics_json = json.dumps(metrics)
-        self._conn.execute(
-            "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
-            (agent_id, now, metrics_json, ip),
-        )
-        # Also update agent last seen
-        self.update_agent_status(agent_id, "online", ip)
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO heartbeats (agent_id, timestamp, metrics, ip_address) VALUES (?, ?, ?, ?)",
+                (agent_id, now, metrics_json, ip),
+            )
+            # Also update agent last seen (inline to reuse the lock)
+            if ip:
+                self._conn.execute(
+                    "UPDATE agents SET status = ?, last_seen_at = ?, ip_address = ? WHERE id = ?",
+                    ("online", now, ip, agent_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE agents SET status = ?, last_seen_at = ? WHERE id = ?",
+                    ("online", now, agent_id),
+                )
+            self._conn.commit()
 
     def get_latest_heartbeat(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute(
-            "SELECT * FROM heartbeats WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (agent_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM heartbeats WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 1",
+                (agent_id,),
+            ).fetchone()
         if not row:
             return None
         d = dict(row)
@@ -262,41 +294,38 @@ class FleetStorage:
     ) -> None:
         now = time.time()
         payload_json = json.dumps(payload)
-        self._conn.execute(
-            """
-            INSERT INTO commands (id, agent_id, type, payload, status, priority, created_at)
-            VALUES (?, ?, ?, ?, 'pending', ?, ?)
-        """,
-            (cmd_id, agent_id, type_, payload_json, priority, now),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO commands (id, agent_id, type, payload, status, priority, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+            """,
+                (cmd_id, agent_id, type_, payload_json, priority, now),
+            )
+            self._conn.commit()
 
     def get_pending_commands(self, agent_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get pending commands for an agent, ordered by priority and time."""
-        # Priority sort: high < medium < low (alphabetical works inversely?)
-        # Actually high > medium > low.
-        # Let's map priority to int for sorting or rely on specific schema.
-        # For simplicity, we'll sort by created_at for now, or add a CASE statement.
-
-        cursor = self._conn.execute(
-            """
-            SELECT * FROM commands 
-            WHERE agent_id = ? AND status = 'pending'
-            ORDER BY 
-                CASE priority
-                    WHEN 'high' THEN 1
-                    WHEN 'medium' THEN 2
-                    WHEN 'low' THEN 3
-                    ELSE 4
-                END ASC,
-                created_at ASC
-            LIMIT ?
-        """,
-            (agent_id, limit),
-        )
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM commands
+                WHERE agent_id = ? AND status = 'pending'
+                ORDER BY
+                    CASE priority
+                        WHEN 'high' THEN 1
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 3
+                        ELSE 4
+                    END ASC,
+                    created_at ASC
+                LIMIT ?
+            """,
+                (agent_id, limit),
+            ).fetchall()
 
         commands = []
-        for row in cursor:
+        for row in rows:
             d = dict(row)
             if d.get("payload"):
                 d["payload"] = json.loads(d["payload"])
@@ -332,11 +361,15 @@ class FleetStorage:
         params.append(cmd_id)
 
         sql = f"UPDATE commands SET {', '.join(update_fields)} WHERE id = ?"
-        self._conn.execute(sql, params)
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(sql, params)
+            self._conn.commit()
 
     def get_command(self, cmd_id: str) -> Optional[Dict[str, Any]]:
-        row = self._conn.execute("SELECT * FROM commands WHERE id = ?", (cmd_id,)).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM commands WHERE id = ?", (cmd_id,)
+            ).fetchone()
         if not row:
             return None
         d = dict(row)
@@ -356,9 +389,10 @@ class FleetStorage:
             sql = "SELECT * FROM commands ORDER BY created_at DESC LIMIT ? OFFSET ?"
             params = (limit, offset)
 
-        cursor = self._conn.execute(sql, params)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
         commands = []
-        for row in cursor:
+        for row in rows:
             d = dict(row)
             if d.get("payload"):
                 d["payload"] = json.loads(d["payload"])
@@ -373,28 +407,96 @@ class FleetStorage:
         self, agent_id: str, token_hash: str, jti: str, expires_at: float
     ) -> Optional[int]:
         now = time.time()
-        cursor = self._conn.execute(
-            """
-            INSERT INTO agent_tokens (agent_id, token_hash, token_jti, issued_at, expires_at)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (agent_id, token_hash, jti, now, expires_at),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO agent_tokens (agent_id, token_hash, token_jti, issued_at, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (agent_id, token_hash, jti, now, expires_at),
+            )
+            self._conn.commit()
+            return cursor.lastrowid
 
     def revoke_token(self, jti: str) -> None:
         now = time.time()
-        self._conn.execute("UPDATE agent_tokens SET revoked_at = ? WHERE token_jti = ?", (now, jti))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE agent_tokens SET revoked_at = ? WHERE token_jti = ?", (now, jti)
+            )
+            self._conn.commit()
 
     def is_token_revoked(self, jti: str) -> bool:
-        row = self._conn.execute(
-            "SELECT revoked_at FROM agent_tokens WHERE token_jti = ?", (jti,)
-        ).fetchone()
-        return row and row[0] is not None
+        """Check if a token JTI is revoked.
+
+        Returns True if the JTI is unknown (not in DB) or explicitly revoked.
+        Returns False only if the JTI exists and has not been revoked.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT revoked_at FROM agent_tokens WHERE token_jti = ?", (jti,)
+            ).fetchone()
+        if row is None:
+            # Unknown JTI — treat as revoked to prevent forged JTIs
+            return True
+        # Row exists: revoked if revoked_at is set
+        return row[0] is not None
 
     # --- Controller Keys Methods ---
+
+    def _encrypt_private_key(self, private_key: str) -> str:
+        """Encrypt a private key string if a passphrase is configured."""
+        if not self._key_passphrase:
+            return private_key
+        try:
+            import hashlib
+            from cryptography.fernet import Fernet
+            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+            from cryptography.hazmat.primitives import hashes
+
+            # Use a deterministic salt derived from the passphrase so we don't
+            # need a separate salt column (the passphrase is the secret).
+            salt = hashlib.sha256(self._key_passphrase.encode()).digest()[:16]
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480_000
+            )
+            key = Fernet(
+                __import__("base64").urlsafe_b64encode(
+                    kdf.derive(self._key_passphrase.encode())
+                )
+            )
+            return key.encrypt(private_key.encode()).decode("ascii")
+        except ImportError:
+            logger.warning("cryptography package not available; storing key in plaintext")
+            return private_key
+
+    def _decrypt_private_key(self, encrypted_key: str) -> str:
+        """Decrypt a private key string if a passphrase is configured."""
+        if not self._key_passphrase:
+            return encrypted_key
+        # If the key looks like a PEM key already, it was stored before encryption
+        # was enabled — return as-is (backward compatible).
+        if encrypted_key.startswith("-----BEGIN"):
+            return encrypted_key
+        try:
+            import hashlib
+            from cryptography.fernet import Fernet, InvalidToken
+            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+            from cryptography.hazmat.primitives import hashes
+
+            salt = hashlib.sha256(self._key_passphrase.encode()).digest()[:16]
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480_000
+            )
+            key = Fernet(
+                __import__("base64").urlsafe_b64encode(
+                    kdf.derive(self._key_passphrase.encode())
+                )
+            )
+            return key.decrypt(encrypted_key.encode()).decode("utf-8")
+        except (ImportError, Exception) as exc:
+            logger.warning("Failed to decrypt private key: %s — returning raw value", exc)
+            return encrypted_key
 
     def save_controller_keys(
         self,
@@ -414,32 +516,35 @@ class FleetStorage:
             key_size: Key size in bits (default: 2048)
         """
         now = time.time()
-        exists = self._conn.execute(
-            "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
-        ).fetchone()
+        stored_private_key = self._encrypt_private_key(private_key)
 
-        if exists:
-            self._conn.execute(
-                """
-                UPDATE controller_keys SET 
-                    private_key = ?, public_key = ?, algorithm = ?, 
-                    key_size = ?, rotated_at = ?
-                WHERE id = ?
-            """,
-                (private_key, public_key, algorithm, key_size, now, key_id),
-            )
-            logger.info("Controller keys rotated for key_id: %s", key_id)
-        else:
-            self._conn.execute(
-                """
-                INSERT INTO controller_keys 
-                    (id, private_key, public_key, algorithm, key_size, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (key_id, private_key, public_key, algorithm, key_size, now),
-            )
-            logger.info("Controller keys saved for key_id: %s", key_id)
-        self._conn.commit()
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM controller_keys WHERE id = ?", (key_id,)
+            ).fetchone()
+
+            if exists:
+                self._conn.execute(
+                    """
+                    UPDATE controller_keys SET
+                        private_key = ?, public_key = ?, algorithm = ?,
+                        key_size = ?, rotated_at = ?
+                    WHERE id = ?
+                """,
+                    (stored_private_key, public_key, algorithm, key_size, now, key_id),
+                )
+                logger.info("Controller keys rotated for key_id: %s", key_id)
+            else:
+                self._conn.execute(
+                    """
+                    INSERT INTO controller_keys
+                        (id, private_key, public_key, algorithm, key_size, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    (key_id, stored_private_key, public_key, algorithm, key_size, now),
+                )
+                logger.info("Controller keys saved for key_id: %s", key_id)
+            self._conn.commit()
 
     def get_controller_keys(self, key_id: str = "default") -> Optional[Dict[str, Any]]:
         """Retrieve controller keys by key_id.
@@ -448,10 +553,17 @@ class FleetStorage:
             Dict with private_key, public_key, algorithm, key_size, created_at, rotated_at
             or None if no keys found.
         """
-        row = self._conn.execute("SELECT * FROM controller_keys WHERE id = ?", (key_id,)).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM controller_keys WHERE id = ?", (key_id,)
+            ).fetchone()
         if not row:
             return None
-        return dict(row)
+        d = dict(row)
+        # Decrypt private key if encryption is configured
+        if d.get("private_key"):
+            d["private_key"] = self._decrypt_private_key(d["private_key"])
+        return d
 
     def delete_controller_keys(self, key_id: str = "default") -> bool:
         """Delete controller keys by key_id.
@@ -459,6 +571,9 @@ class FleetStorage:
         Returns:
             True if deleted, False if not found.
         """
-        cursor = self._conn.execute("DELETE FROM controller_keys WHERE id = ?", (key_id,))
-        self._conn.commit()
-        return cursor.rowcount > 0
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM controller_keys WHERE id = ?", (key_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0

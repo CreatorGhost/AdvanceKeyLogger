@@ -377,9 +377,9 @@ class LiveDashboard {
                 const item = document.createElement('div');
                 item.className = 'capture-item';
                 item.innerHTML = `
-                    <span class="capture-type">${capture.type || 'unknown'}</span>
-                    <span class="capture-time">${new Date(capture.timestamp * 1000).toLocaleTimeString()}</span>
-                    <span class="capture-agent">${capture.agent_id || 'local'}</span>
+                    <span class="capture-type">${this._escapeHtml(capture.type || 'unknown')}</span>
+                    <span class="capture-time">${new Date(Number(capture.timestamp) * 1000).toLocaleTimeString()}</span>
+                    <span class="capture-agent">${this._escapeHtml(capture.agent_id || 'local')}</span>
                 `;
                 capturesList.appendChild(item);
             });

@@ -69,6 +69,13 @@
 <script>
 const agentId = "{{ agent_id }}";
 
+function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
 async function loadAgent() {
     try {
         const res = await fetch(`/api/dashboard/fleet/agents/${agentId}`);
@@ -77,17 +84,17 @@ async function loadAgent() {
             const statusClass = agent.status.toLowerCase() === 'online' ? 'success' : 'secondary';
             
             document.getElementById('agent-info').innerHTML = `
-                <div class="mb-2"><strong>Hostname:</strong> ${agent.hostname}</div>
-                <div class="mb-2"><strong>ID:</strong> <span class="text-muted small">${agent.agent_id}</span></div>
-                <div class="mb-2"><strong>Status:</strong> <span class="badge bg-${statusClass}">${agent.status}</span></div>
-                <div class="mb-2"><strong>Platform:</strong> ${agent.platform} ${agent.version}</div>
-                <div class="mb-2"><strong>IP:</strong> ${agent.ip_address}</div>
+                <div class="mb-2"><strong>Hostname:</strong> ${esc(agent.hostname)}</div>
+                <div class="mb-2"><strong>ID:</strong> <span class="text-muted small">${esc(agent.agent_id)}</span></div>
+                <div class="mb-2"><strong>Status:</strong> <span class="badge bg-${statusClass}">${esc(agent.status)}</span></div>
+                <div class="mb-2"><strong>Platform:</strong> ${esc(agent.platform)} ${esc(agent.version)}</div>
+                <div class="mb-2"><strong>IP:</strong> ${esc(agent.ip_address)}</div>
                 <div class="mb-2"><strong>Last Seen:</strong> ${new Date(agent.last_seen * 1000).toLocaleString()}</div>
-                
+
                 <hr>
                 <h5>Capabilities</h5>
                 <ul class="small ps-3">
-                    ${Object.entries(agent.capabilities || {}).filter(([k,v]) => v).map(([k,v]) => `<li>${k}</li>`).join('')}
+                    ${Object.entries(agent.capabilities || {}).filter(([k,v]) => v).map(([k,v]) => `<li>${esc(k)}</li>`).join('')}
                 </ul>
             `;
         }
@@ -114,9 +121,9 @@ async function loadCommands() {
                 let resultDisplay = '';
                 
                 if (cmd.status === 'COMPLETED' && cmd.result) {
-                    resultDisplay = `<pre class="mb-0 small" style="max-height: 100px; overflow: auto;">${JSON.stringify(cmd.result, null, 2)}</pre>`;
+                    resultDisplay = `<pre class="mb-0 small" style="max-height: 100px; overflow: auto;">${esc(JSON.stringify(cmd.result, null, 2))}</pre>`;
                 } else if (cmd.status === 'FAILED') {
-                    resultDisplay = `<span class="text-danger">${cmd.error_message || 'Unknown error'}</span>`;
+                    resultDisplay = `<span class="text-danger">${esc(cmd.error_message || 'Unknown error')}</span>`;
                 }
                 
                 let statusBadge = 'secondary';
@@ -126,8 +133,8 @@ async function loadCommands() {
                 else if (cmd.status === 'PENDING') statusBadge = 'warning';
                 
                 tr.innerHTML = `
-                    <td>${cmd.action}</td>
-                    <td><span class="badge bg-${statusBadge}">${cmd.status}</span></td>
+                    <td>${esc(cmd.action)}</td>
+                    <td><span class="badge bg-${statusBadge}">${esc(cmd.status)}</span></td>
                     <td>${new Date(cmd.timestamp * 1000).toLocaleString()}</td>
                     <td>${resultDisplay}</td>
                 `;

@@ -33,6 +33,13 @@
 </div>
 
 <script>
+function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}
+
 async function refreshAgents() {
     try {
         const res = await fetch('/api/dashboard/fleet/agents');
@@ -53,15 +60,15 @@ async function refreshAgents() {
                 
                 tr.innerHTML = `
                     <td>
-                        <div style="font-weight: bold;">${agent.hostname}</div>
-                        <div class="text-muted small">${agent.agent_id.substring(0, 8)}...</div>
+                        <div style="font-weight: bold;">${esc(agent.hostname)}</div>
+                        <div class="text-muted small">${esc(agent.agent_id.substring(0, 8))}...</div>
                     </td>
-                    <td><span class="badge bg-${statusClass}">${agent.status}</span></td>
-                    <td>${agent.platform} <span class="text-muted small">${agent.version}</span></td>
-                    <td>${agent.ip_address}</td>
+                    <td><span class="badge bg-${statusClass}">${esc(agent.status)}</span></td>
+                    <td>${esc(agent.platform)} <span class="text-muted small">${esc(agent.version)}</span></td>
+                    <td>${esc(agent.ip_address)}</td>
                     <td>${lastSeen}</td>
                     <td>
-                        <a href="/fleet/agents/${agent.agent_id}" class="btn btn-sm btn-outline-primary">Details</a>
+                        <a href="/fleet/agents/${encodeURIComponent(agent.agent_id)}" class="btn btn-sm btn-outline-primary">Details</a>
                     </td>
                 `;
                 tbody.appendChild(tr);

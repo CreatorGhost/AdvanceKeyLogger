@@ -94,13 +94,21 @@ class FleetAgent(Agent):
         if "timeout" not in kwargs:
             kwargs["timeout"] = 10
 
-        # Sign request body if we have a private key and signing is enabled
+        # Sign request body if we have a private key and signing is enabled.
+        # Pre-serialize to deterministic bytes so the signature matches what the
+        # server will verify against the raw request body.
         sign_requests = self.config.get("sign_requests", False)
         json_body = kwargs.get("json")
         if sign_requests and json_body and self.private_key:
-            body_bytes = json.dumps(json_body).encode("utf-8")
+            body_bytes = json.dumps(
+                json_body, separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
             signature = self.secure_channel.sign(body_bytes)
             headers["X-Signature"] = base64.b64encode(signature).decode("ascii")
+            # Send pre-serialized bytes instead of letting requests re-serialize
+            kwargs.pop("json", None)
+            kwargs["data"] = body_bytes
+            headers["Content-Type"] = "application/json"
 
         loop = asyncio.get_running_loop()
 

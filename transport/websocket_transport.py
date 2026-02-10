@@ -246,6 +246,26 @@ class WebSocketTransport(BaseTransport):
             self._connected = False
             return False
 
+    async def _dispatch_message(self, data: Any, raw_bytes: bytes) -> None:
+        """Queue raw bytes and dispatch parsed data to the appropriate handler."""
+        if self._receive_queue:
+            await self._receive_queue.put(raw_bytes)
+
+        msg_type = data.get("type") if isinstance(data, dict) else None
+
+        if msg_type and msg_type in self._message_handlers:
+            try:
+                self._message_handlers[msg_type](data)
+            except Exception as e:
+                logger.error(f"Handler error for {msg_type}: {e}")
+        elif self._default_handler:
+            try:
+                self._default_handler(data)
+            except Exception as e:
+                logger.error(f"Default handler error: {e}")
+        else:
+            logger.debug(f"No handler for message type: {msg_type}")
+
     async def _receive_loop(self) -> None:
         """Receive messages from WebSocket and dispatch to handlers."""
         raw_message: bytes | str | None = None  # Initialize to ensure it's always defined
@@ -262,25 +282,7 @@ class WebSocketTransport(BaseTransport):
 
                 logger.debug(f"Received message: {data}")
 
-                # Put raw bytes in queue for receive() method
-                if self._receive_queue:
-                    await self._receive_queue.put(decompressed)
-
-                # Dispatch to registered handlers
-                msg_type = data.get("type") if isinstance(data, dict) else None
-
-                if msg_type and msg_type in self._message_handlers:
-                    try:
-                        self._message_handlers[msg_type](data)
-                    except Exception as e:
-                        logger.error(f"Handler error for {msg_type}: {e}")
-                elif self._default_handler:
-                    try:
-                        self._default_handler(data)
-                    except Exception as e:
-                        logger.error(f"Default handler error: {e}")
-                else:
-                    logger.debug(f"No handler for message type: {msg_type}")
+                await self._dispatch_message(data, decompressed)
 
             except websockets.ConnectionClosed:
                 logger.warning("WebSocket connection closed during receive")
@@ -288,7 +290,6 @@ class WebSocketTransport(BaseTransport):
                 break
             except gzip.BadGzipFile:
                 # Message wasn't compressed, try parsing directly
-                # Verify raw_message is defined before using it
                 if raw_message is None:
                     logger.error("BadGzipFile raised but raw_message is not defined")
                     continue
@@ -299,17 +300,7 @@ class WebSocketTransport(BaseTransport):
                         if isinstance(raw_message, bytes)
                         else raw_message.encode()
                     )
-                    if self._receive_queue:
-                        await self._receive_queue.put(raw_bytes)
-                    uc_msg_type = (
-                        uncompressed_data.get("type")
-                        if isinstance(uncompressed_data, dict)
-                        else None
-                    )
-                    if uc_msg_type and uc_msg_type in self._message_handlers:
-                        self._message_handlers[uc_msg_type](uncompressed_data)
-                    elif self._default_handler:
-                        self._default_handler(uncompressed_data)
+                    await self._dispatch_message(uncompressed_data, raw_bytes)
                 except Exception as e:
                     logger.error(f"Failed to parse uncompressed message: {e}")
             except Exception as e:
