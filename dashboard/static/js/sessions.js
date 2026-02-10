@@ -36,11 +36,12 @@ async function loadSessions() {
 function renderSessions(data) {
     const grid = document.getElementById('sessionGrid');
     const badge = document.getElementById('sessionCountBadge');
+    const sessions = (data && Array.isArray(data.sessions)) ? data.sessions : [];
 
-    badge.textContent = data.sessions.length;
+    badge.textContent = sessions.length;
     grid.innerHTML = '';
 
-    if (data.sessions.length === 0) {
+    if (sessions.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty-state';
         empty.style.gridColumn = '1 / -1';
@@ -56,7 +57,7 @@ function renderSessions(data) {
         + '</svg>'
     );
 
-    for (const s of data.sessions) {
+    for (const s of sessions) {
         const card = document.createElement('div');
         card.className = 'screenshot-card';
         card.style.cursor = 'pointer';

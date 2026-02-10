@@ -90,6 +90,10 @@ class SessionRecorder:
     # ------------------------------------------------------------------
 
     @property
+    def frames_dir(self) -> Path:
+        return self._frames_dir
+
+    @property
     def is_recording(self) -> bool:
         return self._session_id is not None
 
@@ -226,11 +230,9 @@ class SessionRecorder:
                 filename = f"{self._session_id}_{self._frame_count:04d}.jpg"
                 filepath = self._frames_dir / filename
 
-                if hasattr(self._screenshot, "_use_native") and self._screenshot._use_native:
-                    backend = self._screenshot._native_backend
-                    if backend is not None:
-                        backend.capture(filepath, "jpg", self._quality)
-                    else:
+                if hasattr(self._screenshot, "capture"):
+                    ok = self._screenshot.capture(filepath, "jpg", self._quality)
+                    if not ok:
                         self._pil_capture(filepath)
                 else:
                     self._pil_capture(filepath)
@@ -265,11 +267,20 @@ class SessionRecorder:
                 filepath = self._frames_dir / filename
                 self._pil_capture(filepath)
                 if filepath.exists():
+                    width, height = 0, 0
+                    try:
+                        from PIL import Image
+                        with Image.open(filepath) as img:
+                            width, height = img.size
+                    except Exception:
+                        pass
                     self._store.add_frame(
                         session_id=self._session_id,
                         offset_sec=offset,
                         file_path=str(filepath),
                         file_size=filepath.stat().st_size,
+                        width=width,
+                        height=height,
                         trigger=trigger,
                     )
                     self._frame_count += 1
@@ -282,6 +293,8 @@ class SessionRecorder:
         image = ImageGrab.grab()
         image.save(str(filepath), "JPEG", quality=self._quality)
 
+    _MAX_EVENT_BUFFER = 5000
+
     def _flush_events(self) -> None:
         """Write buffered events to the database."""
         if not self._event_buffer:
@@ -290,6 +303,13 @@ class SessionRecorder:
             self._store.add_events_batch(self._event_buffer)
         except Exception as exc:
             logger.warning("Failed to flush session events: %s", exc)
+            # Keep buffer intact on failure so events aren't lost.
+            # Cap the buffer to avoid unbounded growth from repeated failures.
+            if len(self._event_buffer) > self._MAX_EVENT_BUFFER:
+                dropped = len(self._event_buffer) - self._MAX_EVENT_BUFFER
+                self._event_buffer = self._event_buffer[-self._MAX_EVENT_BUFFER:]
+                logger.warning("Event buffer capped: dropped %d oldest events", dropped)
+            return
         self._event_buffer = []
 
     # ------------------------------------------------------------------

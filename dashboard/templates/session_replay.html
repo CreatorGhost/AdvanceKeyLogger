@@ -95,7 +95,7 @@
 
 {% block scripts %}
 <script>
-    window.__SESSION_ID__ = "{{ session_id }}";
+    window.__SESSION_ID__ = {{ session_id | tojson }};
 </script>
 <script src="/static/js/session-replay.js"></script>
 {% endblock %}

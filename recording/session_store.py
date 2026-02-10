@@ -231,16 +231,18 @@ class SessionStore:
         """Bulk insert events.  Each tuple: (session_id, offset, type, data_json).
         Returns the number inserted."""
         now = time.time()
+        params = [
+            (session_id, offset_sec, event_type, data_str, now)
+            for session_id, offset_sec, event_type, data_str in events
+        ]
         with self._lock:
             try:
-                self._conn.execute("BEGIN")
-                for session_id, offset_sec, event_type, data_str in events:
-                    self._conn.execute(
-                        "INSERT INTO session_events "
-                        "(session_id, offset_sec, event_type, data, timestamp) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (session_id, offset_sec, event_type, data_str, now),
-                    )
+                self._conn.executemany(
+                    "INSERT INTO session_events "
+                    "(session_id, offset_sec, event_type, data, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    params,
+                )
                 self._conn.commit()
                 return len(events)
             except Exception:

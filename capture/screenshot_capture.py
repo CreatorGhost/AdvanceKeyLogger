@@ -79,6 +79,27 @@ class ScreenshotCapture(BaseCapture):
             self._buffer.clear()
         return items
 
+    def capture(self, output_path: Path, fmt: str = "png", quality: int = 80) -> bool:
+        """Capture a screenshot to the given path.
+
+        Returns True on success, False on failure.  This is the public API
+        that external callers (e.g. SessionRecorder) should use instead of
+        accessing private backend attributes directly.
+        """
+        try:
+            if self._use_native and self._native_backend is not None:
+                return self._native_backend.capture(output_path, fmt, quality)
+            else:
+                image = ImageGrab.grab()
+                save_kwargs: dict[str, Any] = {}
+                if fmt in {"jpg", "jpeg"}:
+                    save_kwargs["quality"] = quality
+                image.save(str(output_path), **save_kwargs)
+                return True
+        except Exception as exc:
+            _logger.error("capture() failed: %s", exc)
+            return False
+
     def take_screenshot(self) -> Path | None:
         try:
             if not self._running:
