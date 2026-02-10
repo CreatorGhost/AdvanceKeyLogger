@@ -176,13 +176,23 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
     except Exception:
         allowed_origins = []
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins if allowed_origins else ["http://localhost:*"],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["*"],
-    )
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["*"],
+        )
+    else:
+        # Development fallback: match any localhost port via regex
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"^http://localhost(:\d+)?$",
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["*"],
+        )
 
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
 

@@ -24,6 +24,7 @@ _sessions_lock = threading.Lock()
 
 # Rate limiting for login attempts (IP -> list of timestamps)
 _login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_attempts_lock = threading.Lock()
 _LOGIN_RATE_LIMIT = 5  # max attempts per window
 _LOGIN_RATE_WINDOW = 300  # 5 minute window
 
@@ -128,10 +129,11 @@ def require_auth(request: Request) -> RedirectResponse | None:
 def _is_rate_limited(ip: str) -> bool:
     """Check if an IP is rate-limited for login attempts."""
     now = time.time()
-    attempts = _login_attempts[ip]
-    # Remove attempts outside the window
-    _login_attempts[ip] = [t for t in attempts if now - t < _LOGIN_RATE_WINDOW]
-    return len(_login_attempts[ip]) >= _LOGIN_RATE_LIMIT
+    with _login_attempts_lock:
+        attempts = _login_attempts[ip]
+        # Remove attempts outside the window
+        _login_attempts[ip] = [t for t in attempts if now - t < _LOGIN_RATE_WINDOW]
+        return len(_login_attempts[ip]) >= _LOGIN_RATE_LIMIT
 
 
 @auth_router.post("/auth/login")
@@ -156,7 +158,8 @@ async def login(request: Request) -> Response:
 
     if username == _ADMIN_USERNAME and verify_password(password, _ADMIN_PASSWORD_HASH):
         # Clear failed attempts on success
-        _login_attempts.pop(client_ip, None)
+        with _login_attempts_lock:
+            _login_attempts.pop(client_ip, None)
         token = create_session(username)
         response = RedirectResponse(url="/dashboard", status_code=302)
         response.set_cookie(
@@ -170,7 +173,8 @@ async def login(request: Request) -> Response:
         return response
 
     # Record failed attempt
-    _login_attempts[client_ip].append(time.time())
+    with _login_attempts_lock:
+        _login_attempts[client_ip].append(time.time())
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
