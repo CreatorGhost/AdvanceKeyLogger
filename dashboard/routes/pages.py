@@ -115,6 +115,41 @@ async def analytics_page(request: Request) -> Response:
     )
 
 
+@pages_router.get("/sessions", response_class=HTMLResponse)
+async def sessions_page(request: Request) -> Response:
+    """Render session recordings list page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "sessions.html",
+        {
+            "user": get_current_user(request),
+            "page": "sessions",
+        },
+    )
+
+
+@pages_router.get("/sessions/{session_id}/replay", response_class=HTMLResponse)
+async def session_replay_page(request: Request, session_id: str) -> Response:
+    """Render session replay player page."""
+    redirect = require_auth(request)
+    if redirect:
+        return redirect
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "session_replay.html",
+        {
+            "user": get_current_user(request),
+            "page": "sessions",
+            "session_id": session_id,
+        },
+    )
+
+
 @pages_router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request) -> Response:
     """Render settings page."""

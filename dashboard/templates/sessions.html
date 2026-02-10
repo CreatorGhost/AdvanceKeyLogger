@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Sessions{% endblock %}
+{% block page_title %}Session Recordings{% endblock %}
+
+{% block content %}
+<!-- Controls -->
+<div class="card">
+    <div class="filter-bar" style="padding:0">
+        <div class="filter-group">
+            <label class="filter-label">Status</label>
+            <select id="sessionStatus" class="form-select">
+                <option value="">All</option>
+                <option value="recording">Recording</option>
+                <option value="stopped">Stopped</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label class="filter-label">Show</label>
+            <select id="sessionLimit" class="form-select">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" id="refreshSessions">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Refresh
+        </button>
+    </div>
+</div>
+
+<!-- Stats Row -->
+<div class="metric-tabs" id="sessionStats">
+    <div class="metric-tab">
+        <div class="metric-value" id="statTotal">--</div>
+        <div class="metric-label">Total Sessions</div>
+    </div>
+    <div class="metric-tab">
+        <div class="metric-value" id="statRecording">--</div>
+        <div class="metric-label">Recording Now</div>
+    </div>
+    <div class="metric-tab">
+        <div class="metric-value" id="statFrames">--</div>
+        <div class="metric-label">Total Frames</div>
+    </div>
+    <div class="metric-tab">
+        <div class="metric-value" id="statEvents">--</div>
+        <div class="metric-label">Total Events</div>
+    </div>
+</div>
+
+<!-- Session Grid -->
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recorded Sessions</h2>
+        <span class="badge" id="sessionCountBadge">--</span>
+    </div>
+    <div class="screenshot-grid" id="sessionGrid">
+        <div class="empty-state" style="grid-column:1/-1">Loading sessions...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/sessions.js"></script>
+{% endblock %}

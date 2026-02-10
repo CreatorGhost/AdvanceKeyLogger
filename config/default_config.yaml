@@ -92,6 +92,20 @@ sync:
     auto_resolve_captures: true
     queue_config_conflicts: true
 
+# ── Session Recording & Visual Replay ────────────────────────────────
+# Records user sessions as coordinated screenshot + input event streams.
+# Event-driven: screenshots fire on clicks, window changes, and idle.
+recording:
+  enabled: false                    # set to true to enable session recording
+  database_path: "./data/sessions.db"
+  frames_dir: "./data/sessions/frames"
+  idle_screenshot_seconds: 5        # take screenshot after N seconds keyboard idle
+  max_frames_per_session: 500
+  screenshot_quality: 70            # JPEG quality (1-100)
+  max_session_duration: 3600        # auto-stop after 1 hour
+  auto_start: true                  # start recording on launch
+  retention_days: 7                 # auto-delete sessions older than this
+
 transport:
   method: "email"
   retry_attempts: 3
