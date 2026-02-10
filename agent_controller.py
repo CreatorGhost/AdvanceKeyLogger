@@ -519,23 +519,25 @@ class Controller:
 
                     await self._send_command_to_agent(agent_id, command)
 
-                    # Re-queue on failure if retries remain
-                    if command.status == CommandStatus.FAILED and command.retries > 0:
-                        command.retries -= 1
-                        command.status = CommandStatus.PENDING
-                        command.error_message = None
-                        seq = next(self._command_counter)
-                        try:
-                            queue.put_nowait((command.priority.value, seq, command))
-                            logger.info(
-                                "Command %s re-queued for agent %s (%d retries left)",
-                                command.command_id, agent_id, command.retries,
-                            )
-                        except asyncio.QueueFull:
-                            command.status = CommandStatus.FAILED
-                            logger.error(
-                                "Cannot re-queue command %s: queue full", command.command_id
-                            )
+                    # Re-queue on failure if retries remain — hold the lock
+                    # so retry mutations don't race with handle_command_response.
+                    async with self._lock:
+                        if command.status == CommandStatus.FAILED and command.retries > 0:
+                            command.retries -= 1
+                            command.status = CommandStatus.PENDING
+                            command.error_message = None
+                            seq = next(self._command_counter)
+                            try:
+                                queue.put_nowait((command.priority.value, seq, command))
+                                logger.info(
+                                    "Command %s re-queued for agent %s (%d retries left)",
+                                    command.command_id, agent_id, command.retries,
+                                )
+                            except asyncio.QueueFull:
+                                command.status = CommandStatus.FAILED
+                                logger.error(
+                                    "Cannot re-queue command %s: queue full", command.command_id
+                                )
 
                 await asyncio.sleep(0.1)  # Prevent CPU spinning
             except asyncio.CancelledError:
@@ -544,14 +546,22 @@ class Controller:
                 logger.error("Error processing commands: %s", e, exc_info=True)
 
     async def _send_command_to_agent(self, agent_id: str, command: Command) -> None:
-        """Send a command to an agent."""
-        agent = self.agents.get(agent_id)
-        transport = self.agent_transports.get(agent_id)
-        channel = self.agent_channels.get(agent_id)
+        """Send a command to an agent.
+
+        Snapshots shared state under ``self._lock``, performs I/O without the
+        lock (encryption + transport send), then updates command state under
+        the lock so mutations don't race with ``handle_command_response``.
+        """
+        # Snapshot shared references under the lock
+        async with self._lock:
+            agent = self.agents.get(agent_id)
+            transport = self.agent_transports.get(agent_id)
+            channel = self.agent_channels.get(agent_id)
 
         if not all([agent, transport, channel]):
             logger.error(f"Cannot send command: agent {agent_id} incomplete setup")
-            command.status = CommandStatus.FAILED
+            async with self._lock:
+                command.status = CommandStatus.FAILED
             return
 
         # Type narrowing for the type checker
@@ -592,20 +602,24 @@ class Controller:
                 agent_id=agent_id,
             )
 
-            # Send via transport
+            # Send via transport (I/O — intentionally outside the lock)
             success = transport.send(message.to_bytes())
 
-            if success:
-                command.status = CommandStatus.SENT
-                command.started_at = time.time()
-                logger.info(f"Command {command.command_id} sent to agent {agent_id}")
-            else:
-                command.status = CommandStatus.FAILED
-                logger.error(f"Failed to send command {command.command_id} to agent {agent_id}")
+            # Update command state under lock to avoid racing with
+            # handle_command_response which also modifies command state.
+            async with self._lock:
+                if success:
+                    command.status = CommandStatus.SENT
+                    command.started_at = time.time()
+                    logger.info(f"Command {command.command_id} sent to agent {agent_id}")
+                else:
+                    command.status = CommandStatus.FAILED
+                    logger.error(f"Failed to send command {command.command_id} to agent {agent_id}")
 
         except Exception as e:
-            command.status = CommandStatus.FAILED
-            command.error_message = str(e)
+            async with self._lock:
+                command.status = CommandStatus.FAILED
+                command.error_message = str(e)
             logger.error(f"Error sending command {command.command_id}: {e}")
 
     async def _cleanup_loop(self) -> None:
