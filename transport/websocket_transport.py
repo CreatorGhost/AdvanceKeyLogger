@@ -56,6 +56,7 @@ class WebSocketTransport(BaseTransport):
 
         # Message queue for receive() method (created lazily when event loop exists)
         self._receive_queue: Optional[asyncio.Queue[bytes]] = None
+        self._receive_task: Optional[asyncio.Task] = None
 
         # SSL configuration
         if config.get("ssl", False):
@@ -101,6 +102,9 @@ class WebSocketTransport(BaseTransport):
             logger.debug("WebSocket already connected")
             return
 
+        # Clean up any previous loop/thread to avoid resource leaks on reconnect
+        self._cleanup_loop_and_thread()
+
         # Start async event loop in separate thread
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
@@ -113,6 +117,8 @@ class WebSocketTransport(BaseTransport):
             time.sleep(0.1)
 
         if not self._connected:
+            # Clean up the loop/thread we just created before raising
+            self._cleanup_loop_and_thread()
             raise ConnectionError(f"Failed to connect to WebSocket: {self._url}")
 
         logger.info(f"WebSocket connected: {self._url}")
@@ -162,12 +168,26 @@ class WebSocketTransport(BaseTransport):
             self._connected = True
             self._last_heartbeat = time.time()
 
-            # Start receive task
-            asyncio.create_task(self._receive_loop())
+            # Start receive task (tracked so it can be cancelled on disconnect)
+            self._receive_task = asyncio.create_task(self._receive_loop())
 
         except Exception as e:
             logger.error(f"Failed to connect WebSocket: {e}")
             self._connected = False
+
+    def _cleanup_loop_and_thread(self) -> None:
+        """Stop the event loop and join the background thread (idempotent)."""
+        loop = self._loop
+        thread = self._thread
+        if loop:
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # loop already closed
+        if thread:
+            thread.join(timeout=5.0)
+        self._loop = None
+        self._thread = None
 
     def disconnect(self) -> None:
         """Close WebSocket connection."""
@@ -178,22 +198,14 @@ class WebSocketTransport(BaseTransport):
             if self._loop and self._websocket:
                 future = asyncio.run_coroutine_threadsafe(self._websocket.close(), self._loop)
                 future.result(timeout=5.0)
-
-            self._connected = False
-            self._websocket = None
-
-            # Stop event loop
-            if self._loop:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-
-            # Wait for thread to finish
-            if self._thread:
-                self._thread.join(timeout=5.0)
-
             logger.info("WebSocket disconnected")
-
         except Exception as e:
             logger.error(f"Error disconnecting WebSocket: {e}")
+        finally:
+            self._connected = False
+            self._websocket = None
+            self._receive_task = None
+            self._cleanup_loop_and_thread()
 
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         """Send data through WebSocket."""

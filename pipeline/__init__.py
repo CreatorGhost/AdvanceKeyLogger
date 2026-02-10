@@ -21,6 +21,7 @@ for _module in (
     "middleware.rate_limiter",
     "middleware.conditional_router",
     "middleware.metrics_emitter",
+    "middleware.anonymizer",
 ):
     try:
         __import__(f"{__name__}.{_module}")

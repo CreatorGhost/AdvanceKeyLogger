@@ -87,6 +87,14 @@ class EmailTransport(BaseTransport):
             return False
         except Exception as exc:
             self.logger.error("Email send failed: %s", exc)
+            # Reset the SMTP connection so it doesn't remain in an undefined state
+            self._connected = False
+            try:
+                if self._smtp:
+                    self._smtp.close()
+            except Exception:
+                pass
+            self._smtp = None
             return False
 
     def disconnect(self) -> None:

@@ -199,20 +199,32 @@ class FleetController(Controller):
                 enrollment_key = tag[len("enrollment_key:") :]
                 break
 
-        self.storage.register_agent(
-            metadata.agent_id,
-            {
-                "name": metadata.hostname,  # Use hostname as name for now
-                "public_key": public_key.decode("utf-8", errors="ignore"),  # Store as string
-                "status": metadata.status.name,
-                "ip_address": metadata.ip_address,
-                "hostname": metadata.hostname,
-                "platform": metadata.platform,
-                "version": metadata.version,
-                "metadata": agent_dict,
-                "enrollment_key": enrollment_key,
-            },
-        )
+        try:
+            self.storage.register_agent(
+                metadata.agent_id,
+                {
+                    "name": metadata.hostname,  # Use hostname as name for now
+                    "public_key": public_key.decode("utf-8", errors="ignore"),  # Store as string
+                    "status": metadata.status.name,
+                    "ip_address": metadata.ip_address,
+                    "hostname": metadata.hostname,
+                    "platform": metadata.platform,
+                    "version": metadata.version,
+                    "metadata": agent_dict,
+                    "enrollment_key": enrollment_key,
+                },
+            )
+        except Exception:
+            # DB persistence failed — rollback the in-memory registration so the
+            # caller does not end up with an agent that exists in memory but not
+            # in the database (which would be lost on restart).
+            logger.error(
+                "DB persistence failed for agent %s, rolling back in-memory registration",
+                metadata.agent_id,
+                exc_info=True,
+            )
+            super().unregister_agent(metadata.agent_id)
+            raise
         return channel
 
     # Override handle_heartbeat to persist

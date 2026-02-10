@@ -70,6 +70,14 @@ class FTPTransport(BaseTransport):
             return True
         except Exception as exc:
             self.logger.error("FTP send failed: %s", exc)
+            # Reset the FTP connection so it doesn't remain in an undefined state
+            self._connected = False
+            try:
+                if self._ftp:
+                    self._ftp.close()
+            except Exception:
+                pass
+            self._ftp = None
             return False
 
     def disconnect(self) -> None:

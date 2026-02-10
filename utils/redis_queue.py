@@ -257,10 +257,27 @@ class RedisTransport(BaseTransport):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
+    def _cleanup_loop_and_thread(self) -> None:
+        """Stop the event loop and join the background thread (idempotent)."""
+        loop = self._loop
+        thread = self._thread
+        if loop:
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # loop already closed
+        if thread:
+            thread.join(timeout=5.0)
+        self._loop = None
+        self._thread = None
+
     def connect(self) -> None:
         """Connect to Redis and subscribe to channel."""
         if self._connected:
             return
+
+        # Clean up any previous loop/thread to avoid resource leaks on reconnect
+        self._cleanup_loop_and_thread()
 
         # Start async event loop in separate thread
         self._loop = asyncio.new_event_loop()
@@ -274,6 +291,8 @@ class RedisTransport(BaseTransport):
             time.sleep(0.1)
 
         if not self._connected:
+            # Clean up the loop/thread before raising
+            self._cleanup_loop_and_thread()
             raise ConnectionError(f"Failed to connect to Redis: {self._redis_url}")
 
         logger.info(f"Redis transport connected to {self._channel}")
@@ -320,22 +339,13 @@ class RedisTransport(BaseTransport):
             if self._loop:
                 future = asyncio.run_coroutine_threadsafe(self._queue.close(), self._loop)
                 future.result(timeout=5.0)
-
-            self._connected = False
-            self._pubsub = None
-
-            # Stop event loop
-            if self._loop:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-
-            # Wait for thread to finish
-            if self._thread:
-                self._thread.join(timeout=5.0)
-
             logger.info("Redis transport disconnected")
-
         except Exception as e:
             logger.error(f"Error disconnecting Redis transport: {e}")
+        finally:
+            self._connected = False
+            self._pubsub = None
+            self._cleanup_loop_and_thread()
 
     def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         """Send data via Redis pub/sub."""

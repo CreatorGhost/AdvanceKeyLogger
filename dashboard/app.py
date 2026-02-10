@@ -102,6 +102,16 @@ async def lifespan(app: FastAPI):
 
         except Exception as e:
             logger.error(f"Failed to start fleet controller: {e}")
+            # Stop controller if it was started (background tasks may be running)
+            try:
+                _ctrl = controller  # noqa: F841 — may not be bound yet
+            except UnboundLocalError:
+                _ctrl = None
+            if _ctrl is not None:
+                try:
+                    await _ctrl.stop()
+                except Exception:
+                    pass
             # Don't crash app if fleet fails — close FleetStorage to prevent leak
             if fleet_storage is not None:
                 try:

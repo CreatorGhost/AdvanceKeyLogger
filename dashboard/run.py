@@ -19,10 +19,29 @@ def main() -> None:
         "--secret-key", default="change-me-in-production", help="Session secret key"
     )
     parser.add_argument("--admin-user", default="admin", help="Admin username (default: admin)")
-    parser.add_argument("--admin-pass", default="admin", help="Admin password (default: admin)")
+    parser.add_argument(
+        "--admin-pass",
+        default=None,
+        help="Admin password (REQUIRED in production; auto-generated if omitted in dev)",
+    )
     parser.add_argument("--enable-fleet", action="store_true", help="Enable fleet management")
     parser.add_argument("--fleet-db", default=None, help="Path to fleet database")
     args = parser.parse_args()
+
+    # Require an explicit admin password in production
+    import os as _os
+    import secrets as _secrets
+
+    _env = _os.environ.get("APP_ENV", "development").lower()
+    if args.admin_pass is None:
+        if _env not in ("development", "dev", "test"):
+            parser.error(
+                "--admin-pass is required in production. "
+                "Set APP_ENV=development to auto-generate a password for local use."
+            )
+        # Auto-generate for dev/test and print to console
+        args.admin_pass = _secrets.token_urlsafe(16)
+        print(f"[DEV] Auto-generated admin password: {args.admin_pass}")
 
     # Configure settings
     from config.settings import Settings

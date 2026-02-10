@@ -90,7 +90,7 @@ async def send_command(
     except KeyError:
         priority = CommandPriority.NORMAL
 
-    cmd_id = controller.send_command(agent_id, cmd.action, cmd.parameters, priority)
+    cmd_id = await controller.send_command_async(agent_id, cmd.action, cmd.parameters, priority)
 
     if not cmd_id:
         raise HTTPException(400, "Failed to send command (agent offline or invalid)")
