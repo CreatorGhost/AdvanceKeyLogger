@@ -313,8 +313,9 @@ async def websocket_agent_endpoint(websocket: WebSocket, agent_id: str) -> None:
     # For fleet JWT tokens, ensure the authenticated identity matches the URL agent_id
     # to prevent one agent from connecting as another. Dashboard admin users are allowed
     # to connect to any agent channel for management purposes.
-    from dashboard.auth import _sessions as _dash_sessions
-    is_dashboard_user = token in _dash_sessions
+    from dashboard.auth import _sessions as _dash_sessions, _sessions_lock as _dash_lock
+    with _dash_lock:
+        is_dashboard_user = token in _dash_sessions
     if not is_dashboard_user and agent_user != agent_id:
         await websocket.accept()
         await websocket.close(code=4003, reason="Token identity does not match agent_id")

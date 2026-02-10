@@ -24,24 +24,34 @@ class FleetAuth:
         self.algorithm = "HS256"
         self._storage = storage  # FleetStorage instance for token revocation checks
 
-    def create_tokens(self, agent_id: str) -> Dict[str, str]:
-        """Generate access and refresh tokens for an agent."""
+    def create_tokens(self, agent_id: str) -> Dict[str, Any]:
+        """Generate access and refresh tokens for an agent.
+
+        The returned dict includes ``access_jti``, ``refresh_jti``,
+        ``access_expires_at`` and ``refresh_expires_at`` so callers can
+        persist the JTIs in storage (required for revocation to work).
+        """
         now = datetime.now(timezone.utc)
+
+        access_jti = secrets.token_hex(16)
+        refresh_jti = secrets.token_hex(16)
+        access_exp = now + self.access_ttl
+        refresh_exp = now + self.refresh_ttl
 
         access_payload = {
             "sub": agent_id,
             "type": "access",
             "iat": now,
-            "exp": now + self.access_ttl,
-            "jti": secrets.token_hex(16),
+            "exp": access_exp,
+            "jti": access_jti,
         }
 
         refresh_payload = {
             "sub": agent_id,
             "type": "refresh",
             "iat": now,
-            "exp": now + self.refresh_ttl,
-            "jti": secrets.token_hex(16),
+            "exp": refresh_exp,
+            "jti": refresh_jti,
         }
 
         access_token = jwt.encode(access_payload, self.secret_key, algorithm=self.algorithm)
@@ -52,6 +62,11 @@ class FleetAuth:
             "refresh_token": refresh_token,
             "expires_in": int(self.access_ttl.total_seconds()),
             "token_type": "Bearer",
+            # Metadata for JTI persistence — not included in API response models
+            "access_jti": access_jti,
+            "refresh_jti": refresh_jti,
+            "access_expires_at": access_exp.timestamp(),
+            "refresh_expires_at": refresh_exp.timestamp(),
         }
 
     def verify_token(self, token: str, expected_type: str = "access") -> Optional[str]:

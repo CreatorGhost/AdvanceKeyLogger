@@ -202,8 +202,27 @@ async def register_agent(
         # Generate tokens
         tokens = auth_service.create_tokens(req.agent_id)
 
+        # Persist token JTIs so revocation checks work (is_token_revoked
+        # treats unknown JTIs as revoked, so we must store them).
+        import hashlib as _hashlib
+
+        for prefix in ("access", "refresh"):
+            jti = tokens.get(f"{prefix}_jti")
+            expires_at = tokens.get(f"{prefix}_expires_at")
+            raw_token = tokens.get(f"{prefix}_token", "")
+            token_hash = _hashlib.sha256(raw_token.encode()).hexdigest()
+            if jti and expires_at:
+                await asyncio.to_thread(
+                    controller.storage.create_token,
+                    req.agent_id, token_hash, jti, expires_at,
+                )
+
         # Include controller public key for secure channel
         tokens["controller_public_key"] = controller.get_public_key()
+
+        # Strip internal JTI metadata before returning to the client
+        for key in ("access_jti", "refresh_jti", "access_expires_at", "refresh_expires_at"):
+            tokens.pop(key, None)
 
         return tokens
 
