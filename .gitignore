@@ -1,5 +1,12 @@
-# Credentials (NEVER commit real credentials)
+# Credentials and secrets (NEVER commit real credentials)
 credentials.json
+.env
+.env.*
+*.key
+*.pem
+*.cert
+*.crt
+encryption.key
 
 # Captured data
 screenshot/

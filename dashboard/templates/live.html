@@ -8,7 +8,7 @@
 <div class="live-status-bar">
     <span id="wsStatus" class="disconnected" title="Disconnected"></span>
     <span>Real-time updates</span>
-    <span id="liveBadge">LIVE</span>
+    <span id="liveStatusBadge">LIVE</span>
 </div>
 
 <!-- Metric Tabs -->
@@ -276,9 +276,10 @@
 // Enable WebSocket on this page
 document.body.dataset.enableWebsocket = 'true';
 
-// Initialize live dashboard on load
+// Initialize live dashboard on load (avoid double-init if ws-client.js already created one)
 document.addEventListener('DOMContentLoaded', () => {
-    if (!window.liveDashboard) {
+    const existing = (typeof window.getLiveDashboard === 'function') && window.getLiveDashboard();
+    if (!existing && !window.liveDashboard) {
         window.liveDashboard = new LiveDashboard();
         window.liveDashboard.init();
     }

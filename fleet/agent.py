@@ -87,8 +87,10 @@ class FleetAgent(Agent):
         url = f"{self.controller_url}{endpoint}"
 
         headers = kwargs.pop("headers", {})
-        if self.access_token:
+        if self.access_token is not None:
             headers["Authorization"] = f"Bearer {self.access_token}"
+        else:
+            logger.debug("No access token available for request to %s", endpoint)
 
         # Add default timeout
         if "timeout" not in kwargs:
@@ -124,7 +126,10 @@ class FleetAgent(Agent):
     async def _register(self) -> bool:
         """Register with the controller via REST API."""
         try:
-            ip_address = socket.gethostbyname(socket.gethostname())
+            loop = asyncio.get_running_loop()
+            ip_address = await loop.run_in_executor(
+                None, lambda: socket.gethostbyname(socket.gethostname())
+            )
 
             payload = {
                 "agent_id": self.agent_id,
@@ -151,8 +156,13 @@ class FleetAgent(Agent):
 
             if resp and resp.status_code == 200:
                 data = resp.json()
-                self.access_token = data.get("access_token")
-                self.refresh_token = data.get("refresh_token")
+                access = data.get("access_token")
+                refresh = data.get("refresh_token")
+                if not access:
+                    logger.error("Registration response missing access_token")
+                    return False
+                self.access_token = access
+                self.refresh_token = refresh
 
                 # Gap 4: Secure Channel Handshake
                 controller_key = data.get("controller_public_key")

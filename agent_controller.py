@@ -392,7 +392,8 @@ class Controller:
         """Broadcast a command to multiple agents."""
         command_ids = []
 
-        for agent_id, metadata in self.agents.items():
+        # Snapshot to avoid RuntimeError if dict mutates during iteration
+        for agent_id, metadata in list(self.agents.items()):
             if filter_func and not filter_func(metadata):
                 continue
 
@@ -465,7 +466,12 @@ class Controller:
             logger.error(f"Command {command_id} failed: {command.error_message}")
 
     async def _process_commands(self) -> None:
-        """Process commands from queues and send to agents."""
+        """Process commands from queues and send to agents.
+
+        Only drains queues for agents that have a real transport (e.g. WebSocket).
+        REST-polling agents register with ``transport=None``; their commands stay
+        in the queue until the agent polls ``GET /commands``.
+        """
         while self.running:
             try:
                 # Snapshot to avoid RuntimeError if dict mutates during iteration
@@ -473,6 +479,11 @@ class Controller:
                 for agent_id, queue in items:
                     # Verify agent still registered before sending
                     if agent_id not in self.agents:
+                        continue
+
+                    # Skip REST-polling agents — they have no transport and will
+                    # drain their queue themselves via the GET /commands endpoint.
+                    if not self.agent_transports.get(agent_id):
                         continue
 
                     try:
@@ -566,9 +577,9 @@ class Controller:
                         agent.status = AgentStatus.OFFLINE
                         logger.warning(f"Agent {agent_id} marked as offline (timeout)")
 
-                # Clean up old completed commands
+                # Clean up old completed commands (>1 hour)
                 commands_to_remove = []
-                for cmd_id, command in self.commands.items():
+                for cmd_id, command in list(self.commands.items()):
                     if command.status in (
                         CommandStatus.COMPLETED,
                         CommandStatus.FAILED,
@@ -577,11 +588,30 @@ class Controller:
                         if command.completed_at and current_time - command.completed_at > 3600:
                             commands_to_remove.append(cmd_id)
 
+                # Also expire stale PENDING/SENT commands past their timeout
+                for cmd_id, command in list(self.commands.items()):
+                    if command.status in (CommandStatus.PENDING, CommandStatus.SENT):
+                        age = current_time - command.timestamp
+                        if age > command.timeout:
+                            command.status = CommandStatus.FAILED
+                            command.error_message = "Timed out"
+                            command.completed_at = current_time
+                            commands_to_remove.append(cmd_id)
+
                 for cmd_id in commands_to_remove:
                     del self.commands[cmd_id]
 
                 if commands_to_remove:
                     logger.info(f"Cleaned up {len(commands_to_remove)} old commands")
+
+                # Enforce max_command_history to prevent unbounded growth
+                excess = len(self.commands) - self.max_command_history
+                if excess > 0:
+                    # Evict oldest commands first
+                    sorted_cmds = sorted(self.commands.items(), key=lambda kv: kv[1].timestamp)
+                    for cmd_id, _ in sorted_cmds[:excess]:
+                        del self.commands[cmd_id]
+                    logger.info(f"Evicted {excess} commands to enforce max_command_history={self.max_command_history}")
 
             except asyncio.CancelledError:
                 break
@@ -715,10 +745,13 @@ class Agent:
     async def _register(self) -> bool:
         """Register with the controller."""
         try:
-            # Get IP address
+            # Get IP address (non-blocking)
             import socket
 
-            ip_address = socket.gethostbyname(socket.gethostname())
+            loop = asyncio.get_running_loop()
+            ip_address = await loop.run_in_executor(
+                None, lambda: socket.gethostbyname(socket.gethostname())
+            )
 
             metadata = AgentMetadata(
                 agent_id=self.agent_id,

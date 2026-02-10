@@ -222,7 +222,7 @@ class FleetController(Controller):
         # to avoid hardcoding "online" and eliminate the redundant second DB write
         agent = self.agents.get(agent_id)
         agent_status = agent.status.name if agent else "ONLINE"
-        self.storage.record_heartbeat(agent_id, data, status=agent_status)
+        await asyncio.to_thread(self.storage.record_heartbeat, agent_id, data, status=agent_status)
 
     # Override send_command to persist
     def send_command(
@@ -248,12 +248,12 @@ class FleetController(Controller):
 
         command = self.commands.get(command_id)
         if command:
-            status = command.status.name.lower()
+            cmd_status = command.status.name.lower()
             error = command.error_message
-            self.storage.update_command_status(command_id, status, result, error or "")
+            await asyncio.to_thread(
+                self.storage.update_command_status, command_id, cmd_status, result, error or ""
+            )
 
-    # Async command enqueuing - now just a convenience wrapper since send_command
-    # uses put_nowait() which is sync-safe
     async def send_command_async(
         self,
         agent_id: str,
@@ -264,10 +264,16 @@ class FleetController(Controller):
     ) -> Optional[str]:
         """Async version of send_command.
 
-        Note: Since send_command() now uses put_nowait() internally, it's already
-        sync-safe. This method exists for API consistency in async contexts.
+        Offloads the blocking storage.create_command() call to a thread so the
+        event loop is not stalled.
         """
-        return self.send_command(agent_id, action, parameters, priority, timeout)
+        command_id = super().send_command(agent_id, action, parameters, priority, timeout)
+        if command_id:
+            await asyncio.to_thread(
+                self.storage.create_command,
+                command_id, agent_id, action, parameters, priority.name.lower(),
+            )
+        return command_id
 
     def send_command_sync_safe(
         self,

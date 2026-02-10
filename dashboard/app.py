@@ -7,9 +7,13 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
 from contextlib import asynccontextmanager
 
 from config.settings import Settings
@@ -62,8 +66,19 @@ async def lifespan(app: FastAPI):
             fleet_storage = FleetStorage(db_path)
 
             # Auth config
-            jwt_secret = settings.get("fleet.auth.jwt_secret", "change-me-in-production")
-            auth_service = FleetAuth(jwt_secret)
+            jwt_secret = settings.get("fleet.auth.jwt_secret", _INSECURE_DEFAULT)
+            if jwt_secret.lower() == _INSECURE_DEFAULT.lower():
+                env = os.environ.get("APP_ENV", "development").lower()
+                if env != "development":
+                    raise RuntimeError(
+                        "Fleet JWT secret is set to the insecure default. "
+                        "Set fleet.auth.jwt_secret in config or APP_ENV=development."
+                    )
+                logger.warning(
+                    "Fleet JWT secret is set to the insecure default — "
+                    "do NOT use in production (APP_ENV=%s)", env,
+                )
+            auth_service = FleetAuth(jwt_secret, storage=fleet_storage)
 
             # Controller config - copy to avoid mutating Settings._config
             controller_config = dict(settings.get("fleet.controller", {}))
@@ -141,6 +156,43 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+
+    # Security headers middleware
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: StarletteRequest, call_next) -> StarletteResponse:
+            response = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["X-XSS-Protection"] = "1; mode=block"
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # CORS middleware — restrict origins in production
+    try:
+        settings = Settings()
+        allowed_origins = settings.get("dashboard.allowed_origins", [])
+    except Exception:
+        allowed_origins = []
+
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["*"],
+        )
+    else:
+        # Development fallback: match any localhost port via regex
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"^http://localhost(:\d+)?$",
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["*"],
+        )
 
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
 

@@ -43,6 +43,7 @@ function esc(str) {
 async function refreshAgents() {
     try {
         const res = await fetch('/api/dashboard/fleet/agents');
+        if (res.status === 401) { window.location.href = '/login'; return; }
         if (res.ok) {
             const data = await res.json();
             const tbody = document.querySelector('#agents-table tbody');
@@ -79,6 +80,19 @@ async function refreshAgents() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', refreshAgents);
+document.addEventListener('DOMContentLoaded', () => {
+    refreshAgents();
+
+    // Initialize WebSocket for real-time agent status updates
+    if (window.LiveDashboard && typeof window.getLiveDashboard === 'function' && !window.getLiveDashboard()) {
+        const ld = new window.LiveDashboard();
+        ld.init();
+
+        // Listen for agent_status messages to refresh the table
+        if (ld.ws) {
+            ld.ws.on('agent_status', () => refreshAgents());
+        }
+    }
+});
 </script>
 {% endblock %}
