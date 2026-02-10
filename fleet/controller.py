@@ -185,12 +185,7 @@ class FleetController(Controller):
             logger.error(f"Error loading fleet state: {e}")
 
     # Override register_agent to persist
-    def register_agent(self, metadata: AgentMetadata, transport: Any, public_key: bytes) -> Any:
-        channel = super().register_agent(metadata, transport, public_key)
-
-        # Persist to DB
-        agent_dict = metadata.to_dict()
-
+    async def register_agent(self, metadata: AgentMetadata, transport: Any, public_key: bytes) -> Any:
         # Extract enrollment_key from tags if present
         # Convention: enrollment key is stored as a tag with prefix "enrollment_key:"
         enrollment_key = None
@@ -199,31 +194,41 @@ class FleetController(Controller):
                 enrollment_key = tag[len("enrollment_key:") :]
                 break
 
+        # Persist to DB first (offloaded to thread) — if this fails we don't
+        # touch in-memory state at all.
+        agent_dict = metadata.to_dict()
+        await asyncio.to_thread(
+            self.storage.register_agent,
+            metadata.agent_id,
+            {
+                "name": metadata.hostname,
+                "public_key": public_key.decode("utf-8", errors="ignore"),
+                "status": metadata.status.name,
+                "ip_address": metadata.ip_address,
+                "hostname": metadata.hostname,
+                "platform": metadata.platform,
+                "version": metadata.version,
+                "metadata": agent_dict,
+                "enrollment_key": enrollment_key,
+            },
+        )
+
+        # Now register in-memory via parent (creates SecureChannel, updates dicts
+        # under self._lock).  If this somehow fails, roll back the DB row.
         try:
-            self.storage.register_agent(
-                metadata.agent_id,
-                {
-                    "name": metadata.hostname,  # Use hostname as name for now
-                    "public_key": public_key.decode("utf-8", errors="ignore"),  # Store as string
-                    "status": metadata.status.name,
-                    "ip_address": metadata.ip_address,
-                    "hostname": metadata.hostname,
-                    "platform": metadata.platform,
-                    "version": metadata.version,
-                    "metadata": agent_dict,
-                    "enrollment_key": enrollment_key,
-                },
-            )
+            channel = await super().register_agent(metadata, transport, public_key)
         except Exception:
-            # DB persistence failed — rollback the in-memory registration so the
-            # caller does not end up with an agent that exists in memory but not
-            # in the database (which would be lost on restart).
             logger.error(
-                "DB persistence failed for agent %s, rolling back in-memory registration",
+                "In-memory registration failed for agent %s, rolling back DB row",
                 metadata.agent_id,
                 exc_info=True,
             )
-            super().unregister_agent(metadata.agent_id)
+            try:
+                await asyncio.to_thread(
+                    self.storage.update_agent_status, metadata.agent_id, "UNREGISTERED",
+                )
+            except Exception:
+                pass
             raise
         return channel
 
@@ -279,7 +284,11 @@ class FleetController(Controller):
         Offloads the blocking storage.create_command() call to a thread so the
         event loop is not stalled.
         """
-        command_id = super().send_command(agent_id, action, parameters, priority, timeout)
+        # Acquire the controller lock so the sync super().send_command() —
+        # which reads/writes self.agents, self.commands, self.command_queues —
+        # does not race with other async methods that hold the same lock.
+        async with self._lock:
+            command_id = super().send_command(agent_id, action, parameters, priority, timeout)
         if command_id:
             await asyncio.to_thread(
                 self.storage.create_command,

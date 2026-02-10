@@ -321,14 +321,6 @@ class Controller:
         """
         agent_id = metadata.agent_id
 
-        # Offload blocking storage I/O before acquiring the async lock
-        if hasattr(self, "storage") and self.storage is not None:
-            await asyncio.to_thread(
-                self.storage.register_agent,
-                agent_id,
-                metadata.to_dict(),
-            )
-
         # Create secure channel
         channel = SecureChannel()
         channel.initialize()

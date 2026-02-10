@@ -193,7 +193,7 @@ class SyncEngine:
                         self._ledger._conn.execute(
                             "UPDATE sync_ledger SET sync_state = ?, batch_id = NULL "
                             "WHERE id = ? AND sync_state IN (?, ?)",
-                            (SyncState.QUEUED.value, rid,
+                            (SyncState.PENDING.value, rid,
                              SyncState.IN_FLIGHT.value, SyncState.QUEUED.value),
                         )
                     except Exception:
