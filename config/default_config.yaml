@@ -43,6 +43,55 @@ storage:
   sqlite_path: "./data/captures.db"
   purge_sent_after_seconds: 86400  # Delete sent records older than 24 hours
 
+# ── Offline-First Sync Engine ────────────────────────────────────────
+# Replaces the basic get_pending→send→mark_sent loop with a full sync
+# pipeline: priority queuing, adaptive batching, checkpointing, retry
+# with backoff, connectivity awareness, and conflict resolution.
+sync:
+  enabled: true
+  mode: "immediate"              # immediate | interval | manual
+  interval_seconds: 10           # for "interval" mode
+  max_batch_size: 50
+  min_batch_size: 5
+  max_batch_mb: 10
+  compression: true
+  compression_threshold_bytes: 1024
+  integrity_check: true
+  max_retry_attempts: 5
+  retry_backoff_base: 2.0        # exponential backoff base (seconds)
+  retry_backoff_max: 300          # max backoff cap (5 minutes)
+  priority_order:
+    - "critical"
+    - "normal"
+    - "low"
+
+  connectivity:
+    check_interval: 30            # seconds between probes
+    probe_timeout: 5              # TCP connect timeout
+    backpressure_threshold_mb: 100  # urgency trigger when DB exceeds this
+    policies:
+      wifi:
+        max_batch_mb: 10
+        min_interval: 0
+      cellular:
+        max_batch_mb: 1
+        min_interval: 300
+      wired:
+        max_batch_mb: 20
+        min_interval: 0
+      default:
+        max_batch_mb: 5
+        min_interval: 10
+
+  checkpoint:
+    enabled: true
+    retention_hours: 24
+
+  conflict:
+    default_strategy: "last_writer_wins"  # last_writer_wins | server_wins | client_wins | merge_fields
+    auto_resolve_captures: true
+    queue_config_conflicts: true
+
 transport:
   method: "email"
   retry_attempts: 3
