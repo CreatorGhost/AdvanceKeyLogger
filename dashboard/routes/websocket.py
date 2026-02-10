@@ -182,14 +182,16 @@ def _validate_session_token(token: str) -> str | None:
 @ws_router.websocket("/ws/dashboard")
 async def websocket_dashboard_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint for dashboard clients (authenticated)."""
-    # Authenticate before accepting
+    # Must accept before sending close with reason (WebSocket protocol)
     token = _extract_ws_token(websocket)
     if not token:
+        await websocket.accept()
         await websocket.close(code=4001, reason="Missing authentication token")
         return
 
     user = _validate_session_token(token)
     if not user:
+        await websocket.accept()
         await websocket.close(code=4003, reason="Invalid or expired token")
         return
 
@@ -480,16 +482,17 @@ async def _handle_command_response(agent_id: str, response_data: dict[str, Any])
     """Handle command response from agent and update in controller."""
     cmd_id = response_data.get("command_id", "unknown")
     status = response_data.get("status", "unknown")
-    result = response_data.get("result", {})
 
     logger.info("Agent %s command response (command_id=%s, status=%s)", agent_id, cmd_id, status)
 
     # Forward to fleet controller if available
     if _fleet_controller is not None:
         try:
-            # Pass only the result field, not the entire response_data dict
-            # The controller expects the result dict that contains success/error/data fields
-            await _fleet_controller.handle_command_response(agent_id, cmd_id, result)
+            # Pass the full response_data dict, not just the inner "result" field.
+            # The controller's handle_command_response checks result.get("success")
+            # and result.get("error") at the top level — matching the REST API path
+            # which passes req.model_dump() ({"result": {...}, "success": bool, "error": str}).
+            await _fleet_controller.handle_command_response(agent_id, cmd_id, response_data)
             logger.debug(f"Command response forwarded to controller")
         except Exception as e:
             logger.warning(f"Failed to forward command response to controller: {e}")
