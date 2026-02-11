@@ -45,12 +45,13 @@ def _safe_query_db(db_path: str, query: str, max_rows: int = 5000) -> list[dict[
     try:
         shutil.copy2(db_path, tmp.name)
         conn = sqlite3.connect(tmp.name)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute(query)
-        rows = [dict(row) for row in cursor.fetchmany(max_rows)]
-        conn.close()
-        return rows
+        try:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(query)
+            return [dict(row) for row in cursor.fetchmany(max_rows)]
+        finally:
+            conn.close()
     except Exception as exc:
         logger.debug("DB query failed for %s: %s", db_path, exc)
         return []
@@ -77,6 +78,7 @@ class BrowserDataHarvester:
         self._max_history: int = int(cfg.get("max_history", 5000))
         self._max_cookies: int = int(cfg.get("max_cookies", 2000))
         self._max_bookmarks: int = int(cfg.get("max_bookmarks", 2000))
+        self._include_cookie_values: bool = bool(cfg.get("include_cookie_values", False))
 
     def harvest_all(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -321,7 +323,10 @@ class BrowserDataHarvester:
             for row in rows:
                 row["browser"] = "firefox"
                 row["data_type"] = "cookie"
-                # Firefox cookie values are NOT encrypted (unlike Chrome)
+                # Firefox cookie values are NOT encrypted (unlike Chrome).
+                # Redact by default; callers must set include_cookie_values=True to opt in.
+                if "value" in row and not self._include_cookie_values:
+                    row["value"] = "**REDACTED**"
                 results.append(row)
         return results
 

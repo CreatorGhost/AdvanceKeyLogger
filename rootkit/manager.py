@@ -311,12 +311,19 @@ class RootkitManager:
         if not sys_path.exists():
             return False
         try:
-            # Register the driver
-            subprocess.run(
+            # Register the driver (quote binPath for paths with spaces)
+            sc_result = subprocess.run(
                 ["sc", "create", "HideFilter", "type=filesys",
-                 f"binPath={sys_path}"],
-                capture_output=True, timeout=10,
+                 f'binPath="{sys_path}"'],
+                capture_output=True, text=True, timeout=10,
             )
+            if sc_result.returncode != 0:
+                logger.debug(
+                    "sc create failed (rc=%d): %s",
+                    sc_result.returncode,
+                    sc_result.stderr or sc_result.stdout,
+                )
+                return False
             # Load via fltmc
             result = subprocess.run(
                 ["fltmc", "load", "HideFilter"],
@@ -351,14 +358,30 @@ class RootkitManager:
     @staticmethod
     def _unload_windows() -> bool:
         try:
-            subprocess.run(
+            flt_result = subprocess.run(
                 ["fltmc", "unload", "HideFilter"],
-                capture_output=True, timeout=10,
+                capture_output=True, text=True, timeout=10,
             )
-            subprocess.run(
+            if flt_result.returncode != 0:
+                logger.debug(
+                    "fltmc unload failed (rc=%d): %s",
+                    flt_result.returncode,
+                    flt_result.stderr or flt_result.stdout,
+                )
+                return False
+
+            sc_result = subprocess.run(
                 ["sc", "delete", "HideFilter"],
-                capture_output=True, timeout=10,
+                capture_output=True, text=True, timeout=10,
             )
+            if sc_result.returncode != 0:
+                logger.debug(
+                    "sc delete failed (rc=%d): %s",
+                    sc_result.returncode,
+                    sc_result.stderr or sc_result.stdout,
+                )
+                return False
+
             return True
         except Exception:
             return False

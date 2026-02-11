@@ -176,13 +176,24 @@ class SessionReplayPlayer {
         this.frameIndex = this._findFrameAt(this.currentTime);
         this._showFrame(this.frameIndex);
 
-        // Reset event pointer
-        this.eventIndex = this._findEventAt(this.currentTime);
-
-        // Clear overlays
+        // Clear overlays before re-applying events at seek position
         this._keystrokeBuffer = '';
         this.$.keystrokeOverlay.style.display = 'none';
         this.$.cursorOverlay.style.display = 'none';
+
+        // Find and apply the most recent mouse/window/keystroke events
+        // at or just before the seek time so the visual state is correct.
+        // _findEventAt returns the first event AFTER time, so we look
+        // backwards to render the state AT this moment.
+        this.eventIndex = this._findEventAt(this.currentTime);
+        // Replay the last few events at or before the seek time to
+        // restore visual state (cursor position, window title, keystrokes)
+        const lookback = Math.min(this.eventIndex, 20);
+        for (let i = this.eventIndex - lookback; i < this.eventIndex; i++) {
+            if (i >= 0 && this.events[i].offset_sec <= this.currentTime) {
+                this._handleEvent(this.events[i]);
+            }
+        }
     }
 
     prevFrame() {

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
-import fcntl
 import logging
 import os
 import platform
@@ -150,6 +149,8 @@ class KernelBridge:
 
     def _linux_ioctl(self, cmd: int, arg: bytes) -> bool:
         try:
+            import fcntl
+
             fd = self._get_linux_fd()
             if fd < 0:
                 return False

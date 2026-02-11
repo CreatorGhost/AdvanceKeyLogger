@@ -7,6 +7,7 @@ serving frame images, and controlling recording.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,7 @@ async def list_sessions(
     """List recorded sessions, newest first."""
     _require_auth(request)
     store = _get_store(request)
-    sessions = store.list_sessions(limit=limit, status=status)
+    sessions = await asyncio.to_thread(store.list_sessions, limit=limit, status=status)
 
     # Enrich with thumbnail URL
     for s in sessions:
@@ -64,7 +65,20 @@ async def session_stats(request: Request) -> dict[str, Any]:
     """Return aggregate recording statistics."""
     _require_auth(request)
     store = _get_store(request)
-    return store.get_stats()
+    return await asyncio.to_thread(store.get_stats)
+
+
+# NOTE: Fixed-path routes MUST be registered BEFORE parameterized routes.
+# FastAPI matches in registration order -- /{session_id} would swallow
+# "recorder" as a session_id, making /recorder/status unreachable.
+@session_api_router.get("/recorder/status")
+async def recorder_status(request: Request) -> dict[str, Any]:
+    """Return current recorder status."""
+    _require_auth(request)
+    recorder = getattr(request.app.state, "session_recorder", None)
+    if recorder is None:
+        return {"enabled": False, "recording": False}
+    return await asyncio.to_thread(recorder.get_status)
 
 
 # ------------------------------------------------------------------
@@ -76,7 +90,7 @@ async def get_session(request: Request, session_id: str) -> dict[str, Any]:
     """Return session metadata."""
     _require_auth(request)
     store = _get_store(request)
-    session = store.get_session(session_id)
+    session = await asyncio.to_thread(store.get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -90,7 +104,7 @@ async def get_timeline(request: Request, session_id: str) -> dict[str, Any]:
     """
     _require_auth(request)
     store = _get_store(request)
-    timeline = store.get_timeline(session_id)
+    timeline = await asyncio.to_thread(store.get_timeline, session_id)
     if not timeline:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -111,7 +125,7 @@ async def get_frame(request: Request, session_id: str, frame_id: int) -> FileRes
     _require_auth(request)
     store = _get_store(request)
 
-    frames = store.get_frames(session_id)
+    frames = await asyncio.to_thread(store.get_frames, session_id)
     if not frames:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -165,7 +179,7 @@ async def get_events(
     """Return events for a session, optionally filtered by type."""
     _require_auth(request)
     store = _get_store(request)
-    events = store.get_events(session_id, event_type=event_type)
+    events = await asyncio.to_thread(store.get_events, session_id, event_type=event_type)
     return {"events": events, "total": len(events)}
 
 
@@ -182,7 +196,9 @@ async def start_recording(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="Session recorder not available")
     if recorder.is_recording:
         return {"status": "already_recording", "session_id": recorder.session_id}
-    session_id = recorder.start_session()
+    session_id = await asyncio.to_thread(recorder.start_session)
+    if not session_id:
+        raise HTTPException(status_code=503, detail="Recording is disabled in configuration")
     return {"status": "started", "session_id": session_id}
 
 
@@ -196,18 +212,8 @@ async def stop_recording(request: Request) -> dict[str, Any]:
     if not recorder.is_recording:
         return {"status": "not_recording"}
     session_id = recorder.session_id
-    recorder.stop_session()
+    await asyncio.to_thread(recorder.stop_session)
     return {"status": "stopped", "session_id": session_id}
-
-
-@session_api_router.get("/recorder/status")
-async def recorder_status(request: Request) -> dict[str, Any]:
-    """Return current recorder status."""
-    _require_auth(request)
-    recorder = getattr(request.app.state, "session_recorder", None)
-    if recorder is None:
-        return {"enabled": False, "recording": False}
-    return recorder.get_status()
 
 
 # ------------------------------------------------------------------
@@ -219,8 +225,8 @@ async def delete_session(request: Request, session_id: str) -> dict[str, Any]:
     """Delete a session and all its data."""
     _require_auth(request)
     store = _get_store(request)
-    session = store.get_session(session_id)
+    session = await asyncio.to_thread(store.get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    store.delete_session(session_id)
+    await asyncio.to_thread(store.delete_session, session_id)
     return {"status": "deleted", "session_id": session_id}

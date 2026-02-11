@@ -1,6 +1,7 @@
 """
 Hybrid envelope encryption using X25519 + AES-256-GCM.
 """
+
 from __future__ import annotations
 
 import base64
@@ -18,6 +19,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from crypto.signer import sign_message, verify_message
 
 _HKDF_SALT = b"x25519-e2e-hkdf-v1"
+_HKDF_SALT_INTERMEDIATE = b"AdvanceKeyLogger-E2E-v1"
 
 
 @dataclass
@@ -171,24 +173,29 @@ class HybridEnvelope:
     ) -> bytes:
         if envelope.version != 1:
             raise ValueError(f"Unsupported envelope version: {envelope.version}")
-        sender_public = ed25519.Ed25519PublicKey.from_public_bytes(
-            envelope.sender_public_key
-        )
+        sender_public = ed25519.Ed25519PublicKey.from_public_bytes(envelope.sender_public_key)
         if verify_signature and not _verify_signature(envelope, sender_public):
             raise ValueError("Invalid envelope signature")
 
-        ephemeral_public = x25519.X25519PublicKey.from_public_bytes(
-            envelope.ephemeral_public_key
-        )
+        ephemeral_public = x25519.X25519PublicKey.from_public_bytes(envelope.ephemeral_public_key)
         shared_secret = server_private_key.exchange(ephemeral_public)
 
-        wrap_key = _derive_wrap_key(shared_secret, legacy=False)
+        # Try current salt first
+        wrap_key = _derive_wrap_key(shared_secret, legacy=False, intermediate=False)
         data_key = _decrypt_wrapped_key(envelope, wrap_key)
+
+        # Fallback to legacy (salt=None)
         if data_key is None:
             wrap_key = _derive_wrap_key(shared_secret, legacy=True)
             data_key = _decrypt_wrapped_key(envelope, wrap_key)
-            if data_key is None:
-                raise ValueError("Failed to unwrap data key")
+
+        # Fallback to intermediate salt
+        if data_key is None:
+            wrap_key = _derive_wrap_key(shared_secret, legacy=False, intermediate=True)
+            data_key = _decrypt_wrapped_key(envelope, wrap_key)
+
+        if data_key is None:
+            raise ValueError("Failed to unwrap data key")
 
         payload = _decrypt_payload(envelope, data_key)
         if payload is None:
@@ -196,12 +203,37 @@ class HybridEnvelope:
         return payload
 
 
-def _derive_wrap_key(shared_secret: bytes, legacy: bool) -> bytes:
+def _derive_wrap_key(
+    shared_secret: bytes,
+    legacy: bool = False,
+    intermediate: bool = False,
+) -> bytes:
+    """Derive a wrap key from the shared secret using HKDF.
+
+    Args:
+        shared_secret: The X25519 shared secret.
+        legacy: If True, use legacy derivation (salt=None, info=b"AKL-E2E-WRAP").
+        intermediate: If True, use intermediate salt (_HKDF_SALT_INTERMEDIATE).
+                      Only used if legacy=False.
+
+    Returns:
+        32-byte AES-256 wrap key.
+    """
+    if legacy:
+        salt = None
+        info = b"AKL-E2E-WRAP"
+    elif intermediate:
+        salt = _HKDF_SALT_INTERMEDIATE
+        info = b"E2E-WRAP-V1"
+    else:
+        salt = _HKDF_SALT
+        info = b"E2E-WRAP-V1"
+
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=None if legacy else _HKDF_SALT,
-        info=b"AKL-E2E-WRAP" if legacy else b"E2E-WRAP-V1",
+        salt=salt,
+        info=info,
     )
     return hkdf.derive(shared_secret)
 

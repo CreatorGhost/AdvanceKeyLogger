@@ -601,10 +601,14 @@ class TestMemoryCloak:
         MemoryCloak.secure_wipe(None)
 
     def test_apply_idempotent(self):
+        from unittest.mock import patch
         from stealth.memory_cloak import MemoryCloak
         mc = MemoryCloak()
-        mc.apply()
-        mc.apply()  # second call should be no-op
+        with patch.object(mc, "_clear_docstrings"), \
+             patch.object(mc, "_scrub_file_attrs"), \
+             patch.object(mc, "_rename_modules"):
+            mc.apply()
+            mc.apply()  # second call should be no-op
         assert mc._applied is True
 
 

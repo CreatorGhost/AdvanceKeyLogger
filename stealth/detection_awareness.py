@@ -61,16 +61,16 @@ class ThreatResponse(str, enum.Enum):
 
 _MONITOR_PROCESSES: dict[str, set[str]] = {
     "darwin": {
-        "Activity Monitor", "Console", "Instruments", "dtrace", "fs_usage",
-        "lsof", "tcpdump", "Wireshark", "Little Snitch", "LuLu",
-        "BlockBlock", "KnockKnock", "OverSight", "ReiKey", "TaskExplorer",
-        "Netiquette", "ProcessMonitor", "FileMon", "dtruss",
+        "activity monitor", "console", "instruments", "dtrace", "fs_usage",
+        "lsof", "tcpdump", "wireshark", "little snitch", "lulu",
+        "blockblock", "knockknock", "oversight", "reikey", "taskexplorer",
+        "netiquette", "processmonitor", "filemon", "dtruss",
     },
     "linux": {
         "htop", "top", "strace", "ltrace", "tcpdump", "wireshark",
         "tshark", "auditd", "sysdig", "bpftrace", "perf", "gdb", "lldb",
         "iotop", "nethogs", "bandwhich", "nmon", "atop", "ftrace",
-        "valgrind", "ltrace",
+        "valgrind",
     },
     "windows": {
         "taskmgr.exe", "procmon.exe", "procexp.exe", "procexp64.exe",
@@ -83,18 +83,18 @@ _MONITOR_PROCESSES: dict[str, set[str]] = {
 
 _EDR_AV_PROCESSES: set[str] = {
     # CrowdStrike
-    "falcon-sensor", "CSFalconService", "csagent", "CSFalconContainer",
+    "falcon-sensor", "csfalconservice", "csagent", "csfalconcontainer",
     # SentinelOne
-    "SentinelAgent", "sentinelone-agent", "SentinelHelperDaemon",
-    "SentinelStaticEngine",
+    "sentinelagent", "sentinelone-agent", "sentinelhelperdaemon",
+    "sentinelstaticengine",
     # Carbon Black
-    "cb", "CbDefense", "CbOsxSensorService", "RepMgr", "CbDefenseSensor",
+    "cb", "cbdefense", "cbosxsensorservice", "repmgr", "cbdefensesensor",
     # Microsoft Defender
-    "MsMpEng.exe", "MsSense.exe", "SenseCncProxy.exe", "SenseIR.exe",
-    "MpCmdRun.exe",
+    "msmpeng.exe", "mssense.exe", "sensecncproxy.exe", "senseir.exe",
+    "mpcmdrun.exe",
     # Sophos
-    "SophosScanD", "SophosAntiVirus", "SophosWebIntelligence",
-    "SophosFileProtection", "sophossps",
+    "sophosscand", "sophosantivirus", "sophoswebintelligence",
+    "sophosfileprotection", "sophossps",
     # Kaspersky
     "avp.exe", "avpui.exe", "kavtray.exe", "klnagent.exe",
     # ESET
@@ -102,23 +102,23 @@ _EDR_AV_PROCESSES: set[str] = {
     # Bitdefender
     "bdagent.exe", "bdservicehost.exe", "bdntwrk.exe", "vsserv.exe",
     # Malwarebytes
-    "mbam.exe", "mbamservice.exe", "MBAMService.exe", "RTProtectionSvc.exe",
+    "mbam.exe", "mbamservice.exe", "rtprotectionsvc.exe",
     # McAfee
-    "McAfeeFramework", "mfemactl", "mfetp", "McShield.exe",
+    "mcafeeframework", "mfemactl", "mfetp", "mcshield.exe",
     # Trend Micro
-    "ds_agent", "coreServiceShell", "Ntrtscan.exe", "PccNTMon.exe",
+    "ds_agent", "coreserviceshell", "ntrtscan.exe", "pccntmon.exe",
     # Norton / Symantec
-    "ccSvcHst.exe", "NortonSecurity.exe", "SymCorpUI.exe", "smc.exe",
+    "ccsvchst.exe", "nortonsecurity.exe", "symcorpui.exe", "smc.exe",
     # Palo Alto Cortex XDR
     "traps_agent", "cyserver.exe",
     # Cylance
-    "CylanceSvc.exe", "CylanceUI.exe",
+    "cylancesvc.exe", "cylanceui.exe",
     # F-Secure
     "fshoster.exe", "fsav.exe",
     # Webroot
-    "WRSA.exe", "WRCoreService.exe",
+    "wrsa.exe", "wrcoreservice.exe",
     # macOS built-in
-    "XProtect", "MRT", "Gatekeeper",
+    "xprotect", "mrt", "gatekeeper",
 }
 
 # ── VM/Sandbox indicators ────────────────────────────────────────────
@@ -209,25 +209,23 @@ class DetectionAwareness:
         level = ThreatLevel.NONE
         response = ThreatResponse.IGNORE
 
-        # 1. Check for monitoring tools
-        monitors = self._check_monitors()
+        # 1 & 3. Single-pass process scan for monitors + security tools
+        monitors, security = self._scan_processes()
         if monitors:
             detections.extend(f"monitor:{m}" for m in monitors)
             level = max(level, ThreatLevel.LOW)
             response = max(response, self._monitor_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
+
+        if security:
+            detections.extend(f"security:{s}" for s in security)
+            level = max(level, ThreatLevel.MEDIUM)
+            response = max(response, self._security_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
 
         # 2. Check for debuggers
         if self._check_debugger():
             detections.append("debugger:active")
             level = max(level, ThreatLevel.MEDIUM)
             response = max(response, self._debugger_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
-
-        # 3. Check for security tools
-        security = self._check_security_tools()
-        if security:
-            detections.extend(f"security:{s}" for s in security)
-            level = max(level, ThreatLevel.MEDIUM)
-            response = max(response, self._security_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
 
         # 4. VM detection (if enabled)
         if self._vm_detection and self._check_vm():
@@ -281,40 +279,40 @@ class DetectionAwareness:
 
     # ── Detection methods ────────────────────────────────────────────
 
-    def _check_monitors(self) -> list[str]:
-        """Scan running processes for known monitoring tools."""
-        found: list[str] = []
-        known = _MONITOR_PROCESSES.get(self._platform, set())
-        if not known:
-            return found
+    def _scan_processes(self) -> tuple[list[str], list[str]]:
+        """Single-pass process scan returning (monitors, security_tools).
+
+        Iterates ``psutil.process_iter`` once and classifies each process
+        name against both ``_MONITOR_PROCESSES`` and ``_EDR_AV_PROCESSES``.
+        """
+        monitors: list[str] = []
+        security: list[str] = []
+        monitor_set = _MONITOR_PROCESSES.get(self._platform, set())
         try:
             import psutil
             for proc in psutil.process_iter(["name"]):
                 try:
                     name = proc.info.get("name", "") or ""
-                    if name in known:
-                        found.append(name)
+                    name_lower = name.lower()
+                    if monitor_set and name_lower in monitor_set:
+                        monitors.append(name)
+                    if name_lower in _EDR_AV_PROCESSES:
+                        security.append(name)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except ImportError:
             pass
-        return found
+        return monitors, security
+
+    def _check_monitors(self) -> list[str]:
+        """Scan running processes for known monitoring tools."""
+        monitors, _ = self._scan_processes()
+        return monitors
 
     def _check_security_tools(self) -> list[str]:
         """Scan running processes for known EDR/AV software."""
-        found: list[str] = []
-        try:
-            import psutil
-            for proc in psutil.process_iter(["name"]):
-                try:
-                    name = proc.info.get("name", "") or ""
-                    if name in _EDR_AV_PROCESSES:
-                        found.append(name)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-        except ImportError:
-            pass
-        return found
+        _, security = self._scan_processes()
+        return security
 
     def _check_debugger(self) -> bool:
         """Multi-layer debugger detection."""
@@ -337,7 +335,7 @@ class DetectionAwareness:
         if plat == "linux":
             return self._check_debugger_linux()
         if plat == "darwin":
-            return self._check_debugger_posix()
+            return self._check_debugger_macos()
         if plat == "windows":
             return self._check_debugger_windows()
         return False
@@ -356,14 +354,17 @@ class DetectionAwareness:
         return False
 
     @staticmethod
-    def _check_debugger_posix() -> bool:
-        """Platform-appropriate ptrace-based debugger check.
+    def _check_debugger_macos() -> bool:
+        """macOS ptrace-based debugger check via PT_DENY_ATTACH.
 
-        - Linux: ``PTRACE_TRACEME`` — failure (errno) means already traced.
-        - macOS: ``PT_DENY_ATTACH`` (31) — denies future attaches; returns
-          -1 if a debugger is already attached.
+        ``PT_DENY_ATTACH`` (31) denies future attaches and returns -1
+        if a debugger is already attached.
+
+        Linux debugger detection uses ``_check_debugger_linux`` (TracerPid)
+        instead — the previous PTRACE_TRACEME + PTRACE_DETACH(self) approach
+        was incorrect (PTRACE_DETACH requires a *child* pid, not self) and
+        could leave the process in a permanently traced state.
         """
-        import platform as _plat
         try:
             from ctypes.util import find_library
 
@@ -372,23 +373,9 @@ class DetectionAwareness:
                 return False
             libc = ctypes.CDLL(libc_name, use_errno=True)
 
-            if _plat.system().lower() == "darwin":
-                # PT_DENY_ATTACH = 31; fails with EBUSY if already traced
-                PT_DENY_ATTACH = 31
-                result = libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
-                return result == -1
-            else:
-                # Linux: PTRACE_TRACEME — if we can trace ourselves, no
-                # debugger is attached; on success, immediately detach.
-                PTRACE_TRACEME = 0
-                result = libc.ptrace(PTRACE_TRACEME, 0, 0, 0)
-                if result == -1:
-                    return True  # already being traced
-                # Undo: detach ourselves using our own PID
-                import os as _os
-                PTRACE_DETACH = 17
-                libc.ptrace(PTRACE_DETACH, _os.getpid(), 0, 0)
-                return False
+            PT_DENY_ATTACH = 31
+            result = libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
+            return result == -1
         except Exception:
             pass
         return False
@@ -463,10 +450,14 @@ class DetectionAwareness:
             # CPU cores < 2
             if (os.cpu_count() or 4) < 2:
                 return True
-            # Disk < 60 GB
-            disk = psutil.disk_usage("/")
-            if disk.total < 60 * 1024 * 1024 * 1024:
-                return True
+            # Disk < 60 GB — use platform-appropriate root path
+            disk_path = Path.home().anchor  # "/" on Unix, "C:\\" on Windows
+            try:
+                disk = psutil.disk_usage(disk_path)
+                if disk.total < 60 * 1024 * 1024 * 1024:
+                    return True
+            except OSError:
+                pass
         except Exception:
             pass
         return False

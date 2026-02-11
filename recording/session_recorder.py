@@ -148,13 +148,6 @@ class SessionRecorder:
         if self._session_id is None:
             return
 
-        # Auto-stop check
-        elapsed = time.time() - self._session_start
-        if elapsed > self._max_duration:
-            logger.info("Session auto-stopped after %.0fs", elapsed)
-            self.stop_session()
-            return
-
         event_type = event.get("type", "unknown")
         timestamp = event.get("timestamp", time.time())
         offset = timestamp - self._session_start
@@ -164,8 +157,17 @@ class SessionRecorder:
         data = event.get("data", "")
         data_str = json.dumps(data) if isinstance(data, dict) else str(data)
 
-        # Buffer the event
+        # Buffer the event (always, even if we're about to auto-stop)
         self._event_buffer.append((self._session_id, offset, event_type, data_str))
+
+        # Auto-stop check — AFTER buffering the triggering event so it
+        # is persisted rather than silently dropped.
+        elapsed = time.time() - self._session_start
+        if elapsed > self._max_duration:
+            logger.info("Session auto-stopped after %.0fs", elapsed)
+            self._flush_events()
+            self.stop_session()
+            return
 
         # Screenshot triggers
         if event_type == "mouse_click":
@@ -265,11 +267,20 @@ class SessionRecorder:
                 filepath = self._frames_dir / filename
                 self._pil_capture(filepath)
                 if filepath.exists():
+                    width, height = 0, 0
+                    try:
+                        from PIL import Image
+                        with Image.open(filepath) as img:
+                            width, height = img.size
+                    except Exception:
+                        pass
                     self._store.add_frame(
                         session_id=self._session_id,
                         offset_sec=offset,
                         file_path=str(filepath),
                         file_size=filepath.stat().st_size,
+                        width=width,
+                        height=height,
                         trigger=trigger,
                     )
                     self._frame_count += 1

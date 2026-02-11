@@ -86,10 +86,16 @@ class FailoverTransport(BaseTransport):
 
     def send(self, data: bytes, metadata: dict[str, str] | None = None) -> bool:
         """Try primary transport, then cascade through fallbacks on failure."""
-        # Try primary if it hasn't recently failed
+        has_fallbacks = self._enabled and bool(self._fallback_methods)
+
+        # Apply primary backoff only when fallbacks are available;
+        # otherwise always attempt the primary so data isn't silently dropped.
         now = time.time()
-        if self._primary_failed_at == 0 or \
-           (now - self._primary_failed_at) > self._retry_primary_after:
+        if has_fallbacks and self._primary_failed_at != 0 and \
+           (now - self._primary_failed_at) <= self._retry_primary_after:
+            # Primary recently failed and fallbacks exist — skip to fallbacks
+            pass
+        else:
             if self._try_send(self._primary_method, data, metadata):
                 self._primary_failed_at = 0
                 return True
@@ -98,7 +104,7 @@ class FailoverTransport(BaseTransport):
                            self._primary_method)
 
         # Try fallbacks in order
-        if not self._enabled:
+        if not has_fallbacks:
             return False
 
         for method in self._fallback_methods:
