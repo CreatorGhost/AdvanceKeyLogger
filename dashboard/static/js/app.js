@@ -1,10 +1,10 @@
 /* ============================================================
-   AKL Dashboard — Core JS (Vercel Design)
+   Dashboard — Core JS (Vercel Design)
    ============================================================ */
 
 // --- Theme Toggle ---
 (function() {
-    const saved = localStorage.getItem('akl-theme');
+    const saved = localStorage.getItem('sys-theme');
     if (saved === 'light') document.documentElement.classList.add('light');
 })();
 
@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleTheme() {
     document.documentElement.classList.toggle('light');
     const isLight = document.documentElement.classList.contains('light');
-    localStorage.setItem('akl-theme', isLight ? 'light' : 'dark');
+    localStorage.setItem('sys-theme', isLight ? 'light' : 'dark');
 }
 
 // --- API Helper ---

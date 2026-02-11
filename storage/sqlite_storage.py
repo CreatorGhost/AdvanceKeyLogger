@@ -135,7 +135,7 @@ class SQLiteStorage:
                 (limit,),
             )
             columns = ["id", "type", "data", "file_path", "file_size", "timestamp"]
-            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def mark_sent(self, ids: list[int]) -> None:
         """Mark captures as successfully sent."""

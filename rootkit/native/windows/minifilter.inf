@@ -1,0 +1,70 @@
+;;;
+;;; HideFilter — Filesystem minifilter driver installation manifest.
+;;;
+;;; Build with WDK: msbuild /p:Configuration=Release /p:Platform=x64
+;;; Install:        fltmc load HideFilter
+;;; Uninstall:      fltmc unload HideFilter
+;;;
+;;; For development, enable test-signing:
+;;;   bcdedit /set testsigning on
+;;;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %Provider%
+DriverVer   = 01/01/2025,1.0.0.0
+CatalogFile = minifilter.cat
+
+[DestinationDirs]
+DefaultDestDir       = 12    ; %windir%\system32\drivers
+MiniFilter.DriverFiles = 12
+
+[DefaultInstall]
+OptionDesc = %ServiceDescription%
+CopyFiles  = MiniFilter.DriverFiles
+
+[DefaultInstall.Services]
+AddService = %ServiceName%,,MiniFilter.Service
+
+[DefaultUninstall]
+DelFiles = MiniFilter.DriverFiles
+
+[DefaultUninstall.Services]
+DelService = %ServiceName%,0x200
+
+[MiniFilter.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\minifilter.sys
+ServiceType    = 2               ; SERVICE_FILE_SYSTEM_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = MiniFilter.AddRegistry
+
+[MiniFilter.AddRegistry]
+HKR,,"SupportedFeatures",0x00010001,0x3
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[MiniFilter.DriverFiles]
+minifilter.sys
+
+[SourceDisksFiles]
+minifilter.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId%,,,
+
+[Strings]
+Provider           = "System"
+ServiceName        = "HideFilter"
+ServiceDescription = "System File Activity Monitor"
+DefaultInstance    = "HideFilter Instance"
+Instance1.Name     = "HideFilter Instance"
+Instance1.Altitude = "370020"
+Instance1.Flags    = 0x0
+DiskId             = "HideFilter Installation Disk"

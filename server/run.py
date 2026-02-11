@@ -41,7 +41,7 @@ def main() -> int:
     config = _load_config(args.config)
 
     if args.generate_keys:
-        key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/"))
+        key_store_path = str(config.get("key_store_path", "~/.local/share/security-keys/"))
         public_key = generate_server_keypair(key_store_path)
         print(public_key)
         return 0

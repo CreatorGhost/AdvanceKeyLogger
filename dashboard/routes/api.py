@@ -17,6 +17,15 @@ from dashboard.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
+
+def _get_db_path(request: Request) -> Path:
+    """Get the SQLite DB path from app state or fall back to default."""
+    storage = getattr(request.app.state, "sqlite_storage", None)
+    if storage is not None and hasattr(storage, "db_path"):
+        return Path(storage.db_path)
+    return Path("data/captures.db")
+
+
 try:
     import psutil
 
@@ -67,7 +76,7 @@ async def system_status(request: Request) -> dict[str, Any]:
     )
 
     # Check SQLite
-    db_path = Path("data/captures.db")
+    db_path = _get_db_path(request)
     db_size = db_path.stat().st_size if db_path.exists() else 0
     pending_count = 0
     total_count = 0
@@ -115,7 +124,7 @@ async def list_captures(
     """List captured data from SQLite."""
     _require_api_auth(request)
 
-    db_path = Path("data/captures.db")
+    db_path = _get_db_path(request)
     if not db_path.exists():
         return {"items": [], "total": 0, "limit": limit, "offset": offset}
 
@@ -225,7 +234,7 @@ async def activity_data(request: Request) -> dict[str, Any]:
     """Activity heatmap data (hour x day-of-week)."""
     _require_api_auth(request)
 
-    db_path = Path("data/captures.db")
+    db_path = _get_db_path(request)
     if not db_path.exists():
         return {"heatmap": [[0] * 24 for _ in range(7)], "total_events": 0}
 
@@ -257,7 +266,7 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
     """Summary analytics."""
     _require_api_auth(request)
 
-    db_path = Path("data/captures.db")
+    db_path = _get_db_path(request)
     stats: dict[str, Any] = {
         "total_captures": 0,
         "pending": 0,

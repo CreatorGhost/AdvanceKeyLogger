@@ -196,8 +196,11 @@ class SyncEngine:
                             (SyncState.PENDING.value, rid,
                              SyncState.IN_FLIGHT.value, SyncState.QUEUED.value),
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "Crash recovery reset failed for record %s: %s",
+                            rid, exc,
+                        )
                 self._ledger._conn.commit()
 
         logger.info("SyncEngine started (mode=%s)", self._mode)

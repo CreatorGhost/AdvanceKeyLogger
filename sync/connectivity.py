@@ -279,16 +279,19 @@ class ConnectivityMonitor:
         if not self._probe_host:
             # No probe target configured — assume online
             return 0.0
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self._probe_timeout)
             start = time.monotonic()
             sock.connect((self._probe_host, self._probe_port))
             elapsed = (time.monotonic() - start) * 1000  # ms
-            sock.close()
             return elapsed
         except (OSError, socket.timeout):
             return -1.0
+        finally:
+            if sock is not None:
+                sock.close()
 
     def _detect_network_type(self) -> NetworkType:
         """Best-effort network type detection using psutil."""

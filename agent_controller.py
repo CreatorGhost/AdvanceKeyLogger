@@ -1,7 +1,7 @@
 """
 Distributed Fleet Management - Agent-Controller Architecture.
 
-A robust distributed system for managing multiple keylogger agents from a central controller.
+A robust distributed system for managing multiple monitoring agents from a central controller.
 Provides secure communication, command distribution, and fleet coordination.
 """
 

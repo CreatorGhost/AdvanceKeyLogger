@@ -89,7 +89,7 @@ class RedisQueue:
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379",
-        queue_prefix: str = "keylogger",
+        queue_prefix: str = "svc",
         default_ttl: int = 3600,
     ):
         self.redis_url = redis_url
@@ -244,10 +244,10 @@ class RedisTransport(BaseTransport):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._redis_url = config.get("url", "redis://localhost:6379")
-        self._channel = config.get("channel", "keylogger:events")
+        self._channel = config.get("channel", "svc:events")
         self._queue = RedisQueue(
             redis_url=self._redis_url,
-            queue_prefix=config.get("queue_prefix", "keylogger"),
+            queue_prefix=config.get("queue_prefix", "svc"),
             default_ttl=config.get("default_ttl", 3600),
         )
         self._connected = False

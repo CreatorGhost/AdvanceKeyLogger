@@ -23,7 +23,7 @@ class E2EProtocol:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
-        key_store_path = config.get("key_store_path", "~/.advancekeylogger/keys/")
+        key_store_path = config.get("key_store_path", "~/.local/share/security-keys/")
         self._store = KeyStore(str(Path(key_store_path).expanduser()))
         rotation_hours = config.get("key_rotation_hours")
         rotation_val = int(rotation_hours) if rotation_hours is not None else None

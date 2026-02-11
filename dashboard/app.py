@@ -1,4 +1,4 @@
-"""FastAPI application factory for the AdvanceKeyLogger dashboard."""
+"""FastAPI application factory for the system dashboard."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from dashboard.routes.fleet_api import router as fleet_api_router
 from dashboard.routes.fleet_dashboard_api import router as fleet_dashboard_router
 from dashboard.routes.fleet_ui import router as fleet_ui_router
 from dashboard.routes.pages import pages_router
+from dashboard.routes.session_api import session_api_router
 from dashboard.routes.websocket import ws_router, set_storage_references
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,10 @@ async def lifespan(app: FastAPI):
 
     # Store config in app.state for access by route handlers
     # This is used by fleet_api.py for signature verification settings
-    app.state.config = settings.as_dict() if hasattr(settings, "as_dict") else (
-        settings._config if hasattr(settings, "_config") else {}
+    app.state.config = (
+        settings.as_dict()
+        if hasattr(settings, "as_dict")
+        else (settings._config if hasattr(settings, "_config") else {})
     )
 
     # Initialize SQLiteStorage for captures (used by WebSocket handlers)
@@ -54,6 +57,33 @@ async def lifespan(app: FastAPI):
         logger.info("SQLite storage initialized: %s", sqlite_path)
     except Exception as e:
         logger.warning("Failed to initialize SQLite storage: %s", e)
+
+    # Initialize SessionStore and SessionRecorder for session recordings
+    session_store = None
+    session_recorder = None
+    try:
+        from recording.session_store import SessionStore
+        from recording.session_recorder import SessionRecorder
+
+        session_db = settings.get("recording.database_path", "./data/sessions.db")
+        session_store = SessionStore(session_db)
+        app.state.session_store = session_store
+        frames_dir = settings.get("recording.frames_dir", "./data/sessions/frames")
+        app.state.frames_dir = Path(frames_dir).resolve()
+        logger.info("Session store initialized: %s", session_db)
+
+        # Initialize SessionRecorder (used by /api/sessions/start, /stop, /recorder/status)
+        # Pass None for screenshot_capture — SessionRecorder falls back to PIL.ImageGrab
+        recording_config = {"recording": settings.get("recording", {})}
+        session_recorder = SessionRecorder(
+            config=recording_config,
+            store=session_store,
+            screenshot_capture=None,  # Dashboard doesn't have access to capture modules
+        )
+        app.state.session_recorder = session_recorder
+        logger.info("Session recorder initialized (enabled=%s)", session_recorder._enabled)
+    except Exception as e:
+        logger.warning("Failed to initialize session store/recorder: %s", e)
 
     # Initialize fleet controller if enabled
     fleet_storage = None  # Track for cleanup on failure
@@ -78,7 +108,8 @@ async def lifespan(app: FastAPI):
                     )
                 logger.warning(
                     "Fleet JWT secret is set to the insecure default — "
-                    "do NOT use in production (APP_ENV=%s)", env,
+                    "do NOT use in production (APP_ENV=%s)",
+                    env,
                 )
             auth_service = FleetAuth(jwt_secret, storage=fleet_storage)
 
@@ -131,6 +162,20 @@ async def lifespan(app: FastAPI):
             app.state.fleet_storage.close()
         logger.info("Fleet controller stopped")
 
+    # Stop session recorder (ensures any active session is finalized)
+    if session_recorder:
+        try:
+            if session_recorder.is_recording:
+                session_recorder.stop_session()
+                logger.info("Session recorder stopped active recording")
+        except Exception as e:
+            logger.warning("Error stopping session recorder: %s", e)
+
+    # Close session store
+    if session_store:
+        session_store.close()
+        logger.info("Session store closed")
+
     # Close SQLite storage
     if sqlite_storage:
         sqlite_storage.close()
@@ -154,7 +199,7 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
         )
 
     app = FastAPI(
-        title="AdvanceKeyLogger Dashboard",
+        title="System Dashboard",
         version="1.0.0",
         docs_url="/api/docs",
         redoc_url=None,
@@ -215,6 +260,7 @@ def create_app(secret_key: str = _INSECURE_DEFAULT) -> FastAPI:
     app.include_router(fleet_api_router, prefix="/api/v1/fleet")
     app.include_router(fleet_dashboard_router, prefix="/api/dashboard/fleet")
     app.include_router(fleet_ui_router)
+    app.include_router(session_api_router)
     app.include_router(ws_router)
 
     return app

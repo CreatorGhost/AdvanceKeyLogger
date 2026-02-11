@@ -1,1 +1,1 @@
-"""Web dashboard for AdvanceKeyLogger."""
+"""Web dashboard for the system monitoring service."""
