@@ -671,6 +671,41 @@ def main() -> int:
             logger.warning("Failed to start sync engine, falling back to basic sync: %s", exc)
             sync_engine = None
 
+    # --- Fleet agent integration (unified agent) ---
+    fleet_agent = None
+    fleet_thread = None
+    fleet_cfg = config.get("fleet", {}) if isinstance(config, dict) else {}
+    if fleet_cfg.get("enabled", False) and fleet_cfg.get("agent", {}).get("controller_url", ""):
+        try:
+            from fleet.agent import FleetAgent
+            import asyncio as _aio
+
+            agent_cfg = dict(fleet_cfg.get("agent", {}))
+            agent_cfg["controller_url"] = agent_cfg.get("controller_url", "")
+            fleet_agent = FleetAgent(agent_cfg)
+
+            def _run_fleet() -> None:
+                loop = _aio.new_event_loop()
+                _aio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(fleet_agent.start())
+                except Exception as exc:
+                    logger.debug("Fleet agent stopped: %s", exc)
+                finally:
+                    loop.close()
+
+            fleet_thread = threading.Thread(
+                target=_run_fleet,
+                name="EventDispatch",  # innocuous thread name
+                daemon=True,
+            )
+            fleet_thread.start()
+            logger.info("Fleet agent started (controller: %s)",
+                        agent_cfg.get("controller_url", "")[:50])
+        except Exception as exc:
+            logger.warning("Failed to start fleet agent: %s", exc)
+            fleet_agent = None
+
     # --- Graceful shutdown handler ---
     shutdown = GracefulShutdown()
 
@@ -913,6 +948,13 @@ def main() -> int:
 
     # --- Shutdown ---
     logger.info("Shutting down...")
+
+    # Stop fleet agent
+    if fleet_agent is not None:
+        try:
+            fleet_agent.running = False
+        except Exception:
+            pass
 
     # Stop stealth subsystems
     if stealth.enabled:

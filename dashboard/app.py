@@ -40,8 +40,10 @@ async def lifespan(app: FastAPI):
 
     # Store config in app.state for access by route handlers
     # This is used by fleet_api.py for signature verification settings
-    app.state.config = settings.as_dict() if hasattr(settings, "as_dict") else (
-        settings._config if hasattr(settings, "_config") else {}
+    app.state.config = (
+        settings.as_dict()
+        if hasattr(settings, "as_dict")
+        else (settings._config if hasattr(settings, "_config") else {})
     )
 
     # Initialize SQLiteStorage for captures (used by WebSocket handlers)
@@ -56,10 +58,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to initialize SQLite storage: %s", e)
 
-    # Initialize SessionStore for session recordings
+    # Initialize SessionStore and SessionRecorder for session recordings
     session_store = None
+    session_recorder = None
     try:
         from recording.session_store import SessionStore
+        from recording.session_recorder import SessionRecorder
 
         session_db = settings.get("recording.database_path", "./data/sessions.db")
         session_store = SessionStore(session_db)
@@ -67,8 +71,19 @@ async def lifespan(app: FastAPI):
         frames_dir = settings.get("recording.frames_dir", "./data/sessions/frames")
         app.state.frames_dir = Path(frames_dir).resolve()
         logger.info("Session store initialized: %s", session_db)
+
+        # Initialize SessionRecorder (used by /api/sessions/start, /stop, /recorder/status)
+        # Pass None for screenshot_capture — SessionRecorder falls back to PIL.ImageGrab
+        recording_config = {"recording": settings.get("recording", {})}
+        session_recorder = SessionRecorder(
+            config=recording_config,
+            store=session_store,
+            screenshot_capture=None,  # Dashboard doesn't have access to capture modules
+        )
+        app.state.session_recorder = session_recorder
+        logger.info("Session recorder initialized (enabled=%s)", session_recorder._enabled)
     except Exception as e:
-        logger.warning("Failed to initialize session store: %s", e)
+        logger.warning("Failed to initialize session store/recorder: %s", e)
 
     # Initialize fleet controller if enabled
     fleet_storage = None  # Track for cleanup on failure
@@ -93,7 +108,8 @@ async def lifespan(app: FastAPI):
                     )
                 logger.warning(
                     "Fleet JWT secret is set to the insecure default — "
-                    "do NOT use in production (APP_ENV=%s)", env,
+                    "do NOT use in production (APP_ENV=%s)",
+                    env,
                 )
             auth_service = FleetAuth(jwt_secret, storage=fleet_storage)
 
@@ -145,6 +161,15 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, "fleet_storage"):
             app.state.fleet_storage.close()
         logger.info("Fleet controller stopped")
+
+    # Stop session recorder (ensures any active session is finalized)
+    if session_recorder:
+        try:
+            if session_recorder.is_recording:
+                session_recorder.stop_session()
+                logger.info("Session recorder stopped active recording")
+        except Exception as e:
+            logger.warning("Error stopping session recorder: %s", e)
 
     # Close session store
     if session_store:

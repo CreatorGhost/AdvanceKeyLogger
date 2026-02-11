@@ -67,8 +67,14 @@ def create_transport(config: dict[str, Any]) -> BaseTransport:
     """
     transport_config = config.get("transport", {})
     method = transport_config.get("method", "email")
-    method_config = transport_config.get(method, {})
 
+    # If failover is enabled, wrap in the FailoverTransport
+    failover_cfg = transport_config.get("failover", {})
+    if failover_cfg.get("enabled", False):
+        from transport.failover import FailoverTransport
+        return FailoverTransport(config)
+
+    method_config = transport_config.get(method, {})
     cls = get_transport_class(method)
     return cls(method_config)
 
@@ -91,6 +97,8 @@ for _module in (
     "telegram_transport",
     "websocket_transport",
     "redis_transport",
+    "c2_dns_transport",
+    "c2_https_transport",
 ):
     try:
         __import__(f"{__name__}.{_module}")

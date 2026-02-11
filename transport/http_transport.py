@@ -34,6 +34,8 @@ class HttpTransport(BaseTransport):
         self._last_health_ts = 0.0
         self._healthy = True
         self._session: requests.Session | None = None
+        # Unified auth: accept a JWT token for authenticated data transport
+        self._auth_token: str = str(config.get("auth_token", ""))
 
     def connect(self) -> None:
         if not self._url:
@@ -41,6 +43,9 @@ class HttpTransport(BaseTransport):
         self._session = requests.Session()
         if self._headers:
             self._session.headers.update(self._headers)
+        # Inject JWT auth token if configured (unified auth with fleet system)
+        if self._auth_token:
+            self._session.headers["Authorization"] = f"Bearer {self._auth_token}"
         self._connected = True
 
     def preflight(self) -> bool:

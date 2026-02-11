@@ -107,10 +107,14 @@ recording:
   retention_days: 7                 # auto-delete sessions older than this
 
 transport:
-  method: "email"
+  method: "http"
   retry_attempts: 3
   retry_backoff: 2
   batch_size: 50
+  failover:
+    enabled: false                  # enable automatic transport failover
+    methods: ["dns", "email"]       # fallback order when primary fails
+    retry_primary_after: 300        # seconds before retrying primary transport
   queue_size: 1000
   failure_threshold: 5
   cooldown: 60
@@ -155,8 +159,8 @@ transport:
     verify_ssl: true
 
 encryption:
-  enabled: false
-  mode: "symmetric"         # "symmetric" (AES-256-CBC) or "e2e"
+  enabled: true
+  mode: "e2e"               # "symmetric" (AES-256-CBC) or "e2e" — e2e recommended
   algorithm: "AES-256-CBC"
   key: ""
   # E2E mode: generate server keys with `python -m server.run --generate-keys`,

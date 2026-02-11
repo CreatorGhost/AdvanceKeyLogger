@@ -5,6 +5,7 @@ import asyncio
 import base64
 import logging
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, HTTPException
@@ -39,9 +40,11 @@ def create_app(config: dict[str, Any]) -> FastAPI:
         allow_open=bool(config.get("allow_open_registration", False)),
     )
     rate_limiter = RateLimiter(int(config.get("rate_limit_per_minute", 60)))
+    storage_dir = str(config.get("storage_dir", "./server_data"))
     replay_cache = ReplayCache(
         ttl_seconds=int(config.get("replay_ttl_seconds", 3600)),
         max_entries=int(config.get("replay_cache_max", 10000)),
+        db_path=str(Path(storage_dir) / "replay.db"),
     )
     max_payload = int(config.get("max_payload_bytes", 10 * 1024 * 1024))
     _MAX_TRACKED_SENDERS = int(config.get("max_tracked_senders", 10000))
@@ -158,12 +161,27 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             raise HTTPException(status_code=400, detail="decrypt failed")
 
         path = store_payload(payload, config)
+
+        # ── Data bridge: parse payload into structured SQLite ──
+        # This is the critical link that makes data visible in the dashboard.
+        try:
+            from server.data_bridge import DataBridge
+
+            bridge_db = config.get("bridge_db_path", str(path.parent.parent / "data" / "captures.db"))
+            bridge = DataBridge(bridge_db)
+            record_count = bridge.ingest_payload(payload, sender_id=truncated_sender)
+            bridge.close()
+        except Exception as bridge_exc:
+            audit_logger.debug("Data bridge ingest failed: %s", bridge_exc)
+            record_count = 0
+
         audit_logger.info(
-            "ingest_ok ip=%s key=%s bytes=%d file=%s",
+            "ingest_ok ip=%s key=%s bytes=%d file=%s records=%d",
             client_ip,
             _truncate(sender_key_b64),
             len(payload),
             path.name,
+            record_count,
         )
         return {
             "status": "stored",
