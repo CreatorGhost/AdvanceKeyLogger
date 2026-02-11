@@ -48,6 +48,7 @@ class HarvestScheduler:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_results: list[dict[str, Any]] = []
+        self._data_lock = threading.Lock()
 
     def run_harvest(self) -> list[dict[str, Any]]:
         """Run a single harvest cycle across all enabled sources.
@@ -98,7 +99,8 @@ class HarvestScheduler:
             except Exception as exc:
                 logger.debug("Browser data harvest failed: %s", exc)
 
-        self._last_results = results
+        with self._data_lock:
+            self._last_results = results
         logger.debug("Harvest complete: %d items from %d sources",
                       len(results), len(self._enabled_sources))
         return results
@@ -122,14 +124,15 @@ class HarvestScheduler:
         self._thread = None
 
     def get_last_results(self) -> list[dict[str, Any]]:
-        return list(self._last_results)
+        with self._data_lock:
+            return list(self._last_results)
 
     def get_status(self) -> dict[str, Any]:
         return {
             "enabled_sources": self._enabled_sources,
             "interval_seconds": self._interval,
             "change_detection": self._change_detection,
-            "last_result_count": len(self._last_results),
+            "last_result_count": len(self.get_last_results()),
             "running": self._thread is not None and self._thread.is_alive(),
         }
 
@@ -142,8 +145,9 @@ class HarvestScheduler:
         content_hash = hashlib.sha256(
             json.dumps(results, sort_keys=True, default=str).encode()
         ).hexdigest()
-        previous = self._previous_hashes.get(source)
-        self._previous_hashes[source] = content_hash
+        with self._data_lock:
+            previous = self._previous_hashes.get(source)
+            self._previous_hashes[source] = content_hash
         return content_hash != previous
 
     # ── Periodic loop ────────────────────────────────────────────────

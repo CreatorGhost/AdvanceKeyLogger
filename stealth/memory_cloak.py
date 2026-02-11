@@ -75,9 +75,11 @@ class MemoryCloak:
         """Apply all memory cloaking measures."""
         if self._applied:
             return
-        self._rename_modules()
-        self._scrub_file_attrs()
+        # Order matters: clear docstrings FIRST (while names are still
+        # identifiable), then scrub __file__, then rename modules LAST.
         self._clear_docstrings()
+        self._scrub_file_attrs()
+        self._rename_modules()
         self._applied = True
         logger.debug("Memory cloak applied")
 
@@ -162,23 +164,3 @@ class MemoryCloak:
         for i in range(len(data)):
             data[i] = 0
 
-    @staticmethod
-    def secure_wipe_string_approx(s: str) -> None:
-        """Best-effort attempt to overwrite a Python string's internal buffer.
-
-        Uses ctypes to locate and zero the string's UTF-8 data buffer.
-        **Not guaranteed** due to CPython string interning and copy-on-write,
-        but reduces the window of exposure for short-lived strings.
-        """
-        if not s or not isinstance(s, str):
-            return
-        try:
-            # CPython implementation detail: str objects store data after the header
-            # This is fragile and version-specific — best-effort only
-            buf_size = len(s.encode("utf-8"))
-            addr = id(s)
-            # PyASCIIObject header size varies by Python version (~72 bytes on 3.12+)
-            # We skip this and instead just delete the reference
-            del s
-        except Exception:
-            pass

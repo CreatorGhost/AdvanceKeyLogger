@@ -30,7 +30,6 @@ import random
 import threading
 import time
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 

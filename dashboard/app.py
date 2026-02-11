@@ -1,4 +1,4 @@
-"""FastAPI application factory for the AdvanceKeyLogger dashboard."""
+"""FastAPI application factory for the system dashboard."""
 
 from __future__ import annotations
 

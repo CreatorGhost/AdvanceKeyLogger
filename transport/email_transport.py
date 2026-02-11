@@ -102,8 +102,12 @@ class EmailTransport(BaseTransport):
             try:
                 self._smtp.quit()
             except Exception:
-                self._smtp.close()
-            self._smtp = None
+                try:
+                    self._smtp.close()
+                except Exception:
+                    pass
+            finally:
+                self._smtp = None
         self._connected = False
 
 

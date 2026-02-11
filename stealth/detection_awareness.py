@@ -357,7 +357,13 @@ class DetectionAwareness:
 
     @staticmethod
     def _check_debugger_posix() -> bool:
-        """Attempt ``ptrace(PTRACE_TRACEME)`` — failure means already traced."""
+        """Platform-appropriate ptrace-based debugger check.
+
+        - Linux: ``PTRACE_TRACEME`` — failure (errno) means already traced.
+        - macOS: ``PT_DENY_ATTACH`` (31) — denies future attaches; returns
+          -1 if a debugger is already attached.
+        """
+        import platform as _plat
         try:
             from ctypes.util import find_library
 
@@ -365,13 +371,24 @@ class DetectionAwareness:
             if not libc_name:
                 return False
             libc = ctypes.CDLL(libc_name, use_errno=True)
-            PTRACE_TRACEME = 0
-            result = libc.ptrace(PTRACE_TRACEME, 0, 0, 0)
-            if result == -1:
-                return True
-            # Detach ourselves
-            PTRACE_DETACH = 17
-            libc.ptrace(PTRACE_DETACH, 0, 0, 0)
+
+            if _plat.system().lower() == "darwin":
+                # PT_DENY_ATTACH = 31; fails with EBUSY if already traced
+                PT_DENY_ATTACH = 31
+                result = libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
+                return result == -1
+            else:
+                # Linux: PTRACE_TRACEME — if we can trace ourselves, no
+                # debugger is attached; on success, immediately detach.
+                PTRACE_TRACEME = 0
+                result = libc.ptrace(PTRACE_TRACEME, 0, 0, 0)
+                if result == -1:
+                    return True  # already being traced
+                # Undo: detach ourselves using our own PID
+                import os as _os
+                PTRACE_DETACH = 17
+                libc.ptrace(PTRACE_DETACH, _os.getpid(), 0, 0)
+                return False
         except Exception:
             pass
         return False

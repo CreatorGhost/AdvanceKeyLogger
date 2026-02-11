@@ -36,7 +36,7 @@ def load_server_private_keys(config: dict[str, Any]) -> list[x25519.X25519Privat
         raw = base64.b64decode(key_b64.encode("utf-8"))
         return [x25519.X25519PrivateKey.from_private_bytes(raw)]
 
-    key_store_path = str(config.get("key_store_path", "~/.advancekeylogger/keys/"))
+    key_store_path = str(config.get("key_store_path", "~/.local/share/security-keys/"))
     store = KeyStore(key_store_path)
 
     _maybe_rotate_keys(store, config)

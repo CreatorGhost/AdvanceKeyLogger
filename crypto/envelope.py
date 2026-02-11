@@ -201,7 +201,7 @@ def _derive_wrap_key(shared_secret: bytes, legacy: bool) -> bytes:
         algorithm=hashes.SHA256(),
         length=32,
         salt=None if legacy else _HKDF_SALT,
-        info=b"E2E-WRAP-V1",
+        info=b"AKL-E2E-WRAP" if legacy else b"E2E-WRAP-V1",
     )
     return hkdf.derive(shared_secret)
 
