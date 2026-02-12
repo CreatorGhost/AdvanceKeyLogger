@@ -132,8 +132,12 @@ class RedisQueue:
             # Add to persistent queue with per-message expiry as the score
             if message.ttl > 0:
                 queue_key = f"{self.queue_prefix}:queue:{channel}"
+                index_key = f"{self.queue_prefix}:idx:{channel}"
+                member = json.dumps(message_data)
                 expiry = message.timestamp + message.ttl
-                await self._redis.zadd(queue_key, {json.dumps(message_data): expiry})
+                await self._redis.zadd(queue_key, {member: expiry})
+                # Store message_id -> member mapping for O(1) acknowledge lookup
+                await self._redis.hset(index_key, message.message_id, member)
                 # Remove expired entries
                 now = time.time()
                 await self._redis.zremrangebyscore(queue_key, "-inf", now)
@@ -197,25 +201,40 @@ class RedisQueue:
             return []
 
     async def acknowledge(self, channel: str, message_id: str) -> bool:
-        """Acknowledge message processing (remove from queue)."""
+        """Acknowledge message processing (remove from queue).
+
+        Uses a secondary hash index (``<prefix>:idx:<channel>``) for O(1) lookup
+        of the sorted-set member by message_id.  Falls back to an O(n) scan of
+        the sorted set if the index entry is missing (e.g. messages enqueued
+        before the index was introduced).
+        """
         if not self._initialized:
             await self.initialize()
 
         try:
             queue_key = f"{self.queue_prefix}:queue:{channel}"
-
-            # Scan sorted-set members to find the one matching message_id
-            members = await self._redis.zrange(queue_key, 0, -1)
+            index_key = f"{self.queue_prefix}:idx:{channel}"
             removed = False
-            for member in members:
-                try:
-                    member_data = json.loads(member)
-                    if member_data.get("message", {}).get("message_id") == message_id:
-                        await self._redis.zrem(queue_key, member)
-                        removed = True
-                        break
-                except (json.JSONDecodeError, TypeError):
-                    continue
+
+            # Fast path: O(1) lookup via the hash index
+            member = await self._redis.hget(index_key, message_id)
+            if member is not None:
+                await self._redis.zrem(queue_key, member)
+                await self._redis.hdel(index_key, message_id)
+                removed = True
+            else:
+                # Slow path / fallback: O(n) scan of the sorted set.
+                # This handles messages enqueued before the hash index existed.
+                members = await self._redis.zrange(queue_key, 0, -1)
+                for m in members:
+                    try:
+                        member_data = json.loads(m)
+                        if member_data.get("message", {}).get("message_id") == message_id:
+                            await self._redis.zrem(queue_key, m)
+                            removed = True
+                            break
+                    except (json.JSONDecodeError, TypeError):
+                        continue
 
             if removed:
                 logger.debug(f"Acknowledged message {message_id} on {channel}")
@@ -251,6 +270,7 @@ class RedisTransport(BaseTransport):
             default_ttl=config.get("default_ttl", 3600),
         )
         self._connected = False
+        self._connected_event = threading.Event()
         self._pubsub: Any | None = None
 
         # Event loop for async operations
@@ -273,24 +293,20 @@ class RedisTransport(BaseTransport):
 
     def connect(self) -> None:
         """Connect to Redis and subscribe to channel."""
-        if self._connected:
+        if self._connected_event.is_set():
             return
 
         # Clean up any previous loop/thread to avoid resource leaks on reconnect
         self._cleanup_loop_and_thread()
+        self._connected_event.clear()
 
         # Start async event loop in separate thread
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._thread.start()
 
-        # Wait for connection
-        timeout = 10.0
-        start_time = time.time()
-        while not self._connected and time.time() - start_time < timeout:
-            time.sleep(0.1)
-
-        if not self._connected:
+        # Wait for connection using thread-safe event
+        if not self._connected_event.wait(timeout=10.0):
             # Clean up the loop/thread before raising
             self._cleanup_loop_and_thread()
             raise ConnectionError(f"Failed to connect to Redis: {self._redis_url}")
@@ -310,6 +326,7 @@ class RedisTransport(BaseTransport):
         except Exception as e:
             logger.error(f"Redis async loop failed: {e}")
             self._connected = False
+            self._connected_event.clear()
         finally:
             try:
                 self._loop.stop()
@@ -323,11 +340,13 @@ class RedisTransport(BaseTransport):
             await self._queue.initialize()
             self._pubsub = await self._queue.subscribe(self._channel)
             self._connected = True
+            self._connected_event.set()
             logger.info(f"Redis transport connected to {self._channel}")
 
         except Exception as e:
             logger.error(f"Failed to connect Redis transport: {e}")
             self._connected = False
+            self._connected_event.clear()
             raise
 
     def disconnect(self) -> None:
@@ -344,6 +363,7 @@ class RedisTransport(BaseTransport):
             logger.error(f"Error disconnecting Redis transport: {e}")
         finally:
             self._connected = False
+            self._connected_event.clear()
             self._pubsub = None
             self._cleanup_loop_and_thread()
 

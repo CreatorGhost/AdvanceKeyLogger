@@ -105,6 +105,10 @@ class ActionDispatcher:
             logger.warning("Failed to create transport for notify: %s", exc)
             return
 
+        if transport is None:
+            logger.warning("create_transport_for_method returned None for channel=%s", channel)
+            return
+
         metadata = {
             "content_type": "text/plain",
             "subject": params.get("subject", "Rule notification"),

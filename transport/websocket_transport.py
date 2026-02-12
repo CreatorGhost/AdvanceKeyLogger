@@ -67,6 +67,7 @@ class WebSocketTransport(BaseTransport):
             else:
                 self._ssl_context.check_hostname = False
                 self._ssl_context.verify_mode = ssl.CERT_NONE
+                logger.warning("SSL certificate verification is DISABLED (CERT_NONE)")
 
     def register_handler(self, message_type: str, handler: MessageHandler) -> None:
         """Register a handler for a specific message type."""
@@ -191,7 +192,7 @@ class WebSocketTransport(BaseTransport):
 
     def disconnect(self) -> None:
         """Close WebSocket connection."""
-        if not self._connected:
+        if not self._connected and self._thread is None:
             return
 
         try:

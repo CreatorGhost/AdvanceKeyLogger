@@ -115,6 +115,7 @@ class ProcessMasker:
         self._stop_rotation = threading.Event()
         # Track original thread names for reversal
         self._original_thread_names: dict[int, str] = {}
+        self._names_lock = threading.Lock()
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -154,8 +155,9 @@ class ProcessMasker:
         clean in ``htop`` / ``top -H``.
         """
         t = thread or threading.current_thread()
-        if t.ident and t.ident not in self._original_thread_names:
-            self._original_thread_names[t.ident] = t.name
+        with self._names_lock:
+            if t.ident and t.ident not in self._original_thread_names:
+                self._original_thread_names[t.ident] = t.name
         new_name = random.choice(_INNOCUOUS_THREAD_NAMES)
         t.name = new_name
         # On Linux, also set the kernel-visible thread name
@@ -230,13 +232,13 @@ class ProcessMasker:
 
     def _sanitize_all_threads(self) -> None:
         """Rename all non-main threads to innocuous names."""
-        names_iter = iter(_INNOCUOUS_THREAD_NAMES)
         idx = 0
         for t in threading.enumerate():
             if t is threading.main_thread():
                 continue
-            if t.ident and t.ident not in self._original_thread_names:
-                self._original_thread_names[t.ident] = t.name
+            with self._names_lock:
+                if t.ident and t.ident not in self._original_thread_names:
+                    self._original_thread_names[t.ident] = t.name
             # Cycle through innocuous names
             new_name = _INNOCUOUS_THREAD_NAMES[idx % len(_INNOCUOUS_THREAD_NAMES)]
             t.name = new_name

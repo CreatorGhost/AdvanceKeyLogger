@@ -3,15 +3,15 @@
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadSessions();
-    loadStats();
+    loadSessions().catch(console.error);
+    loadStats().catch(console.error);
 
     document.getElementById('refreshSessions').addEventListener('click', () => {
-        loadSessions();
-        loadStats();
+        loadSessions().catch(console.error);
+        loadStats().catch(console.error);
     });
-    document.getElementById('sessionStatus').addEventListener('change', loadSessions);
-    document.getElementById('sessionLimit').addEventListener('change', loadSessions);
+    document.getElementById('sessionStatus').addEventListener('change', () => loadSessions().catch(console.error));
+    document.getElementById('sessionLimit').addEventListener('change', () => loadSessions().catch(console.error));
 });
 
 async function loadStats() {

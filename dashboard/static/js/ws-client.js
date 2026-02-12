@@ -186,6 +186,16 @@ class LiveDashboard {
         }, 30000);
     }
 
+    destroy() {
+        if (this._statusInterval) {
+            clearInterval(this._statusInterval);
+            this._statusInterval = null;
+        }
+        if (this.ws) {
+            this.ws.disconnect();
+        }
+    }
+
     _setupHandlers() {
         // Connection status
         this.ws.on('connected', () => {

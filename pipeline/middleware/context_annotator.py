@@ -48,6 +48,8 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
+            if result.returncode != 0:
+                return "Unknown"
             return result.stdout.strip()
         if system == "windows":
             import ctypes  # lazy import
@@ -69,6 +71,8 @@ def _get_active_window_title() -> str:
                 timeout=2,
                 check=False,
             )
+            if result.returncode != 0:
+                return "Unknown"
             return result.stdout.strip()
     except Exception:
         return "Unknown"

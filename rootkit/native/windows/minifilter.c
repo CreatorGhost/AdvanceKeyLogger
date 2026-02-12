@@ -270,16 +270,20 @@ NTSTATUS CommConnect(
     UNREFERENCED_PARAMETER(SizeOfContext);
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
-    g_Data.ClientPort = ClientPort;
+    InterlockedExchangePointer(&g_Data.ClientPort, ClientPort);
     return STATUS_SUCCESS;
 }
 
 VOID CommDisconnect(_In_opt_ PVOID ConnectionCookie)
 {
+    PFLT_PORT oldPort;
+
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
-    FltCloseClientPort(g_Data.FilterHandle, &g_Data.ClientPort);
-    g_Data.ClientPort = NULL;
+    oldPort = (PFLT_PORT)InterlockedExchangePointer(&g_Data.ClientPort, NULL);
+    if (oldPort) {
+        FltCloseClientPort(g_Data.FilterHandle, &oldPort);
+    }
 }
 
 NTSTATUS CommMessage(
@@ -310,7 +314,7 @@ NTSTATUS CommMessage(
                 g_Data.HiddenPrefixes[g_Data.HiddenPrefixCount],
                 MAX_PREFIX_LEN,
                 msg->Prefix);
-            InterlockedIncrement(&g_Data.HiddenPrefixCount);
+            g_Data.HiddenPrefixCount++;
         }
         ExReleaseFastMutex(&g_Data.Lock);
         break;
@@ -324,7 +328,9 @@ NTSTATUS CommMessage(
     case CMD_GET_STATUS:
         if (OutputBufferLength >= sizeof(STATUS_REPLY)) {
             PSTATUS_REPLY reply = (PSTATUS_REPLY)OutputBuffer;
+            ExAcquireFastMutex(&g_Data.Lock);
             reply->HiddenCount = g_Data.HiddenPrefixCount;
+            ExReleaseFastMutex(&g_Data.Lock);
             reply->Active = 1;
             *ReturnOutputBufferLength = sizeof(STATUS_REPLY);
         }
@@ -362,11 +368,15 @@ NTSTATUS FilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
 
-    if (g_Data.ServerPort)
+    if (g_Data.ServerPort) {
         FltCloseCommunicationPort(g_Data.ServerPort);
+        g_Data.ServerPort = NULL;
+    }
 
-    if (g_Data.FilterHandle)
+    if (g_Data.FilterHandle) {
         FltUnregisterFilter(g_Data.FilterHandle);
+        g_Data.FilterHandle = NULL;
+    }
 
     return STATUS_SUCCESS;
 }

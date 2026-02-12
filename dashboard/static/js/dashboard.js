@@ -3,8 +3,8 @@
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadDashboardData();
-    setInterval(loadDashboardData, 30000);
+    loadDashboardData().catch(console.error);
+    const refreshInterval = setInterval(() => loadDashboardData().catch(console.error), 30000);
 
     // Metric tab click
     document.querySelectorAll('.metric-tab').forEach(tab => {

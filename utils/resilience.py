@@ -235,9 +235,10 @@ class CircuitBreaker:
     def record_success(self) -> None:
         """Record a successful request. Resets failure count and closes circuit."""
         self._failures = 0
-        if self._state == self.HALF_OPEN:
-            self._state = self.CLOSED
+        self._last_failure_time = 0
+        if self._state != self.CLOSED:
             logger.info("Circuit closed (service recovered)")
+        self._state = self.CLOSED
 
     def record_failure(self) -> None:
         """Record a failed request. Opens circuit if threshold exceeded."""

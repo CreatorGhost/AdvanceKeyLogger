@@ -87,6 +87,12 @@ class KernelBridge:
         # Linux: file descriptor to /dev/.null
         self._dev_fd: int = -1
 
+    def __enter__(self) -> KernelBridge:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
     # ── Public API ───────────────────────────────────────────────
 
     def is_loaded(self) -> bool:
@@ -230,6 +236,8 @@ class KernelBridge:
                 ["fltmc", "filters"],
                 capture_output=True, text=True, timeout=5,
             )
+            if result.returncode != 0:
+                return False
             return "HideFilter" in result.stdout
         except Exception:
             return False

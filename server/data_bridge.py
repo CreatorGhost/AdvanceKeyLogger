@@ -56,8 +56,12 @@ class DataBridge:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._create_tables()
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._create_tables()
+        except Exception:
+            self._conn.close()
+            raise
         logger.info("Data bridge initialized: %s", self._db_path)
 
     def _create_tables(self) -> None:
@@ -172,7 +176,11 @@ class DataBridge:
                     logger.debug("Failed to insert record: %s", exc)
 
             if count > 0:
-                self._conn.commit()
+                try:
+                    self._conn.commit()
+                except Exception as exc:
+                    logger.warning("Database commit failed, %d records may be lost: %s", count, exc)
+                    return 0
 
         return count
 

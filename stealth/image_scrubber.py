@@ -21,6 +21,7 @@ Usage::
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import os
 import time
@@ -39,7 +40,7 @@ class ImageScrubber:
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        self._counter = 0
+        self._counter = itertools.count()
 
     def strip_metadata(self, image: Any) -> Any:
         """Remove all metadata from a PIL Image object.
@@ -123,8 +124,8 @@ class ImageScrubber:
 
         Returns something like ``a3f8b2c1.jpg`` instead of ``screenshot_0042.png``.
         """
-        self._counter += 1
-        seed = f"{time.time_ns()}-{os.getpid()}-{self._counter}"
+        count = next(self._counter)
+        seed = f"{time.time_ns()}-{os.getpid()}-{count}"
         h = hashlib.sha256(seed.encode()).hexdigest()[:10]
         return f"{h}.{extension.lstrip('.')}"
 
@@ -137,15 +138,15 @@ class ImageScrubber:
         try:
             from PIL import Image
 
-            img = Image.open(path)
-            fmt = img.format or "JPEG"
+            with Image.open(path) as img:
+                fmt = img.format or "JPEG"
 
-            cleaned = Image.new(img.mode, img.size)
-            cleaned.putdata(list(img.getdata()))
-            if "P" in img.mode:
-                palette = img.getpalette()
-                if palette:
-                    cleaned.putpalette(palette)
+                cleaned = Image.new(img.mode, img.size)
+                cleaned.putdata(list(img.getdata()))
+                if "P" in img.mode:
+                    palette = img.getpalette()
+                    if palette:
+                        cleaned.putpalette(palette)
 
             save_kwargs: dict[str, Any] = {"format": fmt}
             if fmt.upper() in ("JPEG", "JPG"):

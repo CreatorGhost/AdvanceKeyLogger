@@ -119,9 +119,26 @@ static void resolve_originals(void)
     pthread_once(&originals_once, init_originals);
 }
 
-/* ── Interposed readdir ─────────────────────────────────────────── */
+/* ── Cleanup on library unload ───────────────────────────────────── */
 
-struct dirent *readdir(DIR *dirp)
+__attribute__((destructor))
+static void cleanup_originals(void)
+{
+    orig_readdir   = NULL;
+    orig_readdir_r = NULL;
+}
+
+/* ── Replacement functions (named differently from libc originals) ── */
+
+/*
+ * IMPORTANT: Replacement functions MUST have different names from the
+ * libc originals (readdir / readdir_r).  If they share the same name,
+ * the DYLD interpose tuple resolves both `replacement` and `replacee`
+ * to the same local symbol, making the interposition a no-op
+ * ("replace readdir with readdir" → nothing happens).
+ */
+
+struct dirent *my_readdir(DIR *dirp)
 {
     resolve_originals();
     if (!orig_readdir)
@@ -136,9 +153,9 @@ struct dirent *readdir(DIR *dirp)
     return NULL;  /* end of directory */
 }
 
-/* ── Interposed readdir_r (thread-safe variant) ─────────────────── */
+/* ── Replacement readdir_r (thread-safe variant) ─────────────────── */
 
-int readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result)
+int my_readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result)
 {
     resolve_originals();
     if (!orig_readdir_r) {
@@ -158,8 +175,15 @@ int readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result)
 
 /* ── DYLD interpose tuples ──────────────────────────────────────── */
 /*
- * These tell the dynamic linker to replace the original functions
- * with our versions in all loaded images.
+ * These tell the dynamic linker to replace the original libc functions
+ * with our filtering versions in all loaded images.
+ *
+ * Tuple format: { replacement_function, original_function_to_replace }
+ *
+ * The `replacee` slot must resolve to the *libc* symbol, so we use
+ * dlsym(RTLD_DEFAULT, ...) at load time via a constructor, but for
+ * the compile-time interpose section, we reference the libc symbol
+ * via an extern declaration.
  */
 
 typedef struct {
@@ -167,10 +191,14 @@ typedef struct {
     const void *replacee;
 } interpose_tuple;
 
+/* Declare the libc symbols we want to replace (resolved by DYLD) */
+extern struct dirent *readdir(DIR *);
+extern int readdir_r(DIR *, struct dirent *, struct dirent **);
+
 __attribute__((used, section("__DATA,__interpose")))
 static const interpose_tuple interpose_readdir = {
-    (const void *)readdir,
-    (const void *)readdir   /* replaced by DYLD at load time */
+    (const void *)my_readdir,    /* our filtering replacement */
+    (const void *)readdir        /* the libc function to replace */
 };
 
 /*
@@ -180,8 +208,8 @@ static const interpose_tuple interpose_readdir = {
  */
 __attribute__((used, section("__DATA,__interpose")))
 static const interpose_tuple interpose_readdir_r = {
-    (const void *)readdir_r,
-    (const void *)readdir_r
+    (const void *)my_readdir_r,  /* our filtering replacement */
+    (const void *)readdir_r      /* the libc function to replace */
 };
 
 /* ── Exported control API (called from Python ctypes) ───────────── */
@@ -241,5 +269,6 @@ int interpose_is_active(void)
 __attribute__((visibility("default")))
 int interpose_hidden_count(void)
 {
-    return hidden_prefix_count + hidden_pid_count;
+    return __atomic_load_n(&hidden_prefix_count, __ATOMIC_ACQUIRE)
+         + __atomic_load_n(&hidden_pid_count, __ATOMIC_ACQUIRE);
 }

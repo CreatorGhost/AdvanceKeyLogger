@@ -10,10 +10,6 @@ from typing import Any
 
 from utils.system_info import get_platform
 
-from service.linux_systemd import SystemdManager
-from service.macos_launchd import LaunchdManager
-from service.windows_service import WindowsServiceManager
-
 
 @dataclass
 class ServiceSpec:
@@ -85,9 +81,12 @@ class ServiceManager:
 
     def _get_manager(self):
         if self._platform == "linux":
+            from service.linux_systemd import SystemdManager
             return SystemdManager()
         if self._platform == "darwin":
+            from service.macos_launchd import LaunchdManager
             return LaunchdManager()
         if self._platform == "windows":
+            from service.windows_service import WindowsServiceManager
             return WindowsServiceManager()
         raise RuntimeError(f"Unsupported platform: {self._platform}")

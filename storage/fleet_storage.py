@@ -573,8 +573,11 @@ class FleetStorage:
             salt_b64 = _b64.b64encode(salt).decode("ascii")
             return f"{salt_b64}${token}"
         except ImportError:
-            logger.warning("cryptography package not available; storing key in plaintext")
-            return private_key
+            raise ImportError(
+                "SECURITY: 'cryptography' package is required to encrypt private "
+                "keys before storage. Refusing to store plaintext keys. "
+                "Install the package: pip install cryptography"
+            )
 
     def _decrypt_private_key(self, encrypted_key: str) -> str:
         """Decrypt a private key string if a passphrase is configured.
@@ -611,9 +614,14 @@ class FleetStorage:
                 _b64.urlsafe_b64encode(kdf.derive(self._key_passphrase.encode()))
             )
             return key.decrypt(token.encode()).decode("utf-8")
-        except (ImportError, Exception) as exc:
-            logger.warning("Failed to decrypt private key: %s — returning raw value", exc)
-            return encrypted_key
+        except ImportError:
+            raise ImportError(
+                "SECURITY: 'cryptography' package is required to decrypt private "
+                "keys. Install the package: pip install cryptography"
+            )
+        except Exception as exc:
+            logger.error("Failed to decrypt private key (details omitted for security)")
+            raise ValueError("Private key decryption failed") from exc
 
     def save_controller_keys(
         self,

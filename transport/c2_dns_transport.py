@@ -36,15 +36,14 @@ class DNSTransport(BaseTransport):
         self._config = config
         self._tunnel = None
 
-    def connect(self) -> bool:
-        try:
-            from c2.dns_tunnel import DNSTunnel
-            self._tunnel = DNSTunnel(self._config)
-            self._connected = True
-            return True
-        except Exception as exc:
-            logger.debug("DNS transport connect failed: %s", exc)
-            return False
+    def connect(self) -> None:
+        """Connect the DNS tunnel transport.
+
+        Raises on failure, matching ``BaseTransport.connect() -> None``.
+        """
+        from c2.dns_tunnel import DNSTunnel
+        self._tunnel = DNSTunnel(self._config)
+        self._connected = True
 
     def disconnect(self) -> None:
         if self._tunnel:
@@ -52,9 +51,12 @@ class DNSTransport(BaseTransport):
         self._tunnel = None
         self._connected = False
 
-    def send(self, data: bytes, metadata: dict[str, str] | None = None) -> bool:
+    def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         if self._tunnel is None:
-            if not self.connect():
+            try:
+                self.connect()
+            except Exception as exc:
+                logger.debug("DNS transport auto-connect failed: %s", exc)
                 return False
 
         try:

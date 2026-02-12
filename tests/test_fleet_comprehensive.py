@@ -4,17 +4,29 @@ Comprehensive fleet management tests.
 
 import sys
 import os
+import tempfile
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_project_root = str(Path(__file__).parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+
+@pytest.fixture(autouse=True)
+def _restore_sys_path():
+    """Ensure sys.path is restored after each test."""
+    original = sys.path.copy()
+    yield
+    sys.path[:] = original
+
 
 from config.settings import Settings
 from dashboard.app import create_app
 from dashboard.routes.fleet_dashboard_api import get_current_user_api
 
-DB_PATH = "./data/test_comprehensive_fleet.db"
+DB_PATH = os.path.join(tempfile.mkdtemp(), "test_comprehensive_fleet.db")
 
 
 @pytest.fixture

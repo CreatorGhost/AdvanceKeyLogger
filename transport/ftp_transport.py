@@ -31,14 +31,23 @@ class FTPTransport(BaseTransport):
     def connect(self) -> None:
         if not self._host:
             raise ValueError("FTP transport requires host")
-        self._ftp = FTP_TLS() if self._use_tls else FTP()
-        self._ftp.connect(self._host, self._port, timeout=10)
-        if self._username:
-            self._ftp.login(self._username, self._password or "")
-        else:
-            self._ftp.login()
-        if self._use_tls and isinstance(self._ftp, FTP_TLS):
-            self._ftp.prot_p()
+        ftp = FTP_TLS() if self._use_tls else FTP()
+        try:
+            ftp.connect(self._host, self._port, timeout=10)
+            if self._username:
+                ftp.login(self._username, self._password or "")
+            else:
+                ftp.login()
+            if self._use_tls and isinstance(ftp, FTP_TLS):
+                ftp.prot_p()
+        except Exception:
+            # Close the socket on partial connect failure to avoid leak
+            try:
+                ftp.close()
+            except Exception:
+                pass
+            raise
+        self._ftp = ftp
         if self._remote_dir:
             self._ensure_remote_dir(self._remote_dir)
         self._connected = True

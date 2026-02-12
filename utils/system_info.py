@@ -19,6 +19,7 @@ import os
 import platform
 import socket
 from datetime import datetime, timezone
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,8 @@ def get_system_metrics() -> dict[str, float]:
         metrics["memory_percent"] = mem.percent
         metrics["memory_mb"] = round(mem.used / (1024 * 1024), 1)
 
-        # Disk usage (root partition)
-        disk = psutil.disk_usage("/")
+        # Disk usage (root partition — cross-platform)
+        disk = psutil.disk_usage(Path.home().anchor)
         metrics["disk_percent"] = disk.percent
         metrics["disk_free_gb"] = round(disk.free / (1024 * 1024 * 1024), 1)
 

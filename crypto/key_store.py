@@ -4,9 +4,13 @@ Simple filesystem key store for E2E keys.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
+import tempfile
 from pathlib import Path
+
+_suppress_oserror = contextlib.suppress(OSError)
 
 
 class KeyStore:
@@ -32,18 +36,33 @@ class KeyStore:
     def save_bytes(self, name: str, data: bytes) -> None:
         path = self._path(name)
         encoded = base64.b64encode(data).decode("utf-8")
-        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        fd_owned = True
+        # Atomic write: write to temp file, fsync, then rename
+        dir_fd = None
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._base_path), prefix=f".{name}_", suffix=".tmp"
+        )
         try:
+            os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                fd_owned = False
+                # fd is now owned by handle; do not close fd separately
                 handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.rename(tmp_path, str(path))
+            # fsync the directory to ensure the rename is durable
+            try:
+                dir_fd = os.open(str(self._base_path), os.O_RDONLY)
+                os.fsync(dir_fd)
+            except OSError:
+                pass
+        except BaseException:
+            with _suppress_oserror:
+                os.unlink(tmp_path)
+            raise
         finally:
-            if fd_owned:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+            if dir_fd is not None:
+                with _suppress_oserror:
+                    os.close(dir_fd)
 
     def load_json(self, name: str) -> dict | None:
         path = self._json_path(name)
@@ -56,18 +75,31 @@ class KeyStore:
 
     def save_json(self, name: str, data: dict) -> None:
         path = self._json_path(name)
-        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        fd_owned = True
+        # Atomic write: write to temp file, fsync, then rename
+        dir_fd = None
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._base_path), prefix=f".{name}_", suffix=".tmp"
+        )
         try:
+            os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                fd_owned = False
                 json.dump(data, handle, ensure_ascii=True, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.rename(tmp_path, str(path))
+            try:
+                dir_fd = os.open(str(self._base_path), os.O_RDONLY)
+                os.fsync(dir_fd)
+            except OSError:
+                pass
+        except BaseException:
+            with _suppress_oserror:
+                os.unlink(tmp_path)
+            raise
         finally:
-            if fd_owned:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+            if dir_fd is not None:
+                with _suppress_oserror:
+                    os.close(dir_fd)
 
     def _path(self, name: str) -> Path:
         filename = f"{name}.key"

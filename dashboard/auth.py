@@ -177,7 +177,11 @@ async def login(request: Request) -> Response:
     username = form.get("username", "")
     password = form.get("password", "")
 
-    if username == _ADMIN_USERNAME and verify_password(password, _ADMIN_PASSWORD_HASH):
+    # Offload CPU-intensive PBKDF2 (480K iterations) to thread pool
+    # to avoid blocking the event loop for hundreds of milliseconds.
+    import asyncio
+    password_ok = await asyncio.to_thread(verify_password, password, _ADMIN_PASSWORD_HASH)
+    if username == _ADMIN_USERNAME and password_ok:
         # Migrate legacy SHA-256 hashes to PBKDF2 on successful login
         if "$" not in _ADMIN_PASSWORD_HASH:
             _upgrade_password_hash(password)

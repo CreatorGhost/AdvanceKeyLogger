@@ -91,8 +91,8 @@ async def verify_signature(
             detail="Missing X-Signature header (signature verification enabled)",
         )
 
-    # Get agent's public key from storage
-    agent_data = controller.storage.get_agent(agent_id)
+    # Get agent's public key from storage (offload to thread — acquires lock + SQLite)
+    agent_data = await asyncio.to_thread(controller.storage.get_agent, agent_id)
     if not agent_data or not agent_data.get("public_key"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -292,7 +292,8 @@ async def heartbeat(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing X-Signature header (signature verification enabled)",
             )
-        agent_data = controller.storage.get_agent(agent_id)
+        # Offload blocking storage call to thread (acquires lock + SQLite)
+        agent_data = await asyncio.to_thread(controller.storage.get_agent, agent_id)
         if not agent_data or not agent_data.get("public_key"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -384,7 +385,8 @@ async def command_response(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing X-Signature header (signature verification enabled)",
             )
-        agent_data = controller.storage.get_agent(agent_id)
+        # Offload blocking storage call to thread (acquires lock + SQLite)
+        agent_data = await asyncio.to_thread(controller.storage.get_agent, agent_id)
         if not agent_data or not agent_data.get("public_key"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

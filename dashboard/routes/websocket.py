@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 # Create router for WebSocket endpoints
 ws_router = APIRouter(tags=["websocket"])
 
+# Module-level cached settings instance to avoid repeated file I/O per call.
+# Loaded lazily on first use.
+_cached_settings: Settings | None = None
+
+
+def _get_cached_settings() -> Settings:
+    """Return the module-level cached Settings instance (lazy init)."""
+    global _cached_settings
+    if _cached_settings is None:
+        _cached_settings = Settings()
+    return _cached_settings
+
 
 _MAX_WS_CONNECTIONS = 200  # Upper bound on total simultaneous WebSocket connections
 _MAX_WS_MESSAGE_SIZE = 1_048_576  # 1 MB max inbound WebSocket message
@@ -195,9 +207,9 @@ def _validate_origin(websocket: WebSocket) -> bool:
         # Non-browser clients (agents) may not send Origin
         return True
 
-    # Load allowed origins from settings; default allows same-host connections
+    # Load allowed origins from cached settings; default allows same-host connections
     try:
-        settings = Settings()
+        settings = _get_cached_settings()
         allowed = settings.get("dashboard.allowed_origins", [])
     except Exception:
         allowed = []
@@ -255,7 +267,7 @@ def _validate_session_token(token: str) -> str | None:
             jwt_secret = _fleet_controller.config.get("jwt_secret")
             if not jwt_secret:
                 return None
-            auth = FleetAuth(jwt_secret)
+            auth = FleetAuth(jwt_secret, allow_default_secret=True)
             agent_id = auth.verify_token(token, expected_type="access")
             if agent_id:
                 return agent_id
@@ -393,11 +405,11 @@ async def _process_dashboard_command(data: str, websocket: WebSocket) -> None:
             try:
                 import psutil
 
-                system_info = {
+                system_info = await asyncio.to_thread(lambda: {
                     "cpu_percent": psutil.cpu_percent(interval=0),
                     "memory_percent": psutil.virtual_memory().percent,
                     "disk_percent": psutil.disk_usage("/").percent,
-                }
+                })
             except Exception:
                 pass
 

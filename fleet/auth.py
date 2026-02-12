@@ -14,15 +14,56 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 
+_KNOWN_INSECURE_SECRETS = frozenset({
+    "CHANGE_ME_IN_PRODUCTION",
+    "changeme",
+    "secret",
+    "development",
+    "test",
+})
+
+
 class FleetAuth:
     """JWT-based authentication for fleet agents."""
 
-    def __init__(self, secret_key: str, access_ttl_minutes: int = 15, refresh_ttl_days: int = 7, storage=None):
-        self.secret_key = secret_key
+    def __init__(
+        self,
+        secret_key: str,
+        access_ttl_minutes: int = 15,
+        refresh_ttl_days: int = 7,
+        storage=None,
+        allow_default_secret: bool = False,
+    ):
+        # Guard against known insecure defaults in production
+        if secret_key in _KNOWN_INSECURE_SECRETS and not allow_default_secret:
+            raise ValueError(
+                "SECURITY: JWT secret is a known insecure default. "
+                "Set a strong random secret (32+ chars) in fleet.auth.jwt_secret "
+                "or explicitly set fleet.auth.allow_default_secret: true for "
+                "development/testing."
+            )
+        if secret_key in _KNOWN_INSECURE_SECRETS:
+            logger.warning(
+                "SECURITY WARNING: Using a known insecure JWT secret. "
+                "This is only acceptable in development/testing."
+            )
+        # Use name-mangled attribute to prevent accidental exposure
+        self.__secret_key = secret_key
         self.access_ttl = timedelta(minutes=access_ttl_minutes)
         self.refresh_ttl = timedelta(days=refresh_ttl_days)
         self.algorithm = "HS256"
         self._storage = storage  # FleetStorage instance for token revocation checks
+
+    @property
+    def _signing_key(self) -> str:
+        """Access the JWT signing key (internal use only)."""
+        return self.__secret_key
+
+    def __repr__(self) -> str:
+        return f"<FleetAuth algorithm={self.algorithm}>"
+
+    def __str__(self) -> str:
+        return "FleetAuth(secret=***)"
 
     def create_tokens(self, agent_id: str) -> Dict[str, Any]:
         """Generate access and refresh tokens for an agent.
@@ -54,8 +95,8 @@ class FleetAuth:
             "jti": refresh_jti,
         }
 
-        access_token = jwt.encode(access_payload, self.secret_key, algorithm=self.algorithm)
-        refresh_token = jwt.encode(refresh_payload, self.secret_key, algorithm=self.algorithm)
+        access_token = jwt.encode(access_payload, self._signing_key, algorithm=self.algorithm)
+        refresh_token = jwt.encode(refresh_payload, self._signing_key, algorithm=self.algorithm)
 
         return {
             "access_token": access_token,
@@ -76,7 +117,7 @@ class FleetAuth:
         (fail-closed: tokens are rejected when storage is unavailable).
         """
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            payload = jwt.decode(token, self._signing_key, algorithms=[self.algorithm])
 
             if payload.get("type") != expected_type:
                 logger.warning(
@@ -105,7 +146,8 @@ class FleetAuth:
             logger.debug("Token expired")
             return None
         except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
+            logger.warning("Invalid token")
+            logger.debug("Invalid token detail: %s", e)
             return None
         except Exception as e:
             logger.error(f"Token verification error: {e}")

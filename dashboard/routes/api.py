@@ -67,28 +67,35 @@ async def system_status(request: Request) -> dict[str, Any]:
         cpu_pct = await asyncio.to_thread(_proc.cpu_percent, 0.1)
         mem_mb = round(_proc.memory_info().rss / 1024 / 1024, 1)
 
-    # Check storage
-    data_dir = Path("data")
-    storage_used = (
-        sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
-        if data_dir.exists()
-        else 0
-    )
+    # Check storage (offload blocking rglob + stat to thread)
+    def _calc_storage() -> int:
+        data_dir = Path("data")
+        if data_dir.exists():
+            return sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
+        return 0
 
-    # Check SQLite
+    storage_used = await asyncio.to_thread(_calc_storage)
+
+    # Check SQLite — reuse app-state instance if available
     db_path = _get_db_path(request)
     db_size = db_path.stat().st_size if db_path.exists() else 0
     pending_count = 0
     total_count = 0
-    if db_path.exists():
-        try:
-            from storage.sqlite_storage import SQLiteStorage
 
+    def _query_counts() -> tuple[int, int]:
+        db = getattr(request.app.state, "sqlite_storage", None)
+        if db is None:
+            if not db_path.exists():
+                return 0, 0
+            from storage.sqlite_storage import SQLiteStorage
             with SQLiteStorage(str(db_path)) as db:
-                pending_count = db.count_pending()
-                total_count = db.count_total()
-        except Exception:
-            pass
+                return db.count_pending(), db.count_total()
+        return db.count_pending(), db.count_total()
+
+    try:
+        pending_count, total_count = await asyncio.to_thread(_query_counts)
+    except Exception:
+        pass
 
     return {
         "uptime": f"{hours}h {minutes}m {seconds}s",
@@ -128,13 +135,17 @@ async def list_captures(
     if not db_path.exists():
         return {"items": [], "total": 0, "limit": limit, "offset": offset}
 
-    try:
-        from storage.sqlite_storage import SQLiteStorage
-
-        with SQLiteStorage(str(db_path)) as db:
-            total = db.count_total()
+    def _fetch_captures() -> tuple[int, list[dict[str, Any]]]:
+        db = getattr(request.app.state, "sqlite_storage", None)
+        close_after = False
+        if db is None:
+            from storage.sqlite_storage import SQLiteStorage
+            db = SQLiteStorage(str(db_path))
+            close_after = True
+        try:
+            total_c = db.count_total()
             rows = db.get_pending(limit=limit)
-            items = []
+            items_out: list[dict[str, Any]] = []
             for row in rows:
                 data_val = row["data"]
                 item = {
@@ -150,7 +161,14 @@ async def list_captures(
                 }
                 if capture_type and item["capture_type"] != capture_type:
                     continue
-                items.append(item)
+                items_out.append(item)
+            return total_c, items_out
+        finally:
+            if close_after:
+                db.close()
+
+    try:
+        total, items = await asyncio.to_thread(_fetch_captures)
     except Exception as exc:
         logger.error("Failed to list captures: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to retrieve captures") from exc
@@ -166,32 +184,35 @@ async def list_screenshots(
     """List available screenshots."""
     _require_api_auth(request)
 
-    screenshot_dir = Path("data/screenshots")
-    if not screenshot_dir.exists():
-        return {"screenshots": [], "total": 0}
+    def _list_screenshots_sync() -> dict[str, Any]:
+        screenshot_dir = Path("data/screenshots")
+        if not screenshot_dir.exists():
+            return {"screenshots": [], "total": 0}
 
-    files = sorted(
-        screenshot_dir.glob("*.png"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    total = len(files)
-    files = files[:limit]
-
-    screenshots = []
-    for f in files:
-        stat = f.stat()
-        screenshots.append(
-            {
-                "filename": f.name,
-                "path": f"/api/screenshots/{f.name}",
-                "size_bytes": stat.st_size,
-                "size_kb": round(stat.st_size / 1024, 1),
-                "timestamp": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            }
+        files = sorted(
+            screenshot_dir.glob("*.png"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
         )
+        total = len(files)
+        files = files[:limit]
 
-    return {"screenshots": screenshots, "total": total}
+        screenshots = []
+        for f in files:
+            stat = f.stat()
+            screenshots.append(
+                {
+                    "filename": f.name,
+                    "path": f"/api/screenshots/{f.name}",
+                    "size_bytes": stat.st_size,
+                    "size_kb": round(stat.st_size / 1024, 1),
+                    "timestamp": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
+
+        return {"screenshots": screenshots, "total": total}
+
+    return await asyncio.to_thread(_list_screenshots_sync)
 
 
 @api_router.get("/screenshots/{filename}")
@@ -199,30 +220,33 @@ async def get_screenshot(request: Request, filename: str) -> Any:
     """Serve a screenshot file."""
     _require_api_auth(request)
 
-    # Define the allowed screenshots directory (resolve to absolute path)
-    screenshots_dir = Path("data/screenshots").resolve()
+    def _resolve_screenshot_path() -> Path:
+        """Resolve and validate the screenshot path (sync filesystem I/O)."""
+        # Define the allowed screenshots directory (resolve to absolute path)
+        screenshots_dir = Path("data/screenshots").resolve()
 
-    # Construct the requested path and resolve it
-    # Using Path.joinpath to avoid issues, then resolve to get canonical path
-    try:
-        requested_path = (screenshots_dir / filename).resolve()
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid filename")
+        # Construct the requested path and resolve it
+        try:
+            requested_path = (screenshots_dir / filename).resolve()
+        except (ValueError, OSError):
+            raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Security check: ensure resolved path is within screenshots directory
-    # This prevents path traversal attacks like ../../etc/passwd
-    try:
-        requested_path.relative_to(screenshots_dir)
-    except ValueError:
-        # Path is not relative to screenshots_dir (traversal attempt)
-        raise HTTPException(status_code=400, detail="Invalid filename")
+        # Security check: ensure resolved path is within screenshots directory
+        try:
+            requested_path.relative_to(screenshots_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Additional checks for safety
-    if not requested_path.exists():
-        raise HTTPException(status_code=404, detail="Screenshot not found")
+        # Additional checks for safety
+        if not requested_path.exists():
+            raise HTTPException(status_code=404, detail="Screenshot not found")
 
-    if not requested_path.is_file():
-        raise HTTPException(status_code=400, detail="Invalid filename")
+        if not requested_path.is_file():
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        return requested_path
+
+    requested_path = await asyncio.to_thread(_resolve_screenshot_path)
 
     from fastapi.responses import FileResponse
 
@@ -241,20 +265,33 @@ async def activity_data(request: Request) -> dict[str, Any]:
     heatmap = [[0] * 24 for _ in range(7)]
     total = 0
 
-    try:
-        from storage.sqlite_storage import SQLiteStorage
-
-        with SQLiteStorage(str(db_path)) as db:
+    def _build_heatmap() -> tuple[list[list[int]], int]:
+        h = [[0] * 24 for _ in range(7)]
+        t = 0
+        db = getattr(request.app.state, "sqlite_storage", None)
+        close_after = False
+        if db is None:
+            from storage.sqlite_storage import SQLiteStorage
+            db = SQLiteStorage(str(db_path))
+            close_after = True
+        try:
             rows = db.get_pending(limit=10000)
             for row in rows:
-                total += 1
+                t += 1
                 ts_val = row.get("timestamp")
                 if ts_val:
                     try:
                         ts = datetime.fromtimestamp(float(ts_val))
-                        heatmap[ts.weekday()][ts.hour] += 1
+                        h[ts.weekday()][ts.hour] += 1
                     except (ValueError, TypeError, OSError):
                         pass
+        finally:
+            if close_after:
+                db.close()
+        return h, t
+
+    try:
+        heatmap, total = await asyncio.to_thread(_build_heatmap)
     except Exception:
         logger.warning("Failed to load activity data from storage", exc_info=True)
 
@@ -276,21 +313,31 @@ async def analytics_summary(request: Request) -> dict[str, Any]:
         "db_size_mb": 0,
     }
 
-    if db_path.exists():
-        try:
+    def _build_summary() -> None:
+        if not db_path.exists():
+            return
+        db = getattr(request.app.state, "sqlite_storage", None)
+        close_after = False
+        if db is None:
             from storage.sqlite_storage import SQLiteStorage
+            db = SQLiteStorage(str(db_path))
+            close_after = True
+        try:
+            stats["total_captures"] = db.count_total()
+            stats["pending"] = db.count_pending()
+            stats["sent"] = stats["total_captures"] - stats["pending"]
+        finally:
+            if close_after:
+                db.close()
+        stats["db_size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
+        screenshot_dir = Path("data/screenshots")
+        if screenshot_dir.exists():
+            stats["screenshots_count"] = len(list(screenshot_dir.glob("*.png")))
 
-            with SQLiteStorage(str(db_path)) as db:
-                stats["total_captures"] = db.count_total()
-                stats["pending"] = db.count_pending()
-                stats["sent"] = stats["total_captures"] - stats["pending"]
-            stats["db_size_mb"] = round(db_path.stat().st_size / 1024 / 1024, 2)
-        except Exception:
-            logger.warning("Failed to load analytics summary from storage", exc_info=True)
-
-    screenshot_dir = Path("data/screenshots")
-    if screenshot_dir.exists():
-        stats["screenshots_count"] = len(list(screenshot_dir.glob("*.png")))
+    try:
+        await asyncio.to_thread(_build_summary)
+    except Exception:
+        logger.warning("Failed to load analytics summary from storage", exc_info=True)
 
     return stats
 
@@ -305,9 +352,14 @@ async def get_config(request: Request) -> dict[str, Any]:
     try:
         from config.settings import Settings
 
-        settings = Settings()
-        raw = settings.as_dict()
+        def _load_settings() -> dict[str, Any]:
+            settings = Settings()
+            return settings.as_dict()
+
+        raw = await asyncio.to_thread(_load_settings)
         return {"config": _redact_sensitive(raw)}
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to load config: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to load configuration") from exc

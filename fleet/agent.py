@@ -10,6 +10,7 @@ import json
 import base64
 import time
 import socket
+import threading
 from typing import Dict, Any, Optional
 import requests
 
@@ -50,6 +51,10 @@ class FleetAgent(Agent):
         # We don't use self.transport for REST API calls
         # We use direct requests
         self.session = requests.Session()
+        self._session_lock = threading.Lock()
+
+        # Thread-safe shutdown event (can be set from any thread)
+        self._shutdown_event = threading.Event()
 
     async def start(self) -> None:
         """Start the agent service."""
@@ -67,8 +72,14 @@ class FleetAgent(Agent):
 
         logger.info(f"FleetAgent {self.agent_id} started")
 
+    def request_shutdown(self) -> None:
+        """Thread-safe shutdown signal (can be called from any thread)."""
+        self._shutdown_event.set()
+        self.running = False
+
     async def stop(self) -> None:
         """Stop the agent service and cleanup resources."""
+        self._shutdown_event.set()
         self.running = False
 
         for task in (self._heartbeat_task, self._command_listener_task):
@@ -80,10 +91,11 @@ class FleetAgent(Agent):
                     pass
 
         # Close HTTP session
-        if self.session:
-            self.session.close()
-
-        logger.info(f"FleetAgent {self.agent_id} stopped")
+        try:
+            if self.session:
+                self.session.close()
+        finally:
+            logger.info(f"FleetAgent {self.agent_id} stopped")
 
     async def _request(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
         """Perform async HTTP request with optional signing."""
@@ -119,7 +131,8 @@ class FleetAgent(Agent):
 
         def _do_req():
             try:
-                return self.session.request(method, url, headers=headers, **kwargs)
+                with self._session_lock:
+                    return self.session.request(method, url, headers=headers, **kwargs)
             except Exception as e:
                 logger.error(f"Request failed: {method} {url} - {e}")
                 return None
@@ -164,6 +177,8 @@ class FleetAgent(Agent):
                 if not access:
                     logger.error("Registration response missing access_token")
                     return False
+                if not refresh:
+                    logger.warning("Registration response missing refresh_token")
                 self.access_token = access
                 self.refresh_token = refresh
 
@@ -189,7 +204,7 @@ class FleetAgent(Agent):
 
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats via REST."""
-        while self.running:
+        while self.running and not self._shutdown_event.is_set():
             try:
                 if not self.registered:
                     if await self._register():
@@ -200,7 +215,7 @@ class FleetAgent(Agent):
 
                 self.uptime = time.time() - self.start_time
 
-                metrics = self._get_system_metrics()
+                metrics = await asyncio.get_running_loop().run_in_executor(None, self._get_system_metrics)
 
                 payload = {
                     "status": "ONLINE",
@@ -233,7 +248,7 @@ class FleetAgent(Agent):
 
     async def _command_listener(self) -> None:
         """Poll for commands."""
-        while self.running:
+        while self.running and not self._shutdown_event.is_set():
             try:
                 if not self.registered:
                     await asyncio.sleep(5)

@@ -73,7 +73,7 @@ def create_app(config: dict[str, Any]) -> FastAPI:
                 raise ValueError("key must be 32 bytes")
         except Exception:
             raise HTTPException(status_code=400, detail="invalid public key format")
-        registry.register(key_b64)
+        await asyncio.to_thread(registry.register, key_b64)
         audit_logger.info("client_registered key=%s", _truncate(key_b64))
         return {"status": "registered"}
 
@@ -160,17 +160,25 @@ def create_app(config: dict[str, Any]) -> FastAPI:
             audit_logger.warning("decrypt_failed ip=%s error=%s", client_ip, decrypt_error)
             raise HTTPException(status_code=400, detail="decrypt failed")
 
-        path = store_payload(payload, config)
+        # Offload blocking file I/O + SQLite to thread pool
+        path = await asyncio.to_thread(store_payload, payload, config)
 
         # ── Data bridge: parse payload into structured SQLite ──
         # This is the critical link that makes data visible in the dashboard.
-        try:
+        def _bridge_ingest() -> int:
             from server.data_bridge import DataBridge
-
-            bridge_db = config.get("bridge_db_path", str(path.parent.parent / "data" / "captures.db"))
+            bridge_db = config.get(
+                "bridge_db_path",
+                str(path.parent.parent / "data" / "captures.db"),
+            )
             bridge = DataBridge(bridge_db)
-            record_count = bridge.ingest_payload(payload, sender_id=truncated_sender)
-            bridge.close()
+            try:
+                return bridge.ingest_payload(payload, sender_id=truncated_sender)
+            finally:
+                bridge.close()
+
+        try:
+            record_count = await asyncio.to_thread(_bridge_ingest)
         except Exception as bridge_exc:
             audit_logger.debug("Data bridge ingest failed: %s", bridge_exc)
             record_count = 0

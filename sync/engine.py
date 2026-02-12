@@ -144,7 +144,7 @@ class SyncEngine:
         self._e2e_protocol = e2e_protocol
 
         # Sub-components (initialised against the same DB connection)
-        conn = sqlite_store._conn  # share the connection
+        conn = sqlite_store.get_connection()  # share the connection
         self._ledger = SyncLedger(conn, config)
         self._checkpoint = CheckpointManager(conn, config)
         self._conflict = ConflictResolver(conn, config)

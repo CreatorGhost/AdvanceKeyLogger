@@ -33,8 +33,12 @@ class SQLiteStorage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
-        self._create_tables()
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent access
+            self._create_tables()
+        except Exception:
+            self._conn.close()
+            raise
         logger.info("SQLite storage initialized: %s", self.db_path)
 
     def _create_tables(self) -> None:
@@ -268,6 +272,10 @@ class SQLiteStorage:
             return json.loads(row[0])
         except Exception:
             return None
+
+    def get_connection(self) -> sqlite3.Connection:
+        """Return the underlying SQLite connection (for components that share the DB)."""
+        return self._conn
 
     def close(self) -> None:
         """Close the database connection."""

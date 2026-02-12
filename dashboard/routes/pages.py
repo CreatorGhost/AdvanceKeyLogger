@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Union
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.responses import Response
 
@@ -18,14 +18,18 @@ async def login_page(request: Request) -> Response:
     """Render login page."""
     if get_current_user(request):
         return RedirectResponse(url="/dashboard", status_code=302)
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @pages_router.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request) -> HTMLResponse:
     """Render public landing page (no auth required)."""
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(request, "landing.html", {})
 
 
@@ -35,7 +39,9 @@ async def dashboard_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -52,7 +58,9 @@ async def live_dashboard_page(request: Request) -> Response:
     user = get_current_user(request)
     if user is None:
         return RedirectResponse(url="/login", status_code=302)
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "live.html",
@@ -70,7 +78,9 @@ async def captures_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "captures.html",
@@ -87,7 +97,9 @@ async def screenshots_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "screenshots.html",
@@ -104,7 +116,9 @@ async def analytics_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "analytics.html",
@@ -121,7 +135,9 @@ async def sessions_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "sessions.html",
@@ -138,7 +154,9 @@ async def session_replay_page(request: Request, session_id: str) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "session_replay.html",
@@ -156,7 +174,9 @@ async def settings_page(request: Request) -> Response:
     redirect = require_auth(request)
     if redirect:
         return redirect
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "settings.html",

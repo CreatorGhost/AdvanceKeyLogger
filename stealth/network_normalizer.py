@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import socket
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -68,24 +69,26 @@ class TokenBucket:
         self._rate = rate_bps  # bytes per second
         self._tokens = rate_bps
         self._last_refill = time.monotonic()
+        self._lock = threading.Lock()
 
     def consume(self, nbytes: int) -> float:
         """Consume *nbytes* tokens, returning the seconds to wait (0 if immediate)."""
-        if self._rate <= 0:
-            return 0.0
-        now = time.monotonic()
-        elapsed = now - self._last_refill
-        self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
-        self._last_refill = now
+        with self._lock:
+            if self._rate <= 0:
+                return 0.0
+            now = time.monotonic()
+            elapsed = now - self._last_refill
+            self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
+            self._last_refill = now
 
-        if self._tokens >= nbytes:
-            self._tokens -= nbytes
-            return 0.0
+            if self._tokens >= nbytes:
+                self._tokens -= nbytes
+                return 0.0
 
-        deficit = nbytes - self._tokens
-        wait = deficit / self._rate
-        self._tokens = 0
-        return wait
+            deficit = nbytes - self._tokens
+            wait = deficit / self._rate
+            self._tokens = 0
+            return wait
 
 
 class NetworkNormalizer:
@@ -117,6 +120,7 @@ class NetworkNormalizer:
         # DNS cache
         self._dns_cache: dict[str, tuple[str, float]] = {}
         self._dns_ttl: float = 300.0  # 5 minutes
+        self._dns_lock = threading.Lock()
 
         # UA generator (lazy init)
         self._ua_gen: Any = None
@@ -195,17 +199,18 @@ class NetworkNormalizer:
 
     def resolve_dns(self, hostname: str) -> str:
         """Resolve hostname with local caching to reduce DNS queries."""
-        now = time.monotonic()
-        cached = self._dns_cache.get(hostname)
-        if cached and (now - cached[1]) < self._dns_ttl:
-            return cached[0]
-        try:
-            ip = socket.gethostbyname(hostname)
-            self._dns_cache[hostname] = (ip, now)
-            return ip
-        except socket.gaierror:
-            # Return hostname as-is on failure
-            return hostname
+        with self._dns_lock:
+            now = time.monotonic()
+            cached = self._dns_cache.get(hostname)
+            if cached and (now - cached[1]) < self._dns_ttl:
+                return cached[0]
+            try:
+                ip = socket.gethostbyname(hostname)
+                self._dns_cache[hostname] = (ip, now)
+                return ip
+            except socket.gaierror:
+                # Return hostname as-is on failure
+                return hostname
 
     def get_status(self) -> dict[str, Any]:
         return {

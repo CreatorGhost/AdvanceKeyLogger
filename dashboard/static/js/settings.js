@@ -9,7 +9,7 @@ function escapeHtml(str) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadSettings();
+    loadSettings().catch(console.error);
 
     document.getElementById('copyConfig').addEventListener('click', copyRawConfig);
 });

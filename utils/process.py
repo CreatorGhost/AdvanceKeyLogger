@@ -24,6 +24,7 @@ import logging
 import os
 import signal
 import sys
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ class PIDLock:
 
     def __init__(self, pid_file: str | None = None) -> None:
         if pid_file is None:
-            pid_file = "/tmp/.system-helper.pid"
+            pid_file = os.path.join(tempfile.gettempdir(), ".system-helper.pid")
         self.pid_file = Path(pid_file)
 
     def acquire(self) -> bool:

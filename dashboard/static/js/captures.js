@@ -3,11 +3,11 @@
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadCaptures();
+    loadCaptures().catch(console.error);
 
-    document.getElementById('refreshCaptures').addEventListener('click', loadCaptures);
-    document.getElementById('captureTypeFilter').addEventListener('change', loadCaptures);
-    document.getElementById('captureLimitFilter').addEventListener('change', loadCaptures);
+    document.getElementById('refreshCaptures').addEventListener('click', () => loadCaptures().catch(console.error));
+    document.getElementById('captureTypeFilter').addEventListener('change', () => loadCaptures().catch(console.error));
+    document.getElementById('captureLimitFilter').addEventListener('change', () => loadCaptures().catch(console.error));
 });
 
 async function loadCaptures() {
@@ -46,11 +46,11 @@ function renderCapturesTable(data) {
 
         return `
             <tr>
-                <td style="font-family:var(--font-mono);color:var(--text-tertiary)">#${item.id}</td>
-                <td><span class="badge ${typeClass}">${item.capture_type || 'unknown'}</span></td>
+                <td style="font-family:var(--font-mono);color:var(--text-tertiary)">#${escapeHtml(String(item.id))}</td>
+                <td><span class="badge ${typeClass}">${escapeHtml(item.capture_type || 'unknown')}</span></td>
                 <td title="${escapeHtml(item.data)}">${escapeHtml(truncate(item.data, 80))}</td>
-                <td style="font-family:var(--font-mono);font-size:12px">${timestamp}</td>
-                <td><span class="badge ${statusClass}">${item.status || 'pending'}</span></td>
+                <td style="font-family:var(--font-mono);font-size:12px">${escapeHtml(timestamp)}</td>
+                <td><span class="badge ${statusClass}">${escapeHtml(item.status || 'pending')}</span></td>
             </tr>
         `;
     }).join('');

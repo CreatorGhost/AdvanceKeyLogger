@@ -5,7 +5,7 @@
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadAnalyticsData();
+    loadAnalyticsData().catch(console.error);
 });
 
 async function loadAnalyticsData() {

@@ -142,6 +142,7 @@ class SessionReplayPlayer {
     }
 
     play() {
+        if (this.playing) return;
         if (this.frames.length === 0) return;
         if (this.currentTime >= this.duration) {
             this.seekTo(0);
@@ -201,6 +202,7 @@ class SessionReplayPlayer {
             this.frameIndex--;
             this._showFrame(this.frameIndex);
             this.currentTime = this.frames[this.frameIndex].offset_sec;
+            this.eventIndex = this._findEventAt(this.currentTime);
             this._updateScrubBar();
         }
     }
@@ -210,6 +212,7 @@ class SessionReplayPlayer {
             this.frameIndex++;
             this._showFrame(this.frameIndex);
             this.currentTime = this.frames[this.frameIndex].offset_sec;
+            this.eventIndex = this._findEventAt(this.currentTime);
             this._updateScrubBar();
         }
     }
@@ -468,5 +471,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const player = new SessionReplayPlayer(sessionId);
     window.replayPlayer = player;
-    player.init();
+    player.init().catch(err => console.error('Replay init failed:', err));
 });

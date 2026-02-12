@@ -20,6 +20,13 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+_SENSITIVE_PATTERNS = {"secret", "password", "key", "token", "api_key", "credential", "private"}
+
+
+def _is_sensitive_key(key: str) -> bool:
+    key_lower = key.lower()
+    return any(p in key_lower for p in _SENSITIVE_PATTERNS)
+
 
 class Settings:
     """Loads config from YAML with defaults, env var overrides, and validation."""
@@ -133,7 +140,8 @@ class Settings:
                 # Each part can contain single underscores (e.g., log_level)
                 parts = env_key[len(active_prefix) :].lower().split("__")
                 self._set_nested(self._config, parts, env_value)
-                logger.debug("Env override: %s = %s", env_key, env_value)
+                display_value = "***" if _is_sensitive_key(env_key) else env_value
+                logger.debug("Env override: %s = %s", env_key, display_value)
 
     def _set_nested(self, d: dict, keys: list[str], value: str) -> None:
         """Set a nested dictionary value from a list of keys."""

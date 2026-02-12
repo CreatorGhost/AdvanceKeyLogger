@@ -133,34 +133,38 @@ async def get_frame(request: Request, session_id: str, frame_id: int) -> FileRes
     if frame_id == 0:
         frame = frames[0]
     else:
-        frame = None
-        for f in frames:
-            if f["id"] == frame_id:
-                frame = f
-                break
+        # O(1) lookup via dict instead of O(n) linear scan
+        frames_by_id = {f["id"]: f for f in frames}
+        frame = frames_by_id.get(frame_id)
         if frame is None:
             raise HTTPException(status_code=404, detail="Frame not found")
 
     file_path = Path(frame["file_path"])
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Frame file not found on disk")
 
     # Path traversal protection: validate against the configured frames directory
     # (not cwd, which would wrongly block frames stored outside the working dir)
     frames_dir = getattr(request.app.state, "frames_dir", None)
     if frames_dir is None:
-        frames_dir = Path.cwd().resolve()
-    try:
-        file_path.resolve().relative_to(Path(frames_dir).resolve())
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Access denied") from exc
+        raise HTTPException(status_code=503, detail="Frames directory not configured")
+
+    def _validate_frame_path() -> Path:
+        """Validate frame file path (sync filesystem I/O)."""
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Frame file not found on disk")
+        try:
+            file_path.resolve().relative_to(Path(frames_dir).resolve())
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="Access denied") from exc
+        return file_path
+
+    validated_path = await asyncio.to_thread(_validate_frame_path)
 
     media_type = "image/jpeg"
-    if file_path.suffix.lower() == ".png":
+    if validated_path.suffix.lower() == ".png":
         media_type = "image/png"
 
     return FileResponse(
-        path=str(file_path),
+        path=str(validated_path),
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=3600"},
     )

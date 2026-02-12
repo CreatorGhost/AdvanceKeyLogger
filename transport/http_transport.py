@@ -26,6 +26,8 @@ class HttpTransport(BaseTransport):
         self._headers = dict(config.get("headers", {}))
         self._timeout = float(config.get("timeout", 30))
         self._verify = config.get("verify", True)
+        if not self._verify:
+            self.logger.warning("TLS certificate verification is DISABLED")
         self._ca_cert = config.get("ca_cert")
         if self._ca_cert:
             self._verify = self._ca_cert

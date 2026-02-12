@@ -3,12 +3,15 @@ systemd integration for Linux.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import socket
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class SystemdManager:
@@ -19,28 +22,46 @@ class SystemdManager:
         unit_path.parent.mkdir(parents=True, exist_ok=True)
         unit_path.write_text(_render_unit(spec), encoding="utf-8")
 
-        _run(["systemctl", "--user", "daemon-reload"])
-        _run(["systemctl", "--user", "enable", "--now", f"{spec.name}.service"])
+        result = _run(["systemctl", "--user", "daemon-reload"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl daemon-reload failed (rc=%d): %s", result.returncode, result.stderr.strip())
+        result = _run(["systemctl", "--user", "enable", "--now", f"{spec.name}.service"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl enable failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to enable systemd service at {unit_path}: {result.stderr.strip()}"
         return f"Installed systemd service at {unit_path}"
 
     def uninstall(self, spec) -> str:
-        _run(["systemctl", "--user", "disable", "--now", f"{spec.name}.service"], check=False)
+        result = _run(["systemctl", "--user", "disable", "--now", f"{spec.name}.service"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl disable failed (rc=%d): %s", result.returncode, result.stderr.strip())
         unit_path = _unit_path(spec.name)
         if unit_path.exists():
             unit_path.unlink()
-        _run(["systemctl", "--user", "daemon-reload"], check=False)
+        result = _run(["systemctl", "--user", "daemon-reload"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl daemon-reload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         return f"Uninstalled systemd service {spec.name}"
 
     def start(self, spec) -> str:
-        _run(["systemctl", "--user", "start", f"{spec.name}.service"], check=False)
+        result = _run(["systemctl", "--user", "start", f"{spec.name}.service"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl start failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to start systemd service {spec.name}: {result.stderr.strip()}"
         return f"Started systemd service {spec.name}"
 
     def stop(self, spec) -> str:
-        _run(["systemctl", "--user", "stop", f"{spec.name}.service"], check=False)
+        result = _run(["systemctl", "--user", "stop", f"{spec.name}.service"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl stop failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to stop systemd service {spec.name}: {result.stderr.strip()}"
         return f"Stopped systemd service {spec.name}"
 
     def restart(self, spec) -> str:
-        _run(["systemctl", "--user", "restart", f"{spec.name}.service"], check=False)
+        result = _run(["systemctl", "--user", "restart", f"{spec.name}.service"], check=False)
+        if result.returncode != 0:
+            logger.warning("systemctl restart failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to restart systemd service {spec.name}: {result.stderr.strip()}"
         return f"Restarted systemd service {spec.name}"
 
     def status(self, spec) -> str:

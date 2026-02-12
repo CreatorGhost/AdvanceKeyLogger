@@ -59,12 +59,12 @@ class TestProcessMasker:
 
     def test_overwrite_argv(self):
         from stealth.process_masking import ProcessMasker
-        original = sys.argv[0]
+        original = list(sys.argv)
         try:
             ProcessMasker._overwrite_argv("test-name")
             assert sys.argv[0] == "test-name"
         finally:
-            sys.argv[0] = original
+            sys.argv[:] = original
 
     def test_apply_idempotent(self):
         from stealth.process_masking import ProcessMasker
@@ -250,6 +250,8 @@ class TestLogController:
         # Apply on root — silent mode removes StreamHandlers
         root = logging.getLogger()
         original_handlers = list(root.handlers)
+        original_level = root.level
+        original_filters = list(root.filters)
         try:
             lc.apply()
             stream_handlers = [
@@ -260,6 +262,10 @@ class TestLogController:
             assert len(stream_handlers) == 0
         finally:
             root.handlers = original_handlers
+            root.level = original_level
+            root.filters = []
+            for f in original_filters:
+                root.addFilter(f)
             test_logger.removeHandler(handler)
 
     def test_suppress_startup_banner(self):
@@ -484,7 +490,8 @@ class TestStealthManager:
     def test_get_pid_path_default(self):
         from stealth.core import StealthManager
         sm = StealthManager({"enabled": False})
-        assert sm.get_pid_path() == "/tmp/.system-helper.pid"
+        expected = os.path.join(tempfile.gettempdir(), ".system-helper.pid")
+        assert sm.get_pid_path() == expected
 
     def test_get_pid_path_stealth(self):
         from stealth.core import StealthManager
@@ -533,11 +540,16 @@ class TestCrashGuard:
         from stealth.crash_guard import CrashGuard
         guard = CrashGuard()
         original = sys.excepthook
-        guard.install()
-        assert sys.excepthook != original
-        guard.uninstall()
-        # After uninstall, hook should be restored
-        assert guard._installed is False
+        try:
+            guard.install()
+            assert sys.excepthook != original
+            guard.uninstall()
+            # After uninstall, hook should be restored
+            assert guard._installed is False
+            assert sys.excepthook == original
+        finally:
+            # Force-restore to prevent leaking into other tests
+            sys.excepthook = original
 
     def test_sanitize_filename(self):
         from stealth.crash_guard import _sanitize_filename
@@ -660,16 +672,17 @@ class TestEnvSanitizer:
 
     def test_rename_env_vars(self):
         from stealth.env_sanitizer import EnvSanitizer
-        # Set a test env var
-        os.environ["KEYLOGGER_TEST_VAR"] = "test_value"
+        saved_env = dict(os.environ)
         try:
+            # Set a test env var
+            os.environ["KEYLOGGER_TEST_VAR"] = "test_value"
             es = EnvSanitizer()
             es._rename_env_vars()
             assert "KEYLOGGER_TEST_VAR" not in os.environ
             assert os.environ.get("SVC_TEST_VAR") == "test_value"
         finally:
-            os.environ.pop("SVC_TEST_VAR", None)
-            os.environ.pop("KEYLOGGER_TEST_VAR", None)
+            os.environ.clear()
+            os.environ.update(saved_env)
 
     def test_sanitize_argv(self):
         from stealth.env_sanitizer import EnvSanitizer

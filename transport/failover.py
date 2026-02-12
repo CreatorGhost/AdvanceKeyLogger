@@ -57,14 +57,27 @@ class FailoverTransport(BaseTransport):
         self._primary: BaseTransport | None = None
         self._fallbacks: dict[str, BaseTransport] = {}
         self._primary_failed_at: float = 0.0
+        self._consecutive_total_failures: int = 0
 
-    def connect(self) -> bool:
-        """Connect the primary transport."""
+    def connect(self) -> None:
+        """Connect the primary transport.
+
+        Raises on failure, matching the ``BaseTransport.connect() -> None``
+        contract.  Use ``try_connect()`` if you need a boolean result.
+        """
+        self._primary = create_transport_for_method(self._full_config, self._primary_method)
+        if self._primary is None:
+            raise ConnectionError(
+                f"Failed to create primary transport: {self._primary_method}"
+            )
+        if hasattr(self._primary, "connect"):
+            self._primary.connect()
+        self._connected = True
+
+    def try_connect(self) -> bool:
+        """Attempt to connect the primary transport, returning success bool."""
         try:
-            self._primary = create_transport_for_method(self._full_config, self._primary_method)
-            if hasattr(self._primary, "connect"):
-                self._primary.connect()
-            self._connected = True
+            self.connect()
             return True
         except Exception as exc:
             logger.debug("Primary transport (%s) connect failed: %s",
@@ -84,8 +97,15 @@ class FailoverTransport(BaseTransport):
                 pass
         self._connected = False
 
-    def send(self, data: bytes, metadata: dict[str, str] | None = None) -> bool:
+    def send(self, data: bytes, metadata: dict[str, Any] | None = None) -> bool:
         """Try primary transport, then cascade through fallbacks on failure."""
+        # Exponential backoff when entire chain has failed repeatedly
+        if self._consecutive_total_failures > 3:
+            backoff = min(2 ** self._consecutive_total_failures, 60)
+            logger.debug("Backoff %.1fs before retry (consecutive total failures: %d)",
+                         backoff, self._consecutive_total_failures)
+            time.sleep(backoff)
+
         has_fallbacks = self._enabled and bool(self._fallback_methods)
 
         # Apply primary backoff only when fallbacks are available;
@@ -98,26 +118,33 @@ class FailoverTransport(BaseTransport):
         else:
             if self._try_send(self._primary_method, data, metadata):
                 self._primary_failed_at = 0
+                self._consecutive_total_failures = 0
                 return True
-            self._primary_failed_at = now
+            if has_fallbacks:
+                self._primary_failed_at = now
             logger.warning("Primary transport (%s) failed, trying fallbacks",
                            self._primary_method)
 
         # Try fallbacks in order
         if not has_fallbacks:
+            self._consecutive_total_failures += 1
             return False
 
         for method in self._fallback_methods:
             if self._try_send(method, data, metadata):
                 logger.info("Fallback transport (%s) succeeded", method)
+                # Reset primary timer so it's retried sooner after a fallback win
+                self._primary_failed_at = now
+                self._consecutive_total_failures = 0
                 return True
             logger.debug("Fallback transport (%s) also failed", method)
 
+        self._consecutive_total_failures += 1
         logger.error("All transports failed (primary: %s, fallbacks: %s)",
                      self._primary_method, self._fallback_methods)
         return False
 
-    def _try_send(self, method: str, data: bytes, metadata: dict[str, str] | None) -> bool:
+    def _try_send(self, method: str, data: bytes, metadata: dict[str, Any] | None) -> bool:
         """Attempt to send via a specific transport method."""
         try:
             # Get or create the transport instance
@@ -127,7 +154,13 @@ class FailoverTransport(BaseTransport):
                 transport = self._fallbacks[method]
             else:
                 transport = create_transport_for_method(self._full_config, method)
-                if method != self._primary_method:
+                if transport is None:
+                    logger.warning("Failed to create transport for method: %s", method)
+                    return False
+                # Cache the transport for reuse
+                if method == self._primary_method:
+                    self._primary = transport
+                else:
                     self._fallbacks[method] = transport
 
             # Connect if needed
@@ -138,7 +171,7 @@ class FailoverTransport(BaseTransport):
             return transport.send(data, metadata)
 
         except Exception as exc:
-            logger.debug("Transport %s send failed: %s", method, exc)
+            logger.warning("Transport %s send failed: %s", method, exc)
             return False
 
     def preflight(self) -> bool:

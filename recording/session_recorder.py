@@ -84,6 +84,7 @@ class SessionRecorder:
         self._idle_screenshot_taken = False
         self._flush_interval = 2.0  # flush events to DB every 2 seconds
         self._last_flush = 0.0
+        self._flush_failures = 0
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -298,14 +299,25 @@ class SessionRecorder:
 
         The buffer is only cleared on successful write so that events
         are preserved for retry if ``add_events_batch`` raises.
+        Stops session recording after 5 consecutive failures.
         """
         if not self._event_buffer:
             return
+        if self._flush_failures >= 5:
+            return  # already gave up
         try:
             self._store.add_events_batch(self._event_buffer)
             self._event_buffer = []  # only clear after successful write
+            self._flush_failures = 0
         except Exception as exc:
+            self._flush_failures += 1
             logger.warning("Failed to flush session events: %s", exc)
+            if self._flush_failures >= 5:
+                logger.error(
+                    "Session event flush failed %d consecutive times — stopping session recording",
+                    self._flush_failures,
+                )
+                self.stop_session()
 
     # ------------------------------------------------------------------
     # Status

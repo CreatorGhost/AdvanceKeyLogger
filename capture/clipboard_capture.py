@@ -106,11 +106,11 @@ class ClipboardCapture(BaseCapture):
                 self.logger.warning("Clipboard read failed: %s", exc)
                 value = None
 
-            if value and value != self._last_value:
-                self._last_value = value
-                if len(value) > self._max_length:
-                    value = value[: self._max_length] + "...[truncated]"
-                with self._lock:
+            with self._lock:
+                if value and value != self._last_value:
+                    self._last_value = value
+                    if len(value) > self._max_length:
+                        value = value[: self._max_length] + "...[truncated]"
                     self._buffer.append(
                         {"type": "clipboard", "data": value, "timestamp": time.time()}
                     )

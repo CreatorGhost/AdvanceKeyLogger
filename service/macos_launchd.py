@@ -3,10 +3,13 @@ launchd integration for macOS.
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class LaunchdManager:
@@ -16,30 +19,46 @@ class LaunchdManager:
         plist_path = _plist_path(spec.name)
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         plist_path.write_text(_render_plist(spec), encoding="utf-8")
-        _run(["launchctl", "load", "-w", str(plist_path)], check=False)
+        result = _run(["launchctl", "load", "-w", str(plist_path)], check=False)
+        if result.returncode != 0:
+            logger.warning("launchctl load failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to load launchd agent at {plist_path}: {result.stderr.strip()}"
         return f"Installed launchd agent at {plist_path}"
 
     def uninstall(self, spec) -> str:
         plist_path = _plist_path(spec.name)
-        _run(["launchctl", "unload", "-w", str(plist_path)], check=False)
+        result = _run(["launchctl", "unload", "-w", str(plist_path)], check=False)
+        if result.returncode != 0:
+            logger.warning("launchctl unload failed (rc=%d): %s", result.returncode, result.stderr.strip())
         if plist_path.exists():
             plist_path.unlink()
         return f"Uninstalled launchd agent {spec.name}"
 
     def start(self, spec) -> str:
         label = _label(spec.name)
-        _run(["launchctl", "start", label], check=False)
+        result = _run(["launchctl", "start", label], check=False)
+        if result.returncode != 0:
+            logger.warning("launchctl start failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to start launchd agent {spec.name}: {result.stderr.strip()}"
         return f"Started launchd agent {spec.name}"
 
     def stop(self, spec) -> str:
         label = _label(spec.name)
-        _run(["launchctl", "stop", label], check=False)
+        result = _run(["launchctl", "stop", label], check=False)
+        if result.returncode != 0:
+            logger.warning("launchctl stop failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            return f"Failed to stop launchd agent {spec.name}: {result.stderr.strip()}"
         return f"Stopped launchd agent {spec.name}"
 
     def restart(self, spec) -> str:
         label = _label(spec.name)
-        _run(["launchctl", "stop", label], check=False)
-        _run(["launchctl", "start", label], check=False)
+        stop_result = _run(["launchctl", "stop", label], check=False)
+        if stop_result.returncode != 0:
+            logger.warning("launchctl stop failed during restart (rc=%d): %s", stop_result.returncode, stop_result.stderr.strip())
+        start_result = _run(["launchctl", "start", label], check=False)
+        if start_result.returncode != 0:
+            logger.warning("launchctl start failed during restart (rc=%d): %s", start_result.returncode, start_result.stderr.strip())
+            return f"Failed to restart launchd agent {spec.name}: {start_result.stderr.strip()}"
         return f"Restarted launchd agent {spec.name}"
 
     def status(self, spec) -> str:

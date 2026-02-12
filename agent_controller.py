@@ -16,6 +16,7 @@ import logging
 import os
 import secrets
 import struct
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum, auto
@@ -276,6 +277,9 @@ class Controller:
         # Lock protecting shared mutable state (agents, commands, command_queues,
         # agent_channels, agent_transports) from concurrent async task access.
         self._lock = asyncio.Lock()
+        # Threading lock for synchronous callers (e.g. send_command) that
+        # cannot acquire the async lock.
+        self._sync_lock = threading.Lock()
 
         # Configuration
         self.heartbeat_timeout = float(config.get("heartbeat_timeout", 120))
@@ -362,29 +366,38 @@ class Controller:
         priority: CommandPriority = CommandPriority.NORMAL,
         timeout: float = 300.0,
     ) -> Optional[str]:
-        """Send a command to a specific agent."""
-        if agent_id not in self.agents:
-            logger.error(f"Cannot send command: agent {agent_id} not found")
-            return None
+        """Send a command to a specific agent (thread-safe)."""
+        with self._sync_lock:
+            if agent_id not in self.agents:
+                logger.error(f"Cannot send command: agent {agent_id} not found")
+                return None
 
-        command = Command(
-            command_id=str(uuid4()),
-            agent_id=agent_id,
-            action=action,
-            parameters=parameters,
-            priority=priority,
-            timeout=timeout,
-        )
+            command = Command(
+                command_id=str(uuid4()),
+                agent_id=agent_id,
+                action=action,
+                parameters=parameters,
+                priority=priority,
+                timeout=timeout,
+            )
 
-        self.commands[command.command_id] = command
+            # Add to agent's command queue with monotonic counter as tiebreaker.
+            # We must check for the queue BEFORE registering the command so that
+            # an orphaned entry is never left in self.commands.
+            queue = self.command_queues.get(agent_id)
+            if not queue:
+                logger.error(
+                    f"Cannot send command: no command queue for agent {agent_id} "
+                    f"(agent may have been unregistered concurrently)"
+                )
+                return None
 
-        # Add to agent's command queue with monotonic counter as tiebreaker
-        queue = self.command_queues.get(agent_id)
-        if queue:
+            self.commands[command.command_id] = command
+
             seq = next(self._command_counter)
-            # Use put_nowait() for sync-safe, non-blocking enqueue
+            # Use put_nowait() for sync-safe, non-blocking enqueue.
             # asyncio.PriorityQueue.put_nowait() is thread-safe and doesn't require
-            # an event loop, avoiding RuntimeError in sync contexts
+            # an event loop, avoiding RuntimeError in sync contexts.
             try:
                 queue.put_nowait((priority.value, seq, command))
                 logger.info(f"Command {command.command_id} queued for agent {agent_id}")
@@ -393,7 +406,7 @@ class Controller:
                 del self.commands[command.command_id]
                 return None
 
-        return command.command_id
+            return command.command_id
 
     def broadcast_command(
         self,
@@ -594,8 +607,12 @@ class Controller:
                 agent_id=agent_id,
             )
 
-            # Send via transport (I/O — intentionally outside the lock)
-            success = transport.send(message.to_bytes())
+            # Send via transport (I/O — offloaded to thread pool to avoid
+            # blocking the async event loop with synchronous network I/O)
+            loop = asyncio.get_running_loop()
+            success = await loop.run_in_executor(
+                None, transport.send, message.to_bytes()
+            )
 
             # Update command state under lock to avoid racing with
             # handle_command_response which also modifies command state.

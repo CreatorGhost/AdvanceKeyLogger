@@ -55,3 +55,14 @@ coverage.xml
 
 # PID lock
 *.pid
+
+# Certificates and keys
+*.p12
+*.pfx
+*.jks
+id_rsa*
+
+# Secrets
+secrets.yaml
+secrets.yml
+credentials.*

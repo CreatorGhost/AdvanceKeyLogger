@@ -46,6 +46,7 @@ class MouseCapture(BaseCapture):
         self._track_movement = bool(config.get("track_movement", False))
         self._move_throttle_interval = float(config.get("move_throttle_interval", 0.02))
         self._last_move_ts: float = 0.0
+        self._move_ts_lock = threading.Lock()
         self._click_callback = None
         self._lifecycle_lock = threading.Lock()
         self._native_backend: CGEventTapMouseBackend | None = None  # noqa: F821
@@ -107,9 +108,10 @@ class MouseCapture(BaseCapture):
 
     def _on_move(self, x: int, y: int) -> None:
         now = time.time()
-        if now - self._last_move_ts < self._move_throttle_interval:
-            return
-        self._last_move_ts = now
+        with self._move_ts_lock:
+            if now - self._last_move_ts < self._move_throttle_interval:
+                return
+            self._last_move_ts = now
         self._record(
             {
                 "type": "mouse_move",

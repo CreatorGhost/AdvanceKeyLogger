@@ -43,7 +43,12 @@ def _safe_query_db(db_path: str, query: str, max_rows: int = 5000) -> list[dict[
     tmp.close()
 
     try:
+        # Copy main DB and WAL/SHM sidecars to avoid stale snapshot
         shutil.copy2(db_path, tmp.name)
+        for suffix in ("-wal", "-shm"):
+            sidecar = db_path + suffix
+            if os.path.exists(sidecar):
+                shutil.copy2(sidecar, tmp.name + suffix)
         conn = sqlite3.connect(tmp.name)
         try:
             conn.row_factory = sqlite3.Row
@@ -79,6 +84,8 @@ class BrowserDataHarvester:
         self._max_cookies: int = int(cfg.get("max_cookies", 2000))
         self._max_bookmarks: int = int(cfg.get("max_bookmarks", 2000))
         self._include_cookie_values: bool = bool(cfg.get("include_cookie_values", False))
+        self._chrome_db_cache: dict[str, list[tuple[str, str]]] = {}
+        self._chrome_db_cache_time: float = 0.0
 
     def harvest_all(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -130,6 +137,10 @@ class BrowserDataHarvester:
 
         Returns list of (browser_name, db_path).
         """
+        import time as _time
+        now = _time.monotonic()
+        if db_name in self._chrome_db_cache and (now - self._chrome_db_cache_time) < 5.0:
+            return self._chrome_db_cache[db_name]
         found = []
         for browser, base in self._chrome_base_paths().items():
             if not os.path.isdir(base):
@@ -138,6 +149,8 @@ class BrowserDataHarvester:
                 db_path = os.path.join(base, entry, db_name)
                 if os.path.isfile(db_path):
                     found.append((browser, db_path))
+        self._chrome_db_cache[db_name] = found
+        self._chrome_db_cache_time = now
         return found
 
     # ── Chrome History ───────────────────────────────────────────────
@@ -179,6 +192,8 @@ class BrowserDataHarvester:
                     row["expires_utc"] = _chrome_time_to_epoch(row["expires_utc"])
                 if row.get("last_access_utc"):
                     row["last_access_utc"] = _chrome_time_to_epoch(row["last_access_utc"])
+                if self._include_cookie_values:
+                    logger.warning("Cookie values included in harvest output — sensitive data exposure risk")
                 results.append(row)
         return results
 
@@ -273,22 +288,28 @@ class BrowserDataHarvester:
 
     def _firefox_profile_dirs(self) -> list[str]:
         if self._platform == "darwin":
-            base = os.path.expanduser("~/Library/Application Support/Firefox/Profiles")
+            bases = [os.path.expanduser("~/Library/Application Support/Firefox/Profiles")]
         elif self._platform == "linux":
-            base = os.path.expanduser("~/.mozilla/firefox")
+            bases = [
+                os.path.expanduser("~/.mozilla/firefox"),
+                os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
+                os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
+            ]
         elif self._platform == "windows":
-            base = os.path.join(os.environ.get("APPDATA", ""), "Mozilla", "Firefox", "Profiles")
+            bases = [os.path.join(os.environ.get("APPDATA", ""), "Mozilla", "Firefox", "Profiles")]
         else:
             return []
 
-        if not os.path.isdir(base):
-            return []
-
-        return [
-            os.path.join(base, d)
-            for d in os.listdir(base)
-            if os.path.isdir(os.path.join(base, d))
-        ]
+        result = []
+        for base in bases:
+            if not os.path.isdir(base):
+                continue
+            result.extend(
+                os.path.join(base, d)
+                for d in os.listdir(base)
+                if os.path.isdir(os.path.join(base, d))
+            )
+        return result
 
     def _harvest_firefox_history(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -327,6 +348,8 @@ class BrowserDataHarvester:
                 # Redact by default; callers must set include_cookie_values=True to opt in.
                 if "value" in row and not self._include_cookie_values:
                     row["value"] = "**REDACTED**"
+                elif "value" in row and self._include_cookie_values:
+                    logger.warning("Cookie values included in harvest output — sensitive data exposure risk")
                 results.append(row)
         return results
 

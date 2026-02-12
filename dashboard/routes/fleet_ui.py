@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from dashboard.auth import get_current_user, require_auth
 
@@ -11,7 +11,9 @@ async def fleet_page(request: Request) -> HTMLResponse:
     if redirect:
         return redirect
 
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "fleet/index.html",
@@ -28,7 +30,9 @@ async def agent_details_page(request: Request, agent_id: str) -> HTMLResponse:
     if redirect:
         return redirect
 
-    templates = request.app.state.templates
+    templates = getattr(request.app.state, "templates", None)
+    if templates is None:
+        raise HTTPException(status_code=503, detail="Dashboard templates not initialized")
     return templates.TemplateResponse(
         request,
         "fleet/agent_details.html",

